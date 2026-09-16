@@ -2,6 +2,13 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { assertCanEditStory } from '@/lib/agentic/reviewers';
+import {
+  resolveAgenticBillingIdentity,
+  AGENT_STORY_REVIEWER_SPEND_METADATA_KEY,
+  type AgenticBillingIdentity,
+} from '@/lib/agentic/billing-identity.shared';
+import { canTriggerMediaForEditAccess } from '@/lib/agentic/reviewers.shared';
 import type { InlineImagePart } from '@/app/actions/gemini-proxy';
 import { normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
 import { generateCharacterPortraitServer } from '@/app/actions/portrait-server';
@@ -29,6 +36,7 @@ import {
 import { authorizeCoinOperationForUser, quoteCoinOperationForUser } from '@/lib/pricing/coin-economy';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
 import { processAndStoreImageVariants } from '@/lib/media/variant-pipeline';
+import { IMAGE_FAILURE_MESSAGE } from '@/lib/media/image-failure.shared';
 import { parseR2Reference } from '@/lib/media/r2-reference';
 import type { PlanKey } from '@/lib/types/pricing';
 import {
@@ -65,8 +73,65 @@ type AdminClient = ReturnType<typeof createAdminClient>;
 interface StoryRow {
   id: string;
   user_id: string;
+  /**
+   * Always present: assertCanEditStory unions id/user_id/agent_persona_id into
+   * whatever columns the caller asks for, so loadOwnedStory's row carries this
+   * whether or not it named it. resolveImageBillingIdentity is what reads it.
+   */
+  agent_persona_id: string | null;
   story_map: StoryMap | null;
   story_config: Partial<StoryConfig> | null;
+}
+
+/**
+ * Who pays for a submitted image job, and under whose actor kind.
+ *
+ * D13/Unit 9M, the image-side twin of the narration fix in 57b516b. Pressing
+ * "generate visuals" on an AGENT-owned draft charged the reviewer who pressed it:
+ * both submit paths reserved against the caller and stamped image_batch_jobs.user_id
+ * with them, and since every downstream settle (finalize, release, upload prefix)
+ * derives from that column, the whole chain followed the wrong person. A reviewer is
+ * finishing the agent's story on the agent's behalf; the agent's owner pays.
+ *
+ * actorKind is what actually unlocks it. authorizeBillableAction's agentic bypass
+ * requires all of actorKind === 'agentic_system', the agentic_billing_bypass_enabled
+ * flag, AGENTIC_SYSTEM_USER_ID set, and the userId matching it exactly -- so without
+ * this key beside userId the bypass stays structurally unreachable no matter who is
+ * named as payer. Derived here from the resolved payer rather than taken on trust.
+ *
+ * For an ordinary author on their own story, story.agent_persona_id is null and this
+ * returns { payerUserId: callerUserId, actorKind: 'user' } -- byte-for-byte the
+ * behaviour both paths had before, on every line this touches.
+ */
+function resolveImageBillingIdentity(
+  story: StoryRow,
+  callerUserId: string
+): AgenticBillingIdentity {
+  return resolveAgenticBillingIdentity({
+    storyUserId: story.user_id,
+    agentPersonaId: story.agent_persona_id,
+    callerUserId,
+    systemUserId: process.env.AGENTIC_SYSTEM_USER_ID,
+  });
+}
+
+/** Phase 11 marker for the submit-time spend record: present only when this batch is
+ *  a reviewer finishing an agent draft (see AGENT_STORY_REVIEWER_SPEND_METADATA_KEY). */
+function agentStoryReviewerSpendMetadata(story: StoryRow): Record<string, true> {
+  return story.agent_persona_id ? { [AGENT_STORY_REVIEWER_SPEND_METADATA_KEY]: true } : {};
+}
+
+/** Same marker, one hop downstream in the reconcile/stateful worker: those only have
+ *  the job row (no agent_persona_id column), but job.user_id already carries the payer
+ *  resolveImageBillingIdentity resolved at submit time -- comparing it to
+ *  AGENTIC_SYSTEM_USER_ID here is the same signal, not a new one. */
+function isAgentOwnedStoryJobUserId(userId: string): boolean {
+  const systemUserId = process.env.AGENTIC_SYSTEM_USER_ID;
+  return Boolean(systemUserId) && userId === systemUserId;
+}
+
+function agentStoryReviewerSpendMetadataForJobUserId(userId: string): Record<string, true> {
+  return isAgentOwnedStoryJobUserId(userId) ? { [AGENT_STORY_REVIEWER_SPEND_METADATA_KEY]: true } : {};
 }
 
 async function assertImageGenerationEntitled(userId: string): Promise<PlanKey> {
@@ -151,15 +216,18 @@ export async function getImageBatchScopeSettings(): Promise<ImageBatchScopeSetti
   }
 }
 
-async function loadOwnedStory(admin: AdminClient, storyId: string, userId: string): Promise<StoryRow> {
-  const { data, error } = await admin
-    .from('stories')
-    .select('id, user_id, story_map, story_config')
-    .eq('id', storyId)
-    .single();
-  if (error || !data) throw new Error('Story not found.');
-  if (data.user_id !== userId) throw new Error('Forbidden.');
-  return data as StoryRow;
+// D14/Unit 9b: an ordinary owner generating images for their own story is
+// unaffected -- assertCanEditStory grants owner access with reviewer ===
+// null, and canTriggerMediaForEditAccess short-circuits to true for that
+// case without ever consulting can_trigger_media. Only a reviewer's submit
+// is gated on it. Called by both submitStoryImageBatch and
+// submitStoryStatefulVisuals.
+async function loadOwnedStory(storyId: string, userId: string): Promise<StoryRow> {
+  const { story, reviewer } = await assertCanEditStory(storyId, userId, ['story_map', 'story_config']);
+  if (!canTriggerMediaForEditAccess(reviewer)) {
+    throw new Error('Forbidden.');
+  }
+  return story as unknown as StoryRow;
 }
 
 async function downloadStorageImageAsInlinePart(
@@ -298,7 +366,11 @@ export async function submitStoryImageBatch(input: {
   if (authError || !user) throw new Error('Not authenticated');
 
   const admin = createAdminClient();
-  const story = await loadOwnedStory(admin, input.storyId, user.id);
+  const story = await loadOwnedStory(input.storyId, user.id);
+  // Unit 9M: an agent draft is billed to its owner (the system user), never to the
+  // reviewer who pressed the button -- see resolveImageBillingIdentity. An author on
+  // their own story gets payerUserId === user.id and nothing below changes for them.
+  const { payerUserId, actorKind } = resolveImageBillingIdentity(story, user.id);
   const map = story.story_map;
   if (!map || !map.nodes || !map.rootNodeId) throw new Error('Story has no beats to visualise.');
 
@@ -320,6 +392,13 @@ export async function submitStoryImageBatch(input: {
     };
   }
 
+  // Deliberately still the CALLER, not payerUserId. This gate answers "is this
+  // feature available to the person using it, and at which model tier" -- a different
+  // question from whose wallet is charged, and the agentic bypass does not cover it.
+  // The agentic system user holds no subscription, customer record or entitlement
+  // override, so it resolves to the free plan; routing this call to it would newly
+  // refuse reviewers a submit that works today, trading a billing defect for an
+  // availability one. Whose wallet is charged is fixed below, where it belongs.
   const currentPlanKey = await assertImageGenerationEntitled(user.id);
   const task = imageTaskForStoryKind(config.storyKind);
   const snapshot = await resolveImageModelSnapshot({
@@ -336,7 +415,12 @@ export async function submitStoryImageBatch(input: {
   // Generate any missing character portraits live now so batched beats keep
   // continuity (Gemini resend_refs). OpenAI /images/generations ignores refs.
   if (provider === 'gemini') {
-    await ensureCharacterPortraits(admin, user.id, story.id, map, config).catch((error) =>
+    // payerUserId, not the caller: uploadCharacterPortrait writes to
+    // `${userId}/${storyId}/characters/...`, so the reviewer's id here would scatter an
+    // agent story's portraits under a second prefix that nothing else -- not
+    // story-assembly, not the worker's own ensureCharacterPortraits (which derives
+    // from job.user_id) -- ever looks under.
+    await ensureCharacterPortraits(admin, payerUserId, story.id, map, config).catch((error) =>
       console.error('ensureCharacterPortraits failed:', error)
     );
   }
@@ -371,7 +455,8 @@ export async function submitStoryImageBatch(input: {
   let reservationId: string | null = null;
   try {
     const authorization = await authorizeCoinOperationForUser({
-      userId: user.id,
+      userId: payerUserId,
+      actorKind,
       operationKey: 'batch_image_generation',
       idempotencyKey: `batch_image_generation:${story.id}:${Date.now()}`,
       components: [{
@@ -381,7 +466,13 @@ export async function submitStoryImageBatch(input: {
         metadata: { generationMode: 'batch', provider },
       }],
       relatedStoryId: story.id,
-      metadata: { scope, imageCount: items.length, provider, estimatedCostUsd },
+      metadata: {
+        scope,
+        imageCount: items.length,
+        provider,
+        estimatedCostUsd,
+        ...agentStoryReviewerSpendMetadata(story),
+      },
     });
     if (authorization.status === 'denied') {
       throw new Error('NOT_ENOUGH_COINS');
@@ -404,7 +495,10 @@ export async function submitStoryImageBatch(input: {
   const { data: jobRow, error: jobError } = await admin
     .from('image_batch_jobs')
     .insert({
-      user_id: user.id,
+      // The column every downstream settle reads: processImageBatchJob's finalize and
+      // release, and the `${job.user_id}/${story_id}/...` upload prefix. Stamping the
+      // payer here is what carries this fix past submit into the worker.
+      user_id: payerUserId,
       story_id: story.id,
       provider,
       scope,
@@ -457,7 +551,7 @@ export async function submitStoryImageBatch(input: {
     await admin.from('image_batch_jobs').update({ status: 'failed', error: message }).eq('id', jobId);
     if (reservationId) {
       await releaseBillableAction({
-        userId: user.id,
+        userId: payerUserId,
         reservationId,
         reason: 'batch_submission_failed',
       }).catch(() => {});
@@ -614,6 +708,7 @@ async function recordBatchImageCost(
       savingsUsd: Number((regularCostUsd - discountedCostUsd).toFixed(6)),
       imageProviderCostUsd: regularCostUsd,
       ...(providerUsage ? { providerUsage } : {}),
+      ...agentStoryReviewerSpendMetadataForJobUserId(job.user_id),
     },
   }).then(({ error }) => {
     if (error) console.error('Failed to record batch image cost event:', error.message);
@@ -669,7 +764,7 @@ async function reconcileJob(admin: AdminClient, job: BatchJobRow): Promise<void>
         .update({ status: 'failed', error: result?.error ?? 'No result for item.' })
         .eq('id', item.id);
       await admin.from('beats')
-        .update({ image_status: 'failed', image_error: result?.error ?? 'Batch produced no image.' })
+        .update({ image_status: 'failed', image_error: IMAGE_FAILURE_MESSAGE })
         .eq('story_id', job.story_id).eq('node_id', item.node_id);
       return;
     }
@@ -834,7 +929,11 @@ export async function submitStoryStatefulVisuals(input: {
   if (authError || !user) throw new Error('Not authenticated');
 
   const admin = createAdminClient();
-  const story = await loadOwnedStory(admin, input.storyId, user.id);
+  const story = await loadOwnedStory(input.storyId, user.id);
+  // Same fix as submitStoryImageBatch, and it belongs here too: the phase 9c plan
+  // named only that path, but this one bills the caller in exactly the same three
+  // places. See resolveImageBillingIdentity.
+  const { payerUserId, actorKind } = resolveImageBillingIdentity(story, user.id);
   const map = story.story_map;
   if (!map || !map.nodes || !map.rootNodeId) throw new Error('Story has no beats to visualise.');
 
@@ -858,6 +957,8 @@ export async function submitStoryStatefulVisuals(input: {
     };
   }
 
+  // The caller, not payerUserId -- for the reason given on the same call in
+  // submitStoryImageBatch above.
   const currentPlanKey = await assertImageGenerationEntitled(user.id);
   const task = imageTaskForStoryKind(config.storyKind);
   const snapshot = await resolveImageModelSnapshot({
@@ -880,7 +981,8 @@ export async function submitStoryStatefulVisuals(input: {
   let reservationId: string | null = null;
   try {
     const authorization = await authorizeCoinOperationForUser({
-      userId: user.id,
+      userId: payerUserId,
+      actorKind,
       operationKey: 'batch_image_generation',
       idempotencyKey: `stateful_image_generation:${story.id}:${Date.now()}`,
       components: [{
@@ -890,7 +992,14 @@ export async function submitStoryStatefulVisuals(input: {
         metadata: { generationMode: 'stateful', provider },
       }],
       relatedStoryId: story.id,
-      metadata: { scope, imageCount: targetNodes.length, provider, estimatedCostUsd, generationMode: 'stateful' },
+      metadata: {
+        scope,
+        imageCount: targetNodes.length,
+        provider,
+        estimatedCostUsd,
+        generationMode: 'stateful',
+        ...agentStoryReviewerSpendMetadata(story),
+      },
     });
     if (authorization.status === 'denied') {
       throw new Error('NOT_ENOUGH_COINS');
@@ -912,7 +1021,9 @@ export async function submitStoryStatefulVisuals(input: {
   const { data: jobRow, error: jobError } = await admin
     .from('image_batch_jobs')
     .insert({
-      user_id: user.id,
+      // See the same line in submitStoryImageBatch: processStatefulJob's finalize,
+      // release and upload prefix all derive from this column.
+      user_id: payerUserId,
       story_id: story.id,
       provider,
       scope,
@@ -1013,12 +1124,15 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
 
   // [diag] Which path is this job actually taking? Names provider + resolved
   // strategy so a per-beat failure can be attributed to the stateful-responses
-  // path vs the resend_refs/edit path.
-  console.log(
-    `[stateful:diag] job=${job.id} provider=${snapshot.providerKey} model=${snapshot.providerModelId} ` +
-    `requested=provider_stateful resolved=${continuityResolution.strategy} ` +
-    `statefulEnabled=${runtimePricing?.enabled ?? false} episodic=${job.episodic}`
-  );
+  // path vs the resend_refs/edit path. Routine, so behind the timing flag --
+  // the failure branch below (console.error) always logs regardless.
+  if (process.env.NEXT_PUBLIC_LOG_TIMING === '1') {
+    console.log(
+      `[stateful:diag] job=${job.id} provider=${snapshot.providerKey} model=${snapshot.providerModelId} ` +
+      `requested=provider_stateful resolved=${continuityResolution.strategy} ` +
+      `statefulEnabled=${runtimePricing?.enabled ?? false} episodic=${job.episodic}`
+    );
+  }
 
   // In the resend_refs fallback, ensure portraits exist (needed for continuity on a
   // non-stateful provider) and gather them once to attach to every beat.
@@ -1093,6 +1207,7 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
               generationMode: 'stateful',
               storyId: job.story_id,
               nodeId: item.node_id,
+              metadata: agentStoryReviewerSpendMetadataForJobUserId(job.user_id),
             },
             continuity: { requestedStrategy: 'provider_stateful', previousState, allowRuntimeFallback: true },
           });
@@ -1180,7 +1295,7 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
         error instanceof Error ? error.stack ?? error.message : error
       );
       await admin.from('image_batch_items').update({ status: 'failed', error: message }).eq('id', item.id);
-      await admin.from('beats').update({ image_status: 'failed', image_error: message })
+      await admin.from('beats').update({ image_status: 'failed', image_error: IMAGE_FAILURE_MESSAGE })
         .eq('story_id', job.story_id).eq('node_id', item.node_id);
     }
   }

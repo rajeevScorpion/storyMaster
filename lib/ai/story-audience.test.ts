@@ -3,10 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
   KIDS_AGE_GROUPS,
   STORY_AUDIENCE_OPTIONS,
+  assessStoryBeatLength,
   countStoryWords,
   formatAudienceBranchingContract,
+  formatAudienceImageDirection,
   formatAudienceNarrationDirection,
+  formatAudienceNarrativeContract,
   formatAudienceVisualContract,
+  getStoryAudienceProfile,
   normalizeAgeGroup,
   normalizeStoredAgeGroup,
   normalizeStoryBeatLengthLevel,
@@ -70,5 +74,84 @@ describe('story audience profiles', () => {
     expect(formatAudienceBranchingContract('teens')).toContain('something a character says');
     expect(formatAudienceVisualContract('adults')).toContain('must not dictate a fixed palette');
     expect(formatAudienceNarrationDirection('kids_3_5')).toContain('Never use baby talk');
+  });
+
+  it('formats a single-line audience image direction invariant', () => {
+    const profile = getStoryAudienceProfile('teens');
+    const line = formatAudienceImageDirection('teens');
+    expect(line.split('\n')).toHaveLength(1);
+    expect(line).toBe(`Audience (${profile.label}): ${profile.visualDirection}`);
+  });
+});
+
+describe('resolveStoryBeatLength — band and proportional allowance', () => {
+  const cases: Array<{
+    ageGroup: string;
+    level: number;
+    targetWords: number;
+    band: [number, number];
+    allowance: [number, number];
+  }> = [
+    { ageGroup: 'kids_3_5', level: 1, targetWords: 28, band: [24, 32], allowance: [20, 36] },
+    { ageGroup: 'all_ages', level: 3, targetWords: 84, band: [74, 94], allowance: [61, 107] },
+    { ageGroup: 'teens', level: 1, targetWords: 64, band: [56, 72], allowance: [46, 82] },
+    { ageGroup: 'teens', level: 3, targetWords: 108, band: [95, 121], allowance: [79, 137] },
+    { ageGroup: 'teens', level: 4, targetWords: 130, band: [114, 146], allowance: [94, 166] },
+    { ageGroup: 'teens', level: 5, targetWords: 152, band: [134, 170], allowance: [111, 193] },
+    { ageGroup: 'adults', level: 5, targetWords: 176, band: [155, 197], allowance: [129, 223] },
+  ];
+
+  cases.forEach(({ ageGroup, level, targetWords, band, allowance }) => {
+    it(`${ageGroup} level ${level}: target ${targetWords}, band ${band.join('-')}, allowance ${allowance.join('-')}`, () => {
+      const length = resolveStoryBeatLength(ageGroup, level);
+      expect(length.targetWords).toBe(targetWords);
+      expect([length.targetMinWords, length.targetMaxWords]).toEqual(band);
+      expect([length.allowanceMinWords, length.allowanceMaxWords]).toEqual(allowance);
+    });
+  });
+
+  it('no longer clamps the band to the hard min/max at Brief and Immersive', () => {
+    // Teens Immersive used to clamp targetMaxWords to hardMaxWords (152); it is
+    // now the unclamped target+tolerance (170).
+    const length = resolveStoryBeatLength('teens', 5);
+    expect(length.hardMaxWords).toBe(152);
+    expect(length.targetMaxWords).toBe(170);
+  });
+});
+
+describe('formatAudienceNarrativeContract', () => {
+  it('tells the model the band and drops the old absolute-range wording', () => {
+    const contract = formatAudienceNarrativeContract('teens', 4);
+    expect(contract).toContain('114-146');
+    expect(contract).toContain('about 130');
+    expect(contract).toContain('about 33 words');
+    expect(contract).not.toContain('absolute');
+  });
+});
+
+describe('assessStoryBeatLength', () => {
+  const length = resolveStoryBeatLength('teens', 4); // target 130, band 114-146, allowance 94-166
+
+  function wordsOfLength(count: number): string {
+    return Array.from({ length: count }, (_, index) => `word${index}`).join(' ');
+  }
+
+  it('is within allowance and carries no note for a beat inside the band', () => {
+    const assessment = assessStoryBeatLength(wordsOfLength(130), length);
+    expect(assessment.wordCount).toBe(130);
+    expect(assessment.withinAllowance).toBe(true);
+    expect(assessment.note).toBeNull();
+  });
+
+  it('flags an over-length beat outside the allowance with a "cut about" note', () => {
+    const assessment = assessStoryBeatLength(wordsOfLength(200), length);
+    expect(assessment.withinAllowance).toBe(false);
+    expect(assessment.note).toContain('cut about');
+  });
+
+  it('flags an under-length beat outside the allowance with an "add about" note', () => {
+    const assessment = assessStoryBeatLength(wordsOfLength(50), length);
+    expect(assessment.withinAllowance).toBe(false);
+    expect(assessment.note).toContain('add about');
   });
 });

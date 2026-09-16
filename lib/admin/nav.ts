@@ -6,6 +6,7 @@ import {
   Braces,
   Brush,
   Clapperboard,
+  ClipboardList,
   Clock3,
   Coins,
   CreditCard,
@@ -13,6 +14,7 @@ import {
   FileText,
   Film,
   FlaskConical,
+  Gauge,
   ImageIcon,
   ImageUp,
   Images,
@@ -24,14 +26,17 @@ import {
   Package,
   Palette,
   PenLine,
+  Route,
   Settings,
   Settings2,
   ShieldAlert,
   ScrollText,
   SlidersHorizontal,
   Sparkles,
+  UserCheck,
   UserRound,
   UsersRound,
+  Users,
   Video,
   WalletCards,
   Wind,
@@ -329,6 +334,120 @@ const PRICING_CHILD_GROUP: AdminNavChildGroup = {
   ],
 };
 
+// Agentic Creator System admin area. Phase 1 shipped only the Overview child,
+// which hosts the kill switch and the five subordinate flags. Later phases
+// appended Personas (the catalogue), the Persona Test Lab (dry-running a
+// persona through the real pipeline before promotion), the Task pool, Runs,
+// and Model routing to this same group list, so the sidebar and hub grow
+// without touching this file's shape.
+const AGENTS_CHILD_GROUPS: AdminNavChildGroup[] = [
+  {
+    id: 'general',
+    label: null,
+    items: [
+      {
+        id: 'overview',
+        label: 'Overview',
+        href: '/admin/agents',
+        icon: LayoutGrid,
+        description: 'Master kill switch and the five subordinate agentic flags.',
+        staticSummary: 'Feature flags for the Agentic Creator System',
+      },
+      {
+        id: 'personas',
+        label: 'Personas',
+        href: '/admin/agents/personas',
+        icon: Users,
+        description: 'Creative identity catalogue: language, age group, genres, permissions, and lifecycle status.',
+        staticSummary: 'Persona catalogue for autonomous story creators',
+      },
+      {
+        id: 'test-lab',
+        label: 'Persona Test Lab',
+        href: '/admin/agents/test-lab',
+        icon: FlaskConical,
+        description: 'Run the real headless pipeline against one persona (agent_tasks.is_test = true) and inspect brief, source text, beats, config, and novelty before ever promoting to a draft.',
+        staticSummary: 'Dry-run a persona through the real pipeline before it goes live',
+      },
+      {
+        id: 'tasks',
+        label: 'Task pool',
+        href: '/admin/agents/tasks',
+        icon: Layers,
+        description: 'Catalogue coverage gaps and the commissioning queue: propose, review, and manage tasks for autonomous story creators.',
+        staticSummary: 'Coverage gaps and the task commissioning queue',
+      },
+      {
+        id: 'runs',
+        label: 'Runs',
+        href: '/admin/agents/runs',
+        icon: Gauge,
+        description: 'Execution runs for commissioned tasks: stage timeline, checkpoints, retries, and the manual "Run now" worker kick.',
+        staticSummary: 'Run monitor: stage timeline, checkpoints, and retries',
+      },
+      {
+        id: 'spend',
+        label: 'Persona spend',
+        href: '/admin/agents/spend',
+        icon: Coins,
+        description: 'What each persona has cost, traced through the stories it wrote. Read-only.',
+        staticSummary: 'Coin spend per persona',
+      },
+      {
+        id: 'routing',
+        label: 'Model routing',
+        href: '/admin/agents/routing',
+        icon: Route,
+        description: 'Read-only reference: which model each agentic task resolves to, and the precedence that decides it.',
+        staticSummary: 'Agentic task-to-model routing reference',
+      },
+    ],
+  },
+];
+
+// Phase 9's reviewer surface: a human review queue for agent-authored drafts
+// sitting at stage 'awaiting_review', plus a read-only roster of who can
+// review them (public.agent_reviewers, migration 111). Deliberately a SIBLING
+// of Agents within the same `agentic` group below, not nested under
+// /admin/agents -- both agentic_reviewer_workflow_enabled's own doc comment
+// (lib/agentic/flags.ts) and the architecture doc name /admin/authors as its
+// own destination. Icons follow the same pattern Agents itself uses: the
+// top-level item and its own "overview" child deliberately do NOT share an
+// icon (Agents/Workflow vs. Agents>Overview/LayoutGrid), so Authors/UserCheck
+// and Authors>Review queue/LayoutGrid follow suit.
+const AUTHORS_CHILD_GROUPS: AdminNavChildGroup[] = [
+  {
+    id: 'general',
+    label: null,
+    items: [
+      {
+        id: 'review-queue',
+        label: 'Review queue',
+        href: '/admin/authors',
+        icon: LayoutGrid,
+        description: 'Agent drafts waiting on a human: story, latest evaluation, and review readiness for every run at awaiting_review.',
+        staticSummary: 'Agent drafts awaiting human review',
+      },
+      {
+        id: 'reviewers',
+        label: 'Reviewers',
+        href: '/admin/authors/reviewers',
+        icon: Users,
+        description: 'Read-only roster of accounts with reviewer standing on agent-authored drafts.',
+        staticSummary: 'Who can review agent-authored drafts',
+      },
+      {
+        id: 'workload',
+        label: 'Workload',
+        href: '/admin/authors/workload',
+        icon: ClipboardList,
+        description: 'What is on each reviewer’s desk: assigned, pending, completed, and what they have decided. Read-only.',
+        staticSummary: 'Assigned, pending and completed drafts per reviewer',
+      },
+    ],
+  },
+];
+
 export const ADMIN_NAV: AdminNavGroup[] = [
   {
     id: 'operations',
@@ -366,9 +485,18 @@ export const ADMIN_NAV: AdminNavGroup[] = [
     ],
   },
   {
+    id: 'agentic',
+    label: 'Agentic',
+    items: [
+      { label: 'Agents', href: '/admin/agents', icon: Workflow, childGroups: AGENTS_CHILD_GROUPS },
+      { label: 'Authors', href: '/admin/authors', icon: UserCheck, childGroups: AUTHORS_CHILD_GROUPS },
+    ],
+  },
+  {
     id: 'studio',
     label: 'Studio',
     items: [
+      { label: 'Text Models', href: '/admin/text-models', icon: FileText },
       { label: 'Image Models', href: '/admin/image-models', icon: Images },
       { label: 'Graphic Styles', href: '/admin/graphic-styles', icon: Palette },
       { label: 'Story Visuals', href: '/admin/settings/story-visuals', icon: Brush },

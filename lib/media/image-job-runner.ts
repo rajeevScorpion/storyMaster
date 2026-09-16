@@ -17,12 +17,14 @@ import {
 } from '@/lib/media/image-versions';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
 import { buildReferenceBindingLines } from '@/lib/ai/reference-binding';
+import { PROMPT_HARD_MAX_CHARS } from '@/lib/ai/prompt-compiler/capability.shared';
 import {
   BEAT_IMAGE_MAX_VERSIONS_FLAG_KEY,
   normalizeMaxImageVersionsPerBeat,
 } from '@/lib/beat-control/settings';
 import type { BeatImageJobRequestPayload, ImageGenerationJobRow } from '@/lib/types/image-jobs';
 import type { BeatImageGalleryEntry, StoryMap } from '@/lib/types/story';
+import { IMAGE_FAILURE_MESSAGE } from '@/lib/media/image-failure.shared';
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
@@ -30,8 +32,6 @@ type AdminClient = ReturnType<typeof createAdminClient>;
 // serverless duration cap and re-kick for whatever is left.
 const JOB_TIME_BUDGET_MS = Math.max(5_000, Number(process.env.WORKER_TIME_BUDGET_MS) || 20_000);
 const STALE_CLAIM_MINUTES = 5;
-
-const FRIENDLY_FAILURE = 'Image generation failed. Please try again.';
 
 function baseUrl(): string {
   const raw = process.env.APP_URL
@@ -182,7 +182,7 @@ async function markJobFailed(admin: AdminClient, job: ImageGenerationJobRow, mes
     .eq('id', job.id);
   await admin
     .from('beats')
-    .update({ image_status: 'failed', image_error: FRIENDLY_FAILURE })
+    .update({ image_status: 'failed', image_error: IMAGE_FAILURE_MESSAGE })
     .eq('story_id', job.story_id)
     .eq('node_id', job.node_id);
   await settleReservation(admin, job, 'release', 'image_job_failed');
@@ -337,10 +337,15 @@ async function processJob(admin: AdminClient, job: ImageGenerationJobRow): Promi
     // so identity attaches to the right image even after some refs dropped. When
     // the compiled prompt already carries full identity + style-lock language,
     // use the compact binding form so the two do not duplicate.
-    const bindingLines = buildReferenceBindingLines(survivors, {
-      compact: payload.promptCompiler?.engine === 'compiled',
-    });
+    const compiledEngine = payload.promptCompiler?.engine === 'compiled';
+    const bindingLines = buildReferenceBindingLines(survivors, { compact: compiledEngine });
     const boundPrompt = bindingLines ? `${payload.finalPrompt}\n\n${bindingLines}` : payload.finalPrompt;
+    // The compiler already reserved room for these binding lines (Unit 4b), so
+    // this should be unreachable. Warn instead of trimming -- trimming here
+    // could cut mid-word or through a section the compiler protects.
+    if (compiledEngine && boundPrompt.length > PROMPT_HARD_MAX_CHARS) {
+      console.warn('[image_prompt.over_hard_max]', { chars: boundPrompt.length, referenceCount: survivors.length });
+    }
     const result = await generateSelectedImage({
       task: payload.imageTask,
       prompt: boundPrompt,

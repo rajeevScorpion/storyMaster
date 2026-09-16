@@ -13,6 +13,8 @@ import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import { getFeatureFlag, getFeatureFlagValue } from '@/lib/ai/model-config';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import { estimateElevenLabsModelCostUsd } from '@/lib/ai/provider-costs';
+import { generateText } from '@/lib/ai/text-gateway/router';
+import { logTiming as logTimingEvent } from '@/lib/logging/timing.shared';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type { TaskKey } from '@/lib/ai/model-config.shared';
 import type { StoryBeat, WordTiming } from '@/lib/types/story';
@@ -50,6 +52,8 @@ import {
 import type { PricingActionKey } from '@/lib/types/pricing';
 import { resolveNarrationVoiceDecision } from '@/lib/ai/narration-voice-resolver';
 import { updateBeatMediaStateWithRetry } from '@/app/actions/persistence';
+import { resolveAgentDraftServerAuth } from '@/lib/agentic/billing-identity';
+import { AGENT_STORY_REVIEWER_SPEND_METADATA_KEY } from '@/lib/agentic/billing-identity.shared';
 import { getEffectiveMediaStorageConfig } from '@/lib/media/storage-config';
 import { putR2Object, createR2SignedGetUrl } from '@/lib/media/r2-server';
 import { recordMediaAsset } from '@/lib/media/media-assets';
@@ -82,8 +86,31 @@ async function resolveNarrationBillingUserId(explicitUserId?: string | null): Pr
   return user.id;
 }
 
+/**
+ * Unit 9M: the `serverAuth` an INTERACTIVE narration call should run under when the
+ * person pressing the button is a reviewer working on an agent draft, or `undefined`
+ * for everyone else -- which is the overwhelmingly common case and keeps its exact
+ * previous behaviour.
+ *
+ * Signed out yields `undefined` rather than throwing here: the existing flow already
+ * fails with its own "Sign in to generate narration." message a moment later, and
+ * this helper has no business owning that error.
+ */
+async function resolveInteractiveAgentDraftAuth(
+  savedStoryId: string | null | undefined
+): Promise<{ userId: string; actorKind: 'user' | 'agentic_system' } | undefined> {
+  if (!savedStoryId) return undefined;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return undefined;
+  return resolveAgentDraftServerAuth(savedStoryId, user.id);
+}
+
 async function runMeteredNarrationOperation<T>(input: {
   userId?: string | null;
+  // Flat, per hop 4 of the D13/Unit 9d billing chain -- userId already sits flat on
+  // this input, so actorKind rides beside it rather than inside a nested object.
+  actorKind?: 'user' | 'agentic_system';
   meterKey: Extract<
     PricingActionKey,
     'generate_story_narration' | 'generate_reel_narration' | 'generate_narration_preview'
@@ -97,6 +124,7 @@ async function runMeteredNarrationOperation<T>(input: {
   const userId = await resolveNarrationBillingUserId(input.userId);
   const authorization = await authorizeCoinOperationForUser({
     userId,
+    actorKind: input.actorKind,
     operationKey: input.meterKey,
     idempotencyKey: input.idempotencyKey ?? `${input.meterKey}:${randomUUID()}`,
     components: [{ meterKey: input.meterKey }],
@@ -155,14 +183,14 @@ async function timeNarrationStep<T>(
   const startedAt = narrationNowMs();
   try {
     const result = await fn();
-    console.info(`[timing:${scope}]`, {
+    logTimingEvent(scope, {
       durationMs: Math.round(narrationNowMs() - startedAt),
       success: true,
       ...meta,
     });
     return result;
   } catch (error) {
-    console.info(`[timing:${scope}]`, {
+    logTimingEvent(scope, {
       durationMs: Math.round(narrationNowMs() - startedAt),
       success: false,
       ...meta,
@@ -676,19 +704,6 @@ async function callGeminiTTS(
       if (taskKey !== 'reel_tts') {
         ttsPrompt = `${ttsPrompt}\n\n${formatAudienceNarrationDirection(options.audience)}`;
       }
-      // TEMP DEBUG: prints the exact prompt sent to Gemini TTS so we can verify the
-      // accent instruction actually reaches the model on the live path. Remove once
-      // accent behavior is confirmed.
-      console.info('[narration.tts_prompt_debug]', {
-        taskKey,
-        language,
-        promptLanguage,
-        voiceName,
-        requestedAccent: options.accent ?? null,
-        accentApplied: Boolean(accentInstruction),
-        accentInstruction: accentInstruction || null,
-        resolvedPrompt: ttsPrompt,
-      });
       const ttsFlagVal = await getFeatureFlagValue('gemini_tts_timeout_ms');
       const ttsTimeoutMs = (ttsFlagVal ? parseInt(ttsFlagVal, 10) : 0) || GEMINI_TTS_TIMEOUT_MS;
 
@@ -1540,16 +1555,40 @@ export async function generateAndPersistNarration(
     generationMode?: NarrationGenerationMode;
     panelPauseMs?: number;
     // When present, upload + persist on behalf of `userId` via the service-role
-    // client (background worker path). Absent for the interactive path.
-    serverAuth?: { userId: string };
+    // client (background worker path). Absent for the interactive path. actorKind
+    // rides beside userId here (D13/Unit 9d, hops 1-3 of the billing chain carry it
+    // inside serverAuth) so the narration-batch worker's derived actorKind reaches
+    // runMeteredNarrationOperation below.
+    serverAuth?: { userId: string; actorKind?: 'user' | 'agentic_system' };
     billingIdempotencyKey?: string;
   } = {}
 ): Promise<{ audioUrl: string; reelCaptions?: ReelCaptionTiming; narrationMetadata?: BeatNarrationMetadata }> {
   const meterKey = options.taskKey === 'reel_tts'
     ? 'generate_reel_narration' as const
     : 'generate_story_narration' as const;
+
+  // Unit 9M. `options.serverAuth` means "a background worker is driving this"; it is
+  // absent for every interactive press, INCLUDING a reviewer narrating an agent draft
+  // -- and that is the bug. Measured on dev: the reviewer was charged for both the
+  // narration and the overlay alignment, the audio was generated, and the beat write
+  // then matched no rows under owner-only RLS, so audio_url stayed null and nothing
+  // reported a failure. 57b516b fixed the narration BATCH path and a5e9bff fixed the
+  // image submits; nothing ever resolved an agentic payer here.
+  //
+  // resolveAgentDraftServerAuth returns undefined for an owner, for a non-agent story,
+  // and whenever AGENTIC_SYSTEM_USER_ID does not line up -- so `effectiveAuth` is
+  // byte-for-byte `options.serverAuth` on every pre-existing path.
+  //
+  // The two concepts are kept APART below on purpose. `options.serverAuth` still means
+  // "no human is watching" and keeps gating the regeneration feature flag and the
+  // beat-write retry budget: a reviewer pressing the button is interactive and must
+  // still respect both. `effectiveAuth` means "act as this account", and is what the
+  // billing identity, the Supabase client, the storage prefix and the beat write follow.
+  const effectiveAuth = options.serverAuth ?? (await resolveInteractiveAgentDraftAuth(savedStoryId));
+
   return runMeteredNarrationOperation({
-    userId: options.serverAuth?.userId,
+    userId: effectiveAuth?.userId,
+    actorKind: effectiveAuth?.actorKind,
     meterKey,
     idempotencyKey: options.billingIdempotencyKey,
     storyId: savedStoryId,
@@ -1558,6 +1597,12 @@ export async function generateAndPersistNarration(
       generationMode: options.generationMode ?? 'final',
       language,
       providerTaskKey: options.taskKey ?? 'tts',
+      // Phase 11: effectiveAuth.actorKind is resolveAgenticBillingIdentity's own
+      // output (via serverAuth for the batch worker, or resolveAgentDraftServerAuth
+      // for an interactive reviewer press) -- reusing it here, not a new signal.
+      ...(effectiveAuth?.actorKind === 'agentic_system'
+        ? { [AGENT_STORY_REVIEWER_SPEND_METADATA_KEY]: true }
+        : {}),
     },
     run: () => timeNarrationStep(
     'narration.generate_and_persist',
@@ -1585,10 +1630,10 @@ export async function generateAndPersistNarration(
 
       const audioPayload = await buildNarrationAudioPayload(storyText, tone, genre, voiceName, language, costTelemetry, options);
 
-      const supabase = options.serverAuth ? createAdminClient() : await createClient();
+      const supabase = effectiveAuth ? createAdminClient() : await createClient();
       let userId: string;
-      if (options.serverAuth) {
-        userId = options.serverAuth.userId;
+      if (effectiveAuth) {
+        userId = effectiveAuth.userId;
       } else {
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) throw new Error('Not authenticated');
@@ -1714,7 +1759,7 @@ export async function generateAndPersistNarration(
               }),
               activeNarrationPreviewId: null,
               ...(audioPayload.reelCaptions?.length ? { reelCaptions: audioPayload.reelCaptions } : {}),
-            }, options.serverAuth, options.serverAuth ? { attempts: 1 } : {});
+            }, effectiveAuth, options.serverAuth ? { attempts: 1 } : {});
             narrationMetadata = buildBeatNarrationMetadata({
               payload: audioPayload,
               audioUrl: persistedAudioUrl,
@@ -2071,7 +2116,9 @@ export async function resolveNarrationVoiceServer(input: {
     decision.warnings.push(`Fell back to ${voiceId} because no narration voice was resolved.`);
   }
 
-  console.info('[narration.voice_resolver]', {
+  // A resolution with warnings (e.g. a voice fallback) is worth always seeing;
+  // a clean resolution is routine and stays behind the timing flag.
+  const voiceResolverLogPayload = {
     storyId: input.savedStoryId ?? null,
     mode: decision.mode,
     voiceId,
@@ -2079,7 +2126,12 @@ export async function resolveNarrationVoiceServer(input: {
     accent,
     usedLegacySelector,
     warnings: decision.warnings,
-  });
+  };
+  if (decision.warnings.length > 0) {
+    console.warn('[narration.voice_resolver]', voiceResolverLogPayload);
+  } else if (process.env.NEXT_PUBLIC_LOG_TIMING === '1') {
+    console.info('[narration.voice_resolver]', voiceResolverLogPayload);
+  }
 
   return {
     voiceId,
@@ -2140,7 +2192,6 @@ export async function selectLegacyNarratorVoiceServer(
   costTelemetry?: CostTelemetryContext
 ): Promise<string> {
   try {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
     const voiceConfig = await getModelConfig('voice_selection');
     const voicePrompt = resolvePromptTemplate(
       await getPublishedPrompt('voice_selection'),
@@ -2152,34 +2203,17 @@ export async function selectLegacyNarratorVoiceServer(
         availableVoices: AVAILABLE_VOICES.join(', '),
       }
     );
-    const startedAt = narrationNowMs();
-    const response = await ai.models.generateContent({
-      model: voiceConfig.model,
-      contents: voicePrompt,
-      config: {
-        systemInstruction: LOCKED_PROMPT_GUARDRAILS.voice_selection,
-        temperature: voiceConfig.temperature ?? 0.3,
-      },
+    const { text } = await generateText({
+      taskKey: 'voice_selection',
+      modelKey: voiceConfig.model,
+      prompt: voicePrompt,
+      systemInstruction: LOCKED_PROMPT_GUARDRAILS.voice_selection,
+      temperature: voiceConfig.temperature ?? 0.3,
+      telemetry: costTelemetry,
+      telemetryMetadata: { genre, tone, targetAge, language },
     });
 
-    if (costTelemetry) {
-      await recordModelCostEvent({
-        context: costTelemetry,
-        taskKey: 'voice_selection',
-        modelId: voiceConfig.model,
-        inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
-        outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
-        latencyMs: narrationNowMs() - startedAt,
-        metadata: {
-          genre,
-          tone,
-          targetAge,
-          language,
-        },
-      });
-    }
-
-    const voiceName = response.text?.trim() || '';
+    const voiceName = text.trim();
     if (AVAILABLE_VOICES.includes(voiceName as any)) {
       return voiceName;
     }

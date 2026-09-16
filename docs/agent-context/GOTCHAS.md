@@ -194,6 +194,82 @@ field, so it reads `false` on real grids; and a ≥1800×1000 size check misread
 
 ---
 
+### The image prompt compiler was written for English — non-Latin text needs care
+
+The relevance filter tokenizes phrases to compare them. Until 2026-09-15 it stripped everything outside
+`[a-z0-9]`, so every Hindi, Arabic or CJK phrase reduced to the **same empty key**: distinct phrases were
+dropped as "duplicates", focus items shared by three panels were hoisted and then deleted everywhere, and a
+fully non-Latin character name made every focus item look like a redundant name. One real Hindi beat lost 4 of
+its 5 world invariants, all 16 visual-focus items and 7 negative constraints before anyone noticed.
+
+Two rules when touching `lib/ai/prompt-compiler/`:
+
+- **Keep combining marks.** Devanagari vowel signs and the virama, and Arabic harakat, are marks, not letters —
+  a class of letters and digits alone shreds every Hindi word into fragments. Name boundaries need them too,
+  or a name matches inside a longer word.
+- **Scripts written without spaces (Han, kana, Thai, Lao, Khmer, Myanmar) have no word boundary.** A Japanese
+  name is followed directly by a particle, so boundary matching never fires; `findWholeName` falls back to a
+  substring match for those. `\b` is ASCII-only in JavaScript even with the Unicode flag — it never matches a
+  non-Latin name at all.
+
+`isEnglishText` is a Latin-script ratio, so a Latin-script language that is not English (Spanish, French)
+passes it. The composer's own rule is what keeps output English; the check is a backstop.
+
+### Newlines are section breaks in a compiled image prompt
+
+The compiled prompt is eight headed sections separated by blank lines, because the owner requires readable
+prompts rather than one block. The redaction pass strips control characters — and a newline **is** a control
+character, so the original version quietly collapsed every section break into a space and shipped one
+paragraph. `CONTROL_RE` in `compile.shared.ts` deliberately excludes the line feed. Carriage returns are still
+stripped so a stray CRLF cannot double a break.
+
+### Never write a Unicode escape into source through the agent tooling
+
+The tooling decodes an escape sequence into the real character before the file is written. A character class
+written with escapes therefore lands as **literal control bytes**, NUL included, and git then treats the file
+as binary: no diff, no review. This has bitten two units. Build such patterns from a string instead — copy the
+form used by `CONTROL_RE` in `compile.shared.ts` — and never put an escape sequence in a prose comment either,
+since it becomes a real newline and splits the line. Check with a byte scan before committing.
+
+### Reference-image lines are part of the prompt budget, and use the English name
+
+`buildReferenceBindingLines` appends "reference image N depicts X" lines **after** the compiler has finished,
+so they used to push a budgeted prompt over its limit. `estimateReferenceBindingChars` now measures them up
+front and the compiler subtracts that from both the target and the 5,000 hard cap. The name in those lines
+comes from the same function that names characters inside the prompt (`deriveImageName`), so a non-Latin
+canonical name cannot leak in through a binding line while the prompt itself says "Anvi". Compute the estimate
+from the **final** reference list — after any filtering — or the reservation no longer matches what is sent.
+
+### Continuity is not sameness — and the composer's invariants are already current
+
+Visual continuity is attribute-specific (`docs/visual-composer-continuity-framework.md`): identity — face, skin
+tone, build, distinguishing marks — is preserved, while age, hair, wardrobe, accessories and location are
+reassessed whenever the story moves in time, place, activity or life stage. Each is marked LOCKED, EVOLVE or
+FREE per character, and `resolveContinuityContradictions` overrides a LOCKED age across a months-or-years jump
+(a live run had the model locking a character's age across twelve years).
+
+**The trap:** it is tempting to strip wardrobe and hair detail from a plan when the beat jumps years ahead. Do
+not. The composer's `sharedVisualInvariants` describe the state *after* the jump — a live run returned "adult
+Anvi … dark hair tied in an athletic ponytail" for a twelve-years-later beat — so dropping them deletes correct
+within-beat continuity. What actually drags old appearance forward is elsewhere: the story's own
+`continuityNotes` (prior-state notes, filtered on a jump by a deliberately generic word list plus overlap with
+`mustNotInherit` — a heuristic, so a plot-relevant note mentioning a room or a bag can be dropped), the
+previous beat's storyboard image, and sameness wording in the prompts.
+
+**References follow presence.** Character references are attached only for characters a panel actually declares
+present, and the previous storyboard is skipped entirely on a big time jump or location change — unless no
+present character has a reference of their own, in which case it stays as the only identity anchor. All of this
+fails open: a fallback plan, a plan predating `charactersPresent`, or an empty union attaches everything, as
+before. Decide this **before** the reference list is finalized, since the prompt budget reserves space from the
+final list.
+
+### Reels share the storyboard output schema
+
+`visual_prompt` and `reel_visual_prompt` both map to a storyboard schema. The continuity fields (transition,
+setting, characterVisuals, must-not-inherit, per-panel story function) live in a **separate**
+`storyboardContinuityPlanSchema` used only by `visual_prompt`, so reels are not forced to produce them. Adding
+a field to the shared schema changes reel generation too.
+
 ## Data & performance
 
 ### Signed URLs churn defeats every image cache
@@ -218,6 +294,25 @@ The gallery tolerates missing columns by latching "this column group is unavaila
 Relatedly: the `stories!inner` join was deliberately **not** widened with episode columns as a pre-093
 fallback. A database without migration 075 would then fail the whole gallery rather than lose one feature.
 
+**The classifiers behind those latches are usually code-identical, which is what makes the rule easy to
+violate.** `isMissingRunSchemaError` (migration 107) and `isMissingTaskSchemaError` (106) in the agentic
+modules both accept exactly `42P01`, `42703`, `PGRST200`, `PGRST204`, as do the persona and memory ones.
+They are told apart **only by which table the failing query touched** — never by the error itself. So
+"try both classifiers and latch whichever matches" is not a safe pattern: it always matches the first one
+you check. **Classify by the query, not by the error.**
+
+This shipped once and was caught in review: `enqueueCommissionedTasks` classified an `agent_tasks`-only
+read against the 107 latch first, so a missing `agent_tasks` — or a transient PostgREST `PGRST204` after
+any migration — would latch `runSchemaUnavailable`, which `drainAgentRuns` reads at its top and
+`listRuns`/`getRun` read too. One `agent_tasks` hiccup would have killed the entire run pipeline for the
+life of the process and blanked `/admin/agents/runs` behind a "migration 107 is not applied" message that
+was simply false. Fixed in `aa950db`.
+
+A query that genuinely spans two groups — `drainAgentRuns`'s `agent_runs` select with an
+`agent_tasks!inner` embed — is the one case where you cannot tell them apart, and there the right answer
+is to reason from the schema: `agent_runs.task_id` is a foreign key onto `agent_tasks`, so 107 cannot
+exist without 106 and latching 107 is correct either way. Write that reasoning down at the call site.
+
 ### PostgREST `or()` needs double-quoted values
 
 Values in an `or()` filter are double-quoted (`title.ilike."%Mr. Bean%"`) so dots and commas survive. Strip
@@ -240,6 +335,17 @@ parse), `lib/ai/prompts.ts`, `lib/utils/story-map.ts`, `lib/types/story.ts`.
 
 > Note: `app/actions/story.ts` appears in older docs and plans. It was a dead orphan and was **deleted** —
 > the live equivalents are `app/actions/story-runtime.ts` and `app/actions/persistence.ts`.
+
+### Beat length is advisory — never retries, never fails
+
+`validateGeneratedBeat` (`lib/ai/story-bible.ts`) no longer checks word count; only structural issues
+(missing fields, wrong option count, storyTextParts mismatch, character id problems, novelty) can force the
+one retry-then-throw in `generateStoryBeat`, `materializeSeededBeat`, and `generateSeedPlanPreview`. The
+band `resolveStoryBeatLength` returns (`targetMinWords`/`targetMaxWords`) is what the model is told; a
+separate, wider `allowanceMinWords`/`allowanceMaxWords` only decides whether `assessStoryBeatLength` /
+`assessGeneratedBeatLength` (`lib/ai/story-audience.ts`, `lib/ai/story-bible.ts`) logs
+`[story_runtime.beat_length_outside_allowance]`. A length miss must never be made to retry or fail a beat
+on its own — that used to cost a full beat and two paid calls over wording alone.
 
 ### Gemini TTS has no locale parameter
 
@@ -271,6 +377,109 @@ attempt cap (needs a migration).
 
 ---
 
+### `saveBeat` routes by identity rather than gating — shared branching is dormant, not deleted (D23)
+
+`app/actions/persistence.ts`'s `saveBeat` looks like it should be gated on story ownership. **Still don't
+wire the reviewer-authorization helper into it as a strict allow/deny check** — that reasoning below is
+current, even though the feature it originally protected is not.
+
+**As of Phase 10 Round 1 (2026-09-12), "any authenticated user may continue someone else's non-archived
+story on their own branch" is no longer true.** That was shared branching, a real working feature this
+section used to describe — the owner has since taken it **dormant by decision (D23)**, not deleted, with
+an explicit path back. Creation mode is now owner-or-reviewer only, enforced at four layers:
+
+- the one non-owner entry point, `StorylinePlayer.tsx`'s "Explore full story tree" link, is removed
+- `app/story/[id]/layout.tsx` and `app/explore/[id]/layout.tsx` gate both routes server-side to
+  owner-or-reviewer via `assertCanEditStory`, redirecting a signed-in non-owner — never a signed-out
+  visitor, who still needs through to the page's own sign-in dialog
+- `continueStory`'s authorize step now refuses a non-owner, non-reviewer continuation **before** coins are
+  reserved, on both the legacy and bundle paths
+- migration `115_beats_owner_only_writes.sql` narrows `beats` INSERT/UPDATE RLS to also require the story's
+  owner, ANDed onto the existing `003_normalize_beats.sql` predicates — **written, but NOT applied on any
+  environment.** Until the owner applies it by hand, the database keeps the original, broader policy below;
+  the three application-level layers above are what actually stop a direct explorer write in the meantime,
+  not RLS. See `PROJECT_STATE.md`'s migration table (row 115) for where it stands.
+
+```
+beats INSERT (today, unmigrated)  auth.uid() IS NOT NULL AND generated_by = auth.uid() AND story not archived
+beats UPDATE (today, unmigrated)  generated_by = auth.uid()
+```
+
+Note `beats.UPDATE` keys on `generated_by`, **not** on the story's owner — a differently shaped predicate
+from `stories.UPDATE` (`auth.uid() = user_id`), and the reason an explorer's write was ever possible at all.
+
+**Why `saveBeat` still must not become a strict gate, even now.** The reviewer path is real, live, and
+untouched by D23: a reviewer granted by `assertCanEditStory`'s reviewer branch continues an agent draft
+that isn't theirs. `saveBeat` consults the same helper **only to decide routing** — a granted reviewer
+swaps to the admin client and drops the `generated_by` / `user_id` filters; every other outcome, including
+the helper throwing, falls through to the ordinary session-client path unchanged. Turning that consultation
+into `throw Forbidden.` on a non-grant is exactly what Phase 9 nearly shipped and would have broken every
+reviewer continuation — the same defect class D23 avoided for explorers by gating at the route and the
+authorize step instead of inside `saveBeat` itself.
+
+Reversing D23 — restoring shared branching end-to-end — needs `115_beats_owner_only_writes_rollback.sql`
+applied, the doorway restored, and both route layouts relaxed. Recorded in full in `PROJECT_STATE.md` so
+it's one lookup, not an excavation; design rationale is in
+[docs/agentic-creator-phase10-plan.md](../agentic-creator-phase10-plan.md), section 2 (D23).
+
+## Text models
+
+### A text model id is a registry key — never trust one from the client
+
+Every text call runs through the gateway (`lib/ai/text-gateway/router.ts`), and the model id it is handed is a
+`text_model_registry.model_key`, not a provider id. On the reader path that id comes from the browser — the
+client fetches task model ids and passes them back into server actions — so treat it as attacker-controlled.
+The gateway runs only an **enabled** registry row; anything else drops to the task's Gemini default with a
+`[text-gateway] fallback` warning. Never pass a raw id straight to a provider adapter, and never widen the
+legacy branch of `resolveTextModel` beyond a bare `gemini-*` id: with migration 119 absent, that regex is the
+only thing between a client-supplied string and a paid OpenRouter call.
+
+Related traps from the same build:
+- **Never rename a `model_key`.** Tasks and persona overrides point at it by string, so a rename silently sends
+  all of them to their fallback. Add a new row and move the tasks.
+- **A process that saw 119 missing stays Gemini-only until it restarts.** The registry read latches legacy
+  mode; after applying 119 the server needs a redeploy (or dev-server restart) before Text Models shows rows.
+- **Gemini output is validated observe-only; OpenAI and OpenRouter strictly.** A schema mismatch on Gemini
+  only warns, preserving production behaviour; the same mismatch elsewhere throws `malformed_output`. Changing
+  either direction is a live behaviour change, not a tidy-up.
+- **Capabilities are load-bearing.** GPT-5.6 Luna rejects `temperature` (HTTP 400) and Qwen 3.7 Flash has JSON
+  mode only, no strict schema. A wrong checkbox in an admin edit makes every call on that model fail.
+- **Remove a registry row only after moving what points at it.** Tasks and persona overrides hold the key as a
+  string; delete first and they silently run their code default. Migration 120 moves, then deletes.
+
+### Thinking levels, temperature and failure text (migration 120)
+
+- **A thinking level is never taken from the request.** The gateway reads the task's level from
+  `model_config.reasoning_level` on the server and applies it only when the call runs on that task's assigned
+  model and the model lists the level; otherwise the model's default, otherwise nothing is sent. A model's
+  levels are a load-bearing capability: Gemini 3 cannot switch thinking off and 3.8 Flash rejects `minimal`.
+- **Gemini text calls always send temperature 1.0** — Google's Gemini 3 guidance (lower values risk looping) and
+  an owner decision. Task temperatures apply to OpenAI and OpenRouter models only. Not an oversight.
+- **Gemini thinking tokens count as output.** Usage adds `thoughtsTokenCount` to output tokens, as Google bills
+  it. Gemini cost rows from before this change understate thinking-heavy tasks; don't compare across it.
+- **`TextGatewayError.message` is for readers, `detail` is for you.** The message is a fixed sentence with no
+  provider, model or task name. Logs, admin screens and agent run records read `errorDetail(error)`. Returning
+  `error.message` from a server action is safe for gateway errors, not for arbitrary ones — allow-list the
+  error classes you return. Image failures have no gateway, so readers get `readerSafeImageError(...)` at every
+  point `beats.image_error` or a job error leaves the server.
+- **Browser callers get gateway failures as data, server callers as `TextGatewayError`.** Next.js recommends
+  returning expected errors from server functions; don't rely on a thrown action's message reaching the browser
+  in production. Beat, storyboard and seed calls go through `callTextModelForReader`, which returns data in the
+  browser and calls straight through on the server — so agent run records keep `detail`. Routing server callers
+  through the data path too loses it: they record only the reader sentence.
+- **A content-safety block is `content_blocked`, with the reason in `providerReason`.** Gemini answers HTTP 200
+  with no text plus a `promptFeedback.blockReason` or a content `finishReason`; OpenAI and OpenRouter refuse or
+  return a policy error. The gateway retries once on the task's `content_block_fallback_model_id` (121), never
+  for strict-model (admin playground) calls. Every failed call, blocks included, is a `status: 'failed'` row in
+  `ai_cost_events` with `errorCategory` and `errorDetail` in its metadata.
+- **`content_block_fallback_model_id` has its own latch (121).** Never add it to the `model_config` select that
+  carries `reasoning_level`: a database without 121 would look like one without 120, and every task thinking
+  level would silently stop applying.
+- **`model_config.reasoning_level` has its own latch.** A process that saw the column missing sends no task
+  thinking levels until it restarts; model assignments are unaffected.
+
+---
+
 ## Product decisions worth not re-deriving
 
 - **`/gallery` is a 307, not a 308.** A cached permanent redirect would make moving the gallery back very hard.
@@ -296,3 +505,24 @@ attempt cap (needs a migration).
   `snapshot.entitlementPlanKey` is what feature gates read. Resolution is promote-only
   (`max(billing, override)`). A promoted user still pays catalog price and can still hit
   `insufficient_balance`.
+
+---
+
+## Line endings are handled by `.gitattributes` now — do not strip CRs by hand
+
+**The old ritual is dead.** For months, anything that wrote a file on Windows had to follow it with
+`sed -i 's/$//' <path>`, because the repo had **no `.gitattributes`** and `core.autocrlf=false`, so git
+committed whatever bytes the working tree held. Forgetting it turned a three-line edit into a whole-file
+diff. It was forgotten often enough that **16 files reached the repo with CRLF** and one ended up mixed.
+
+`.gitattributes` now carries `* text=auto eol=lf`, so **git normalises on `git add`** regardless of what
+your editor produced. Write the file and commit it. No `sed`, no `od -c` check, no instruction in a brief
+telling an agent to remember.
+
+**What this does NOT do:** it does not retroactively fix files already stored as CRLF. Those were
+renormalised once, in their own commit, deliberately isolated so the noise never lands inside a feature
+commit. If you ever add a path pattern that changes text/binary classification, do the same —
+`git add --renormalize .` on its own, never mixed with real changes.
+
+**If you see a whole-file diff for a small edit**, that is the symptom this fixed. Check
+`git ls-files --eol <path>`: `i/lf` is correct, `i/crlf` means something bypassed normalisation.

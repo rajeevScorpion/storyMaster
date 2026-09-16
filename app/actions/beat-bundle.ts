@@ -1,7 +1,7 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { assertCanEditStory } from '@/lib/agentic/reviewers';
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import { resolveEffectiveProcessingMode } from '@/lib/media/processing-mode';
 import { getStoryModelOverrides } from '@/app/actions/admin';
@@ -19,9 +19,19 @@ import {
   withGeneratedOrigin,
   type StoryModelOverrides,
 } from '@/lib/ai/beat-orchestration';
-import { buildCanonicalImageScene } from '@/lib/ai/prompt-compiler/scene-spec.shared';
+import { ReaderFacingTextError } from '@/lib/ai/text-gateway/outcome.shared';
+import { TextGatewayError, errorDetail } from '@/lib/ai/text-gateway/types.shared';
+import { buildCanonicalImageScene, resolveImageFacingNames } from '@/lib/ai/prompt-compiler/scene-spec.shared';
+import {
+  filterCharacterReferencesByPresence,
+  presentCharacterNames,
+  shouldAttachPreviousStoryboardReference,
+} from '@/lib/ai/storyboard-plan.shared';
 import { assembleFinalImagePrompt } from '@/lib/ai/prompt-compiler/assemble.shared';
+import { estimateReferenceBindingChars } from '@/lib/ai/reference-binding';
 import { resolveImagePromptCompilerRuntimeAction } from '@/app/actions/prompt-compiler';
+import { selectRelevantWorld } from '@/lib/references/reference-routing';
+import { selectDirectWorldReference } from '@/lib/references/direct-routing';
 import {
   collectCharacterPortraitReferences,
   generatePortraitsForPlanServer,
@@ -39,6 +49,7 @@ import type {
   PricingBillableActionAuthorization,
 } from '@/lib/types/pricing';
 import type {
+  Character,
   StoryAspectRatio,
   StoryBeat,
   StoryConfig,
@@ -95,6 +106,8 @@ export type GenerateBeatCoreResult =
   | { status: 'legacy' }
   /** Authorization did not allow generation (denied). No work was done. */
   | { status: 'blocked'; authorization: PricingBillableActionAuthorization }
+  /** A text gateway failure reached here — reservation already released; message is reader-safe. */
+  | { status: 'failed'; message: string }
   | {
       status: 'ok';
       beat: StoryBeat;
@@ -115,6 +128,23 @@ export async function generateBeatCore(input: GenerateBeatCoreInput): Promise<Ge
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
     return { status: 'legacy' };
+  }
+
+  // Round 1 (D24/3.2): continuing an existing story is owner-or-reviewer only,
+  // checked BEFORE authorizeImageModelBillableActionForUser below reserves
+  // coins -- that ordering is the whole point of gating here instead of at
+  // the beat write. relatedStoryId is only set for a continuation (start_story
+  // never carries one), so a brand-new story session is unaffected.
+  // assertCanEditStory throws 'Forbidden.'/'Story not found.' for anyone who
+  // is neither the story's owner nor an authorized reviewer, and that throw
+  // is left to propagate uncaught -- image-batch.ts and narration-batch.ts
+  // already let the same throw surface this way. A real user never reaches
+  // this as a stranger: app/story/[id]/layout.tsx and
+  // app/explore/[id]/layout.tsx already redirect them before the "Continue"
+  // button is ever clickable. This is defence in depth against a direct
+  // server-action call.
+  if (input.authorize.relatedStoryId) {
+    await assertCanEditStory(input.authorize.relatedStoryId, user.id);
   }
 
   const [modelOverrides, authorization] = await Promise.all([
@@ -162,6 +192,15 @@ export async function generateBeatCore(input: GenerateBeatCoreInput): Promise<Ge
         reservationId,
         reason: 'beat_bundle_core_failed',
       }).catch((releaseError) => console.error('Failed to release reservation after core failure:', releaseError));
+    }
+    // Expected gateway failure (e.g. content_blocked): return its reader-safe
+    // message as data per Next.js's Server Function error-handling guidance,
+    // instead of relying on a thrown message reaching the browser. On this
+    // server path the orchestration throws TextGatewayError directly (see
+    // lib/ai/text-gateway/reader-call.ts), so log its detail before dropping it.
+    if (error instanceof TextGatewayError || error instanceof ReaderFacingTextError) {
+      console.error('Beat bundle core text call failed:', errorDetail(error));
+      return { status: 'failed', message: error.message };
     }
     throw error;
   }
@@ -220,6 +259,51 @@ export type ProcessBeatVisualsResult =
       savedByUserId?: string;
     };
 
+/**
+ * Reference Personalization's world-relevance selector (`resolveBeatWorldRouting`
+ * in lib/store/story-store.ts) has no server twin, so the bundle path attached
+ * no world anchor or world reference at all (Unit 4b / R9). `selectRelevantWorld`
+ * and `selectDirectWorldReference` are pure, I/O-free selectors (no client-only
+ * dependency), so this mirrors the store's logic rather than importing it --
+ * the store module is 'use client' and cannot be imported into this
+ * 'use server' file (see CLAUDE.md's client/server value-import rule).
+ */
+function resolveBundleWorldRouting(
+  storyConfig: StoryConfig,
+  beat: StoryBeat
+): { worldAnchor?: string; worldReference?: ServerReferenceImage } {
+  const worlds = storyConfig.references?.worlds;
+  if (!worlds || worlds.length === 0) return {};
+  const beatText = `${beat.title ?? ''} ${beat.sceneSummary ?? ''} ${beat.imagePrompt ?? ''}`;
+  const selected = selectRelevantWorld(worlds, beatText, null);
+  const worldReference = selectDirectWorldReference(worlds, beatText, null);
+  const result: { worldAnchor?: string; worldReference?: ServerReferenceImage } = {};
+  if (selected && selected.anchor.trim().length > 0) result.worldAnchor = selected.anchor;
+  if (worldReference) result.worldReference = worldReference;
+  return result;
+}
+
+/**
+ * Rewrite every character reference's `name` to the image-facing name the
+ * compiled prompt uses for that character (`resolveImageFacingNames` -- the
+ * same call the scene builder makes for `SceneCharacter.imageName`), so a
+ * reference-binding line never names a character in a script the English-only
+ * compiled prompt does not use (framework §7 Q1; Unit 4b). Scene/world
+ * references have no character identity and pass through unchanged.
+ */
+function applyImageFacingReferenceNames(
+  refs: ServerReferenceImage[],
+  characters: Character[],
+  plan: StoryboardPlan | null | undefined
+): ServerReferenceImage[] {
+  const names = resolveImageFacingNames(characters, plan);
+  return refs.map((ref) => {
+    if (ref.type !== 'character' || !ref.name) return ref;
+    const imageName = names.get(ref.name.normalize('NFC').trim().toLowerCase());
+    return imageName && imageName !== ref.name ? { ...ref, name: imageName } : ref;
+  });
+}
+
 export async function processBeatVisuals(input: ProcessBeatVisualsInput): Promise<ProcessBeatVisualsResult> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -228,17 +312,27 @@ export async function processBeatVisuals(input: ProcessBeatVisualsInput): Promis
   }
 
   if (input.target.kind === 'existing') {
-    const admin = createAdminClient();
-    const { data: story, error: storyError } = await admin
-      .from('stories')
-      .select('id, user_id')
-      .eq('id', input.target.storyId)
-      .single();
-    if (storyError || !story) {
-      return { status: 'not_queued', reason: 'forbidden', message: 'Story not found.' };
-    }
-    if (story.user_id !== user.id) {
-      return { status: 'not_queued', reason: 'forbidden', message: 'Forbidden.' };
+    // Round 1b fix B: reviewer-aware, matching every other write path in this
+    // file and elsewhere (generateBeatCore above, beat-control.ts,
+    // image-batch.ts, narration-batch.ts). The previous check compared
+    // story.user_id to user.id directly, which is not reviewer-aware -- a
+    // reviewer continuing an agent draft was refused HERE even though
+    // generateBeatCore's own assertCanEditStory (which runs first and is
+    // where the coin reservation happens) had already let them through.
+    // That is the charge-then-refuse defect class already fixed four times
+    // in this phase (3347ffb, a5e9bff, 4974611, 04e739b): the reviewer pays,
+    // the model generates, and only then is the write refused. beat_bundle
+    // is on in dev, so this was reachable today, not merely theoretical.
+    try {
+      await assertCanEditStory(input.target.storyId, user.id, ['id']);
+    } catch (error) {
+      // assertCanEditStory throws exactly 'Story not found.' or 'Forbidden.'
+      // -- both are already the messages this branch returned before.
+      return {
+        status: 'not_queued',
+        reason: 'forbidden',
+        message: error instanceof Error ? error.message : 'Forbidden.',
+      };
     }
   }
 
@@ -262,22 +356,42 @@ export async function processBeatVisuals(input: ProcessBeatVisualsInput): Promis
     },
   });
 
+  const worldRouting = resolveBundleWorldRouting(input.storyConfig, beat);
   const portraitReferences = mergeServerReferenceImages(
     collectCharacterPortraitReferences(beat.characters),
     portraitResult.references
   );
-  const references: ServerReferenceImage[] = beat.beatNumber === 1
-    ? portraitReferences
-    : [
-        ...portraitReferences,
-        ...(input.previousImageUrl
-          ? [
-              input.previousImageUrl.startsWith('data:')
-                ? { type: 'scene' as const, dataUrl: input.previousImageUrl }
-                : { type: 'scene' as const, url: input.previousImageUrl },
-            ]
-          : []),
-      ];
+  // Unit 5 (Q4/R8): attach character references only for characters present
+  // somewhere in the beat, and skip the previous beat's storyboard as a
+  // reference on a big time jump/location change unless no present character
+  // has a reference image to anchor identity instead. presentCharacterNames
+  // returns null (don't restrict) for a fallback plan or one with no presence
+  // data, matching pre-Unit-5 behaviour exactly.
+  const presentNames = presentCharacterNames(storyboardPlan, beat.characters);
+  const presentPortraitReferences = filterCharacterReferencesByPresence(portraitReferences, presentNames);
+  const presentCharacterHasReference = presentPortraitReferences.some((ref) => ref.type === 'character');
+  const attachPreviousStoryboard = shouldAttachPreviousStoryboardReference(storyboardPlan, {
+    presentCharacterHasReference,
+  });
+  const references: ServerReferenceImage[] = applyImageFacingReferenceNames(
+    mergeServerReferenceImages(
+      beat.beatNumber === 1
+        ? presentPortraitReferences
+        : [
+            ...presentPortraitReferences,
+            ...(input.previousImageUrl && attachPreviousStoryboard
+              ? [
+                  input.previousImageUrl.startsWith('data:')
+                    ? { type: 'scene' as const, dataUrl: input.previousImageUrl }
+                    : { type: 'scene' as const, url: input.previousImageUrl },
+                ]
+              : []),
+          ],
+        worldRouting.worldReference ? [worldRouting.worldReference] : []
+      ),
+    beat.characters,
+    storyboardPlan
+  );
 
   const storyboardPrompt = beat.storyboardPromptText || renderStoryboardPlan(storyboardPlan);
   const legacyBuild = () => buildFinalStoryboardImagePrompt(
@@ -289,6 +403,7 @@ export async function processBeatVisuals(input: ProcessBeatVisualsInput): Promis
     {
       aspectRatio: input.storyAspectRatio,
       task: 'image_generation',
+      ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}),
     }
   );
 
@@ -306,11 +421,18 @@ export async function processBeatVisuals(input: ProcessBeatVisualsInput): Promis
     characters: beat.characters,
     visualStyle: input.visualStyle,
     aspectRatio: input.storyAspectRatio,
+    worldAnchor: worldRouting.worldAnchor,
   });
+  const reservedChars = estimateReferenceBindingChars(references);
   let finalPrompt: string;
   let promptCompilerMeta: ReturnType<typeof assembleFinalImagePrompt>['compiler'] = undefined;
   try {
-    const assembled = assembleFinalImagePrompt({ runtime: compilerRuntime, scene: canonicalScene, legacyBuild });
+    const assembled = assembleFinalImagePrompt({
+      runtime: compilerRuntime,
+      scene: canonicalScene,
+      legacyBuild,
+      reservedChars,
+    });
     finalPrompt = assembled.finalPrompt;
     promptCompilerMeta = assembled.compiler;
   } catch (error) {

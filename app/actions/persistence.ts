@@ -5,15 +5,17 @@ import { createClient } from '@/lib/supabase/server';
 import { normalizeStorageUrl, extractStoragePath, copyToPublicBucket } from '@/lib/supabase/storage';
 import { signStoryMapAssetUrls, signCharacterRosterReferenceSheetUrls, signMixedUrls } from '@/lib/media/storage-url-signing';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { assertCanEditStory, type EditableStoryAccess } from '@/lib/agentic/reviewers';
+import { isMissingReviewerSchemaError } from '@/lib/agentic/reviewers.shared';
 import type { StorySession, StoryMap, StoryBeat, StoryNode, Character, BeatImageGalleryEntry } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
 import type { StorylineShareCoverSource } from '@/lib/types/database';
 import type { BeatMediaStatus } from '@/lib/types/beat-media';
+import { readerSafeImageError } from '@/lib/media/image-failure.shared';
 import {
   normalizeBeatMediaFields,
   BEAT_ROW_NOT_FOUND_MESSAGE,
   isBeatRowNotFoundError,
-  getBeatPersistedAudioUrl,
   getBeatPersistedImageUrl,
 } from '@/lib/types/beat-media';
 import type { StorylineChoice } from '@/lib/utils/storyline';
@@ -21,23 +23,11 @@ import { MY_STORIES_PAGE_SIZE, type ListPageInput, type PagedList } from '@/lib/
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { normalizeStoredAgeGroup } from '@/lib/ai/story-audience';
 import { normalizeStoredGenre } from '@/lib/story/genres';
-import {
-  extractImageContinuityState,
-  summarizeImageContinuityState,
-} from '@/lib/ai/image-continuity.shared';
-import { getFeatureFlagValue } from '@/lib/ai/model-config';
-import {
-  getReelRetentionDaysForPlan,
-  parseReelStorySettingsValue,
-} from '@/lib/reel/settings';
-import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { finalizeStorylineShareAssets } from '@/app/actions/storyline-covers';
 import { refreshStorylineDiscoveryMetadata } from '@/app/actions/storyline-discovery';
-import { linkReferenceSetupToStory } from '@/app/actions/references';
 import { recordCharacterNoveltyUsageAction } from '@/app/actions/character-novelty';
 import { processAndUploadStorylineAsset } from '@/lib/story/share-cover';
 import { getStorylinePublishModes } from '@/lib/story/publish-modes';
-import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
 import {
@@ -45,7 +35,6 @@ import {
   sanitizeGalleryForBlob,
   serializeGalleryRows,
 } from '@/lib/media/image-versions';
-import { recoverCharacterReferenceSheet } from '@/lib/media/character-reference';
 import { resolveValidatedPublishQuality } from '@/lib/story/publish-quality';
 import {
   generateShareToken,
@@ -53,118 +42,28 @@ import {
   type StorylinePublishQuality,
   type StorylineVisibility,
 } from '@/lib/story/visibility';
-
-const CHARACTER_REFERENCE_STORAGE_CONTEXT = {
-  r2PrivateBucket: process.env.R2_PRIVATE_BUCKET_NAME,
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
-  supabaseBucket: 'story-assets',
-};
-
-function prepareCharacterReferenceForPersistence(
-  character: Character,
-  fallback?: Character,
-  options: { synthesizeGallery?: boolean } = {}
-): Character {
-  const recovered = recoverCharacterReferenceSheet(
-    character,
-    fallback,
-    CHARACTER_REFERENCE_STORAGE_CONTEXT,
-    options
-  );
-  const referenceSheetUrl = recovered.referenceSheetUrl
-    ? normalizeStorageUrl(recovered.referenceSheetUrl, 'story-assets')
-    : undefined;
-  const referenceSheetGallery = (recovered.referenceSheetGallery ?? [])
-    .map((entry) => ({
-      ...entry,
-      url: normalizeStorageUrl(entry.url, 'story-assets'),
-    }))
-    .filter((entry) => Boolean(entry.url));
-
-  return {
-    ...recovered,
-    referenceSheetUrl,
-    referenceSheetGallery:
-      referenceSheetGallery.length > 0 ? referenceSheetGallery : undefined,
-  };
-}
-
-/**
- * Strip base64 data URLs from a StoryMap before saving to DB.
- * Keeps HTTP URLs intact (already uploaded to storage).
- */
-function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): StoryMap {
-  const nodes: StoryMap['nodes'] = {};
-  for (const [id, node] of Object.entries(storyMap.nodes)) {
-    const existingBeat = existingStoryMap?.nodes?.[id]?.data;
-    const existingCharactersById = new Map(
-      (existingBeat?.characters ?? []).map((character) => [character.id, character])
-    );
-    const persistedImageUrl = resolvePersistedImageUrlForSave(node.data, existingBeat);
-    const persistedAudioUrl = resolvePersistedAudioUrlForSave(node.data, existingBeat);
-    const cleanedGallery = sanitizeGalleryForBlob(node.data.imageGallery, (url) =>
-      normalizeStorageUrl(url, 'story-assets')
-    );
-    nodes[id] = {
-      ...node,
-      data: {
-        ...node.data,
-        imageUrl: persistedImageUrl
-          ? normalizeStorageUrl(persistedImageUrl, 'story-assets')
-          : undefined,
-        persistedImageUrl: undefined,
-        audioUrl: persistedAudioUrl
-          ? normalizeStorageUrl(persistedAudioUrl, 'story-assets')
-          : undefined,
-        imageGallery: cleanedGallery,
-        // Strip portrait base64. Reference-sheet previews are replaced by their
-        // durable URL/fallback/storage-key pointer so later saves cannot erase
-        // an upload that already reached private storage.
-        characters: node.data.characters.map(c => {
-          const recovered = prepareCharacterReferenceForPersistence(
-            c,
-            existingCharactersById.get(c.id)
-          );
-          return {
-            ...recovered,
-            portraitUrl: c.portraitUrl?.startsWith('data:')
-              ? undefined
-              : c.portraitUrl
-                ? normalizeStorageUrl(c.portraitUrl, 'story-assets')
-                : undefined,
-            portraitBase64: undefined,
-          };
-        }),
-      },
-    };
-  }
-  return { ...storyMap, nodes };
-}
-
-function sanitizeSessionCharacters(
-  session: StorySession,
-  fallbackCharacters: Character[] = []
-): StorySession['characters'] {
-  const fallbackById = new Map(
-    fallbackCharacters.map((character) => [character.id, character])
-  );
-  return (session.characters || []).map((character) => {
-    const recovered = prepareCharacterReferenceForPersistence(
-      character,
-      fallbackById.get(character.id),
-      { synthesizeGallery: true }
-    );
-    return {
-      ...recovered,
-      portraitUrl: character.portraitUrl?.startsWith('data:')
-        ? undefined
-        : character.portraitUrl
-          ? normalizeStorageUrl(character.portraitUrl, 'story-assets')
-          : undefined,
-      portraitBase64: undefined,
-    };
-  });
-}
+// Row-shaping helpers for saveStory moved to lib/story/save-story.ts (a plain
+// server-only module, not 'use server') so saveStoryForUser — the explicit-
+// userId save path Phase 6's agentic pipeline calls with no cookie session —
+// can use them too. Imported back here for saveBeat, loadStory, and the
+// storyline publish paths, which still use the cookie-bound flow.
+import {
+  saveStoryForUser,
+  stripBase64,
+  getStoryOrientation,
+  isMissingAdditiveColumnError,
+  withoutAdditiveColumns,
+  isMissingBeatColumnError,
+  withoutAdditiveBeatColumns,
+  nodeToBeatRow,
+  resolvePersistedImageUrlForSave,
+  resolvePersistedAudioUrlForSave,
+  // Path-hash + parent-walk + additive-column-list helpers, moved to save-story.ts so
+  // lib/agentic/review-publish.ts (D15) can import them too — see that file's header.
+  ADDITIVE_STORYLINE_COLUMNS,
+  computePathHash,
+  walkPathToRoot,
+} from '@/lib/story/save-story';
 
 function mergeCharactersWithFallback(
   primary: StoryBeat['characters'],
@@ -199,30 +98,6 @@ function mergeCharactersWithFallback(
   }
 
   return Array.from(merged.values());
-}
-
-function resolvePersistedImageUrlForSave(
-  beat: Pick<StoryBeat, 'imageUrl' | 'persistedImageUrl' | 'imageStatus'>,
-  existingBeat?: Pick<StoryBeat, 'imageUrl' | 'persistedImageUrl'>
-): string | undefined {
-  return getBeatPersistedImageUrl(beat)
-    || (beat.imageStatus === 'ready' ? getBeatPersistedImageUrl(existingBeat || {}) : undefined);
-}
-
-function resolvePersistedAudioUrlForSave(
-  beat: Pick<StoryBeat, 'audioUrl' | 'audioStatus'>,
-  existingBeat?: Pick<StoryBeat, 'audioUrl'>
-): string | undefined {
-  return getBeatPersistedAudioUrl(beat)
-    || (beat.audioStatus === 'ready' ? getBeatPersistedAudioUrl(existingBeat || {}) : undefined);
-}
-
-function getStoryOrientation(config: StorySession['storyConfig']): { isVerticalStory: boolean; aspectRatio: '16:9' | '9:16' } {
-  const normalizedConfig = normalizeStoryConfig(config);
-  return {
-    isVerticalStory: normalizedConfig.isVerticalStory,
-    aspectRatio: normalizedConfig.isVerticalStory ? '9:16' : '16:9',
-  };
 }
 
 function normalizePersistedAssetUrl(url: string | undefined): string | undefined {
@@ -421,69 +296,6 @@ export async function repairMissingReadyBeatImageUrls(
   };
 }
 
-const ADDITIVE_BEAT_COLUMNS = [
-  'is_storyboard',
-  'reel_captions',
-  'storyboard_narration_timing',
-  'story_text_overlay_enabled',
-  'story_text_overlay_mode',
-  'story_text_overlay_style',
-  'story_text_overlay_captions',
-  'story_text_overlay_alignment',
-  'story_effects',
-  'origin_kind',
-  'seed_plan_beat_index',
-  'canonical_option_id',
-  'narration_voice_id',
-  'image_status',
-  'image_error',
-  'image_provider_key',
-  'image_model_key',
-  'image_generation_metadata',
-  'image_synced_at',
-  'image_gallery',
-  'audio_status',
-  'audio_error',
-  'audio_synced_at',
-] as const;
-
-const ADDITIVE_STORY_COLUMNS = [
-  'story_kind',
-  'reel_length_key',
-  'reel_retention_days',
-  'reel_expires_at',
-  'reel_cleanup_status',
-  'image_provider_key',
-  'image_model_key',
-  'image_model_snapshot',
-  'visual_profile',
-  // Migration 075 episode columns — stripped when the migration hasn't been
-  // applied yet so saving keeps working during rollout.
-  'episode_branch_id',
-  'episode_number',
-  'parent_story_id',
-] as const;
-
-const ADDITIVE_STORYLINE_COLUMNS = [
-  'story_kind',
-  // Migration 073 visibility columns — stripped when the migration hasn't
-  // been applied yet so publishing keeps working during rollout.
-  'visibility',
-  'share_token',
-  'published_at',
-  'unpublished_at',
-  'moderation_status',
-  'publish_quality',
-  // Migration 089 discovery classification columns.
-  'age_group',
-  'genre',
-  // Migration 093 series columns — stripped when the migration hasn't been
-  // applied yet so publishing keeps working during rollout.
-  'series_id',
-  'episode_number',
-  'series_title',
-] as const;
-
 type StorylineSeriesFields = {
   series_id: string | null;
   episode_number: number | null;
@@ -562,210 +374,6 @@ async function resolveStorylineSeriesFields(
   }
 }
 
-function isMissingBeatColumnError(error: { code?: string; message?: string } | null | undefined): boolean {
-  if (!error?.message) return false;
-  return (
-    error.code === 'PGRST204'
-    || (/schema cache/i.test(error.message) && /column/i.test(error.message) && /beats/i.test(error.message))
-  );
-}
-
-function isMissingAdditiveColumnError(error: { code?: string; message?: string } | null | undefined, tableName: string): boolean {
-  if (!error?.message) return false;
-  return (
-    error.code === 'PGRST204'
-    || (/schema cache/i.test(error.message) && /column/i.test(error.message) && error.message.includes(tableName))
-  );
-}
-
-function withoutAdditiveBeatColumns(row: Record<string, unknown>): Record<string, unknown> {
-  const fallbackRow = { ...row };
-  for (const column of ADDITIVE_BEAT_COLUMNS) {
-    delete fallbackRow[column];
-  }
-  return fallbackRow;
-}
-
-function withoutAdditiveBeatColumnsBatch(rows: Record<string, unknown>[]): Record<string, unknown>[] {
-  return rows.map(withoutAdditiveBeatColumns);
-}
-
-function withoutAdditiveColumns(row: Record<string, unknown>, columns: readonly string[]): Record<string, unknown> {
-  const fallbackRow = { ...row };
-  for (const column of columns) {
-    delete fallbackRow[column];
-  }
-  return fallbackRow;
-}
-
-async function buildReelStoryPersistencePatch(
-  storyConfig: StorySession['storyConfig'],
-  setInitialRetention: boolean
-): Promise<Record<string, unknown>> {
-  const normalized = normalizeStoryConfig(storyConfig);
-  if (normalized.storyKind !== 'reel') {
-    return {
-      story_kind: 'story',
-      reel_length_key: null,
-    };
-  }
-
-  const patch: Record<string, unknown> = {
-    story_kind: 'reel',
-    reel_length_key: normalized.reel.length,
-  };
-
-  if (setInitialRetention) {
-    const settingsValue = await getFeatureFlagValue('reel_story_settings').catch(() => null);
-    const settings = parseReelStorySettingsValue(settingsValue);
-    const pricing = await getPricingRuntimeContext().catch(() => null);
-    const retentionDays = getReelRetentionDaysForPlan(settings, pricing?.snapshot.planKey);
-    const expiresAt = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000).toISOString();
-    patch.reel_retention_days = retentionDays;
-    patch.reel_expires_at = expiresAt;
-    patch.reel_cleanup_status = 'active';
-  }
-
-  return patch;
-}
-
-/**
- * Convert a StoryNode + beat data into a beats table row object.
- */
-function nodeToBeatRow(
-  storyId: string,
-  nodeId: string,
-  node: StoryNode,
-  userId: string,
-  existingBeat?: {
-    imageUrl?: string;
-    audioUrl?: string;
-    imageSyncedAt?: string;
-    audioSyncedAt?: string;
-  }
-) {
-  const normalizedBeat = normalizeBeatMediaFields(node.data);
-  const imageUrl = resolvePersistedImageUrlForSave(normalizedBeat);
-  const audioUrl = resolvePersistedAudioUrlForSave(normalizedBeat);
-  const normalizedImageUrl = imageUrl ? normalizeStorageUrl(imageUrl, 'story-assets') : undefined;
-  const normalizedAudioUrl = audioUrl ? normalizeStorageUrl(audioUrl, 'story-assets') : undefined;
-  const existingImageUrl = existingBeat?.imageUrl
-    ? normalizeStorageUrl(existingBeat.imageUrl, 'story-assets')
-    : undefined;
-  const existingAudioUrl = existingBeat?.audioUrl
-    ? normalizeStorageUrl(existingBeat.audioUrl, 'story-assets')
-    : undefined;
-  const row: Record<string, unknown> = {
-    story_id: storyId,
-    node_id: nodeId,
-    beat_number: node.beatNumber,
-    parent_node_id: node.parentId || null,
-    selected_option_id: node.selectedOptionId || null,
-    generated_by: userId,
-    title: normalizedBeat.title,
-    is_ending: normalizedBeat.isEnding,
-    story_text: normalizedBeat.storyText,
-    scene_summary: normalizedBeat.sceneSummary || null,
-    options: normalizedBeat.options as unknown as Record<string, unknown>[],
-    characters: normalizedBeat.characters as unknown as Record<string, unknown>[],
-    continuity_notes: normalizedBeat.continuityNotes || null,
-    image_prompt: normalizedBeat.imagePrompt || null,
-    clues: normalizedBeat.clues || null,
-    next_beat_goal: normalizedBeat.nextBeatGoal || null,
-    ending_forecast: normalizedBeat.endingForecast || null,
-    origin_kind: normalizedBeat.originKind || null,
-    seed_plan_beat_index: normalizedBeat.seedPlanBeatIndex || null,
-    canonical_option_id: normalizedBeat.canonicalOptionId || null,
-    image_status: normalizedBeat.imageStatus,
-    image_error: normalizedBeat.imageError || null,
-    image_provider_key: normalizedBeat.imageProviderKey || null,
-    image_model_key: normalizedBeat.imageModelKey || null,
-    image_generation_metadata: normalizedBeat.imageGenerationMetadata || null,
-    image_synced_at: normalizedBeat.imageStatus === 'ready'
-      ? (normalizedImageUrl === existingImageUrl && existingBeat?.imageSyncedAt
-          ? existingBeat.imageSyncedAt
-          : new Date().toISOString())
-      : null,
-    audio_status: normalizedBeat.audioStatus,
-    audio_error: normalizedBeat.audioError || null,
-    audio_synced_at: normalizedBeat.audioStatus === 'ready'
-      ? (normalizedAudioUrl === existingAudioUrl && existingBeat?.audioSyncedAt
-          ? existingBeat.audioSyncedAt
-          : new Date().toISOString())
-      : null,
-  };
-
-  // Only include asset URLs when they have values — prevents UPSERT from
-  // overwriting audio_url set by generateAndPersistNarration (race condition)
-  if (normalizedImageUrl) {
-    row.image_url = normalizedImageUrl;
-  }
-
-  if (normalizedAudioUrl) {
-    row.audio_url = normalizedAudioUrl;
-  }
-
-  if (normalizedBeat.narrationVoiceId) {
-    row.narration_voice_id = normalizedBeat.narrationVoiceId;
-  }
-
-  if (normalizedBeat.narrationMetadata) {
-    row.narration_metadata = normalizedBeat.narrationMetadata as unknown as Record<string, unknown>;
-  }
-
-  if (normalizedBeat.activeNarrationPreviewId) {
-    row.active_narration_preview_id = normalizedBeat.activeNarrationPreviewId;
-  }
-
-  // `isStoryboardBeat` rather than the raw field: every read path infers a
-  // storyboard from a plan or a full set of panel captions too, and writing
-  // only the raw flag left grids persisted as `is_storyboard = false`. Gallery
-  // surfaces then rendered the whole 2×2 grid instead of one panel. Never
-  // written false — a beat that has been a storyboard once stays one, and the
-  // column already defaults to false.
-  if (isStoryboardBeat(normalizedBeat)) {
-    row.is_storyboard = true;
-  }
-
-  if (normalizedBeat.reelCaptions && normalizedBeat.reelCaptions.length > 0) {
-    row.reel_captions = normalizedBeat.reelCaptions as unknown as Record<string, unknown>[];
-  }
-
-  if (normalizedBeat.storyboardNarrationTiming) {
-    row.storyboard_narration_timing = normalizedBeat.storyboardNarrationTiming as unknown as Record<string, unknown>;
-  }
-
-  if (typeof normalizedBeat.storyTextOverlayEnabled === 'boolean') {
-    row.story_text_overlay_enabled = normalizedBeat.storyTextOverlayEnabled;
-  }
-
-  if (normalizedBeat.storyTextOverlayMode) {
-    row.story_text_overlay_mode = normalizedBeat.storyTextOverlayMode;
-  }
-
-  if (normalizedBeat.storyTextOverlayStyle) {
-    row.story_text_overlay_style = normalizedBeat.storyTextOverlayStyle as unknown as Record<string, unknown>;
-  }
-
-  if (normalizedBeat.storyTextOverlayCaptions && normalizedBeat.storyTextOverlayCaptions.length > 0) {
-    row.story_text_overlay_captions = normalizedBeat.storyTextOverlayCaptions as unknown as Record<string, unknown>[];
-  }
-
-  if (normalizedBeat.storyTextOverlayAlignment) {
-    row.story_text_overlay_alignment = normalizedBeat.storyTextOverlayAlignment as unknown as Record<string, unknown>;
-  }
-
-  if (normalizedBeat.storyEffects) {
-    row.story_effects = normalizeStoryEffectConfig(normalizedBeat.storyEffects) as unknown as Record<string, unknown>;
-  }
-
-  row.image_gallery = serializeGalleryRows(normalizedBeat.imageGallery, (url) =>
-    normalizeStorageUrl(url, 'story-assets')
-  );
-
-  return row;
-}
-
 /**
  * Convert a DbBeat row back into a StoryNode for the client StoryMap.
  */
@@ -786,7 +394,7 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     imageUrl: beat.image_url || undefined,
     imageVersion: beat.image_synced_at || undefined,
     imageStatus: beat.image_status,
-    imageError: beat.image_error || undefined,
+    imageError: readerSafeImageError(beat.image_error),
     imageProviderKey: beat.image_provider_key || undefined,
     imageModelKey: beat.image_model_key || undefined,
     imageGenerationMetadata: beat.image_generation_metadata || undefined,
@@ -880,246 +488,68 @@ export async function saveStory(
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
 
-  let existingStoryMap: StoryMap | null = null;
-  let existingStoryCharacters: Character[] = [];
-  const existingBeatUrlMap = new Map<string, {
-    imageUrl?: string;
-    audioUrl?: string;
-    imageSyncedAt?: string;
-    audioSyncedAt?: string;
-  }>();
+  // Reviewer writes (D14/D19, Unit 9M). A reviewer finishing an agent draft reaches
+  // the ordinary authoring UI at /story/[id], and NOTHING there held them back: the
+  // one flag every autosave guard checks, session.sourceStoryOwnerId, is set only by
+  // the /explore path (exploration.ts), never by loadStoryFromCloud. So the Save
+  // button rendered, and three autosaves fired without one being pressed.
+  //
+  // What then happened was worse than a refusal. `stories` UPDATE RLS is owner-only,
+  // so saveStoryForUser's `.eq('user_id', userId)` matched zero rows -- and PostgREST
+  // reports no error for an update that matches nothing. The save returned success
+  // having written nothing at all, and the reviewer was shown "saved". The beats half
+  // was separately refused by migration 003's `generated_by = auth.uid()` UPDATE
+  // policy and caught into a `beatsWarning` string rather than thrown. Silent data
+  // loss, top to bottom. See docs/agentic-creator-phase9c-plan.md section 10.1.
+  //
+  // The fix mirrors the shape saveBeat already uses (:757 below) with one deliberate
+  // difference: the identity handed to saveStoryForUser is the story's OWNER, never
+  // the reviewer. That is not a detail. `userId` becomes storyData.user_id, so
+  // passing the reviewer would rewrite `stories.user_id` and hand them ownership of
+  // the agent's story outright -- breaking D15's persona attribution and, on the very
+  // next owner-scoped query, hiding the story from the system user that made it.
+  // Passing the owner writes the value the row already holds. agent_persona_id and
+  // agent_task_id are absent from the options here on purpose: saveStoryForUser omits
+  // those columns entirely unless asked, so the persona link survives the save.
+  //
+  // Three narrowing conditions keep the ordinary creation flow bit-for-bit unchanged:
+  //
+  //   - No savedStoryId means a brand-new story, which has no owner to check yet.
+  //     That is the whole of the create path (and beat-bundle.ts's 'new_story'
+  //     branch), and it skips this block entirely rather than paying for it.
+  //   - assertCanEditStory returns `reviewer: null` for an owner, so an author saving
+  //     their own story takes the same final line it always has, on the same session
+  //     client, with the same user id.
+  //   - A throw is swallowed, exactly as saveBeat swallows it and for the same
+  //     reason: a caller who is neither owner nor reviewer is not necessarily doing
+  //     anything wrong, and must be left on the behaviour they had before this
+  //     existed rather than newly refused.
+  //
+  // The cost on the owner path is one narrow primary-key select (id, user_id,
+  // agent_persona_id) before an operation that already runs two selects, an update
+  // and an upsert. assertCanEditStory touches agent_reviewers only when the caller
+  // is not the owner AND the story is agent-owned, so an author's autosave never
+  // reads that table at all. saveBeat, which runs more often than this does, has
+  // paid the same single query since Unit 9b.
   if (session.savedStoryId) {
-    const { data: existingStory, error: existingStoryError } = await supabase
-      .from('stories')
-      .select('story_map, characters')
-      .eq('id', session.savedStoryId)
-      .eq('user_id', user.id)
-      .maybeSingle();
-
-    if (existingStoryError) {
-      throw new Error(`Failed to load existing story before save: ${existingStoryError.message}`);
+    let access: EditableStoryAccess | null = null;
+    try {
+      access = await assertCanEditStory(session.savedStoryId, user.id, ['id']);
+    } catch {
+      access = null;
     }
-
-    const rawExistingStoryMap = existingStory?.story_map;
-    if (rawExistingStoryMap && typeof rawExistingStoryMap === 'object' && 'nodes' in rawExistingStoryMap) {
-      existingStoryMap = rawExistingStoryMap as unknown as StoryMap;
-    }
-    existingStoryCharacters =
-      (existingStory?.characters ?? []) as unknown as Character[];
-
-    const { data: existingBeatRows, error: existingBeatRowsError } = await supabase
-      .from('beats')
-      .select('node_id, image_url, audio_url, image_synced_at, audio_synced_at')
-      .eq('story_id', session.savedStoryId)
-      .eq('generated_by', user.id);
-
-    if (existingBeatRowsError) {
-      throw new Error(`Failed to load existing beat assets before save: ${existingBeatRowsError.message}`);
-    }
-
-    for (const beat of existingBeatRows || []) {
-      existingBeatUrlMap.set(beat.node_id, {
-        imageUrl: beat.image_url || undefined,
-        audioUrl: beat.audio_url || undefined,
-        imageSyncedAt: beat.image_synced_at || undefined,
-        audioSyncedAt: beat.audio_synced_at || undefined,
-      });
+    if (access?.reviewer) {
+      return saveStoryForUser(
+        createAdminClient(),
+        access.story.user_id,
+        session,
+        storyMapWithUrls,
+        { crossGeneratorBeats: true }
+      );
     }
   }
 
-  const fallbackStoryMap = existingStoryMap
-    ? {
-        ...existingStoryMap,
-        nodes: { ...existingStoryMap.nodes },
-      }
-    : {
-        nodes: {},
-        rootNodeId: storyMapWithUrls.rootNodeId,
-        currentNodeId: storyMapWithUrls.currentNodeId,
-      };
-
-  for (const [nodeId, node] of Object.entries(storyMapWithUrls.nodes)) {
-    const existingNode = fallbackStoryMap.nodes[nodeId];
-    const existingBeatUrls = existingBeatUrlMap.get(nodeId);
-    if (!existingNode && !existingBeatUrls) {
-      continue;
-    }
-
-    fallbackStoryMap.nodes[nodeId] = {
-      ...(existingNode || node),
-      ...(!existingNode ? { id: node.id, beatNumber: node.beatNumber, parentId: node.parentId, selectedOptionId: node.selectedOptionId, children: node.children } : {}),
-      data: {
-        ...(existingNode?.data || node.data),
-        ...(existingBeatUrls?.imageUrl && !(existingNode?.data?.imageUrl) ? { imageUrl: existingBeatUrls.imageUrl } : {}),
-        ...(existingBeatUrls?.audioUrl && !(existingNode?.data?.audioUrl) ? { audioUrl: existingBeatUrls.audioUrl } : {}),
-      },
-    };
-  }
-
-  const cleanMap = stripBase64(storyMapWithUrls, fallbackStoryMap);
-  const storyOrientation = getStoryOrientation(session.storyConfig);
-  const firstImageBeat = Object.values(cleanMap.nodes)
-    .map((node) => node.data)
-    .find((beat) => beat.imageModelKey || beat.imageGenerationMetadata?.imageModelSnapshot);
-  const imageModelSnapshot = (
-    firstImageBeat?.imageGenerationMetadata?.imageModelSnapshot
-    && typeof firstImageBeat.imageGenerationMetadata.imageModelSnapshot === 'object'
-  )
-    ? firstImageBeat.imageGenerationMetadata.imageModelSnapshot as Record<string, unknown>
-    : null;
-  const latestContinuityState = Object.values(cleanMap.nodes)
-    .map((node) => extractImageContinuityState(node.data.imageGenerationMetadata))
-    .filter((state): state is NonNullable<typeof state> => Boolean(state))
-    .at(-1) ?? null;
-
-  const reelPersistencePatch = await buildReelStoryPersistencePatch(session.storyConfig, !session.savedStoryId);
-
-  const storyData = {
-    user_id: user.id,
-    title: session.title,
-    user_prompt: session.userPrompt,
-    genre: session.genre,
-    tone: session.tone,
-    visual_style: session.visualStyle,
-    target_age: session.targetAge,
-    story_config: session.storyConfig as unknown as Record<string, unknown>,
-    image_provider_key: firstImageBeat?.imageProviderKey || (imageModelSnapshot?.providerKey as string | undefined) || null,
-    image_model_key: firstImageBeat?.imageModelKey || session.storyConfig.imageModelSelection?.modelKey || null,
-    image_model_snapshot: imageModelSnapshot,
-    visual_profile: {
-      visualSettings: session.storyConfig.visualSettings,
-      aspectRatio: session.storyConfig.aspectRatio,
-      storyKind: session.storyConfig.storyKind,
-      imageContinuity: {
-        requestedStrategy: session.storyConfig.imageContinuityStrategy,
-        latestState: summarizeImageContinuityState(latestContinuityState),
-        updatedAt: new Date().toISOString(),
-      },
-    },
-    ...reelPersistencePatch,
-    // Pack 2: episode links write only for episode sessions so legacy saves
-    // never clobber columns they don't know about.
-    ...(session.episodeContext
-      ? {
-          episode_branch_id: session.episodeContext.branchId,
-          episode_number: session.episodeContext.episodeNumber,
-          parent_story_id: session.episodeContext.parentStoryId ?? null,
-        }
-      : {}),
-    is_vertical_story: storyOrientation.isVerticalStory,
-    aspect_ratio: storyOrientation.aspectRatio,
-    story_map: cleanMap as unknown as Record<string, unknown>,
-    characters: sanitizeSessionCharacters(
-      session,
-      existingStoryCharacters
-    ) as unknown as Record<string, unknown>[],
-    setting: session.setting as unknown as Record<string, unknown>,
-    status: session.status,
-    narrator_voice: session.narratorVoice || null,
-    narration_voice_mode: session.narrationVoiceMode || session.storyConfig.narrationVoice?.mode || 'legacy_auto',
-    narration_voice_gender_bucket: session.narrationVoiceGenderBucket || session.storyConfig.narrationVoice?.genderBucket || null,
-    narration_language_code: session.narrationLanguageCode || session.storyConfig.narrationVoice?.languageCode || null,
-    current_node_id: cleanMap.currentNodeId || null,
-    updated_at: new Date().toISOString(),
-  };
-
-  let storyId: string;
-
-  // Upsert: if savedStoryId exists, update; otherwise insert
-  if (session.savedStoryId) {
-    const { error } = await supabase
-      .from('stories')
-      .update(storyData)
-      .eq('id', session.savedStoryId)
-      .eq('user_id', user.id);
-
-    if (error) {
-      if (isMissingAdditiveColumnError(error, 'stories')) {
-        const { error: fallbackError } = await supabase
-          .from('stories')
-          .update(withoutAdditiveColumns(storyData, ADDITIVE_STORY_COLUMNS))
-          .eq('id', session.savedStoryId)
-          .eq('user_id', user.id);
-
-        if (fallbackError) throw new Error(`Failed to update story: ${fallbackError.message}`);
-      } else {
-        throw new Error(`Failed to update story: ${error.message}`);
-      }
-    }
-    storyId = session.savedStoryId;
-  } else {
-    const { data, error } = await supabase
-      .from('stories')
-      .insert(storyData)
-      .select('id')
-      .single();
-
-    if (error) {
-      if (isMissingAdditiveColumnError(error, 'stories')) {
-        const { data: fallbackData, error: fallbackError } = await supabase
-          .from('stories')
-          .insert(withoutAdditiveColumns(storyData, ADDITIVE_STORY_COLUMNS))
-          .select('id')
-          .single();
-
-        if (fallbackError || !fallbackData) {
-          throw new Error(`Failed to save story: ${fallbackError?.message || error.message}`);
-        }
-        storyId = fallbackData.id;
-      } else {
-        throw new Error(`Failed to save story: ${error.message}`);
-      }
-    } else {
-      storyId = data.id;
-    }
-  }
-
-  await recordCharacterNoveltyUsageAction({
-    storyId,
-    characters: storyData.characters as unknown as Character[],
-    storyConfig: session.storyConfig,
-  });
-
-  // Reference Personalization: backfill story_id onto the setup's reference rows
-  // now that the story exists. Idempotent + owner-scoped; never blocks the save.
-  const referenceSetupId = session.storyConfig?.references?.setupId;
-  if (referenceSetupId && storyId) {
-    await linkReferenceSetupToStory(referenceSetupId, storyId).catch((error) => {
-      console.error('Failed to link reference setup to story:', error instanceof Error ? error.message : error);
-    });
-  }
-
-  // Dual-write: batch upsert all nodes into beats table
-  const beatRows = Object.entries(cleanMap.nodes).map(([nodeId, node]) =>
-    nodeToBeatRow(storyId, nodeId, node, user.id, existingBeatUrlMap.get(nodeId))
-  );
-
-  if (beatRows.length > 0) {
-    const { error: beatsError } = await supabase
-      .from('beats')
-      .upsert(beatRows, { onConflict: 'story_id,node_id' });
-
-    if (beatsError) {
-      if (isMissingBeatColumnError(beatsError)) {
-        const { error: fallbackError } = await supabase
-          .from('beats')
-          .upsert(withoutAdditiveBeatColumnsBatch(beatRows), { onConflict: 'story_id,node_id' });
-
-        if (!fallbackError) {
-          console.warn('Saved beats without additive beat metadata because the database schema is missing newer beat columns.');
-          return { storyId };
-        }
-
-        console.error('Failed to upsert beats after schema fallback:', fallbackError.message);
-        return { storyId, beatsWarning: 'Beat data failed to sync - publishing may be unavailable until next save' };
-      }
-
-      console.error('Failed to upsert beats:', beatsError.message);
-      return { storyId, beatsWarning: 'Beat data failed to sync - publishing may be unavailable until next save' };
-    }
-  }
-
-  return { storyId };
+  return saveStoryForUser(supabase, user.id, session, storyMapWithUrls);
 }
 
 /**
@@ -1185,7 +615,7 @@ export async function loadStory(storyId: string): Promise<StorySession> {
               ? { imageStatus: jsonbNode.data.imageStatus }
               : {}),
             ...(!storyMap.nodes[nodeId].data.imageError && jsonbNode.data.imageError
-              ? { imageError: jsonbNode.data.imageError }
+              ? { imageError: readerSafeImageError(jsonbNode.data.imageError) }
               : {}),
             ...(!storyMap.nodes[nodeId].data.audioUrl && jsonbNode.data.audioUrl
               ? { audioUrl: jsonbNode.data.audioUrl }
@@ -1326,6 +756,11 @@ export async function loadStory(storyId: string): Promise<StorySession> {
     storySessionId: story.id,
     savedStoryId: story.id,
     savedByUserId: story.user_id,
+    // Unit 9M/D15: cast because DbStory predates migration 103 and does not declare the
+    // column. `select('*')` returns it wherever 103 is applied and simply omits it where
+    // it is not, so an un-migrated database yields null and every ordinary story reads as
+    // "not an agent draft" -- which is the truth on such a database.
+    agentPersonaId: (story as { agent_persona_id?: string | null }).agent_persona_id ?? null,
     sourceUpdatedAt: story.updated_at,
     userPrompt: story.user_prompt,
     title: story.title,
@@ -1377,13 +812,41 @@ export async function saveBeat(
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
 
-  const { data: existingBeat } = await supabase
+  // Reviewer writes (D14/Unit 9b): a reviewer saving a beat on an agent-owned
+  // draft is neither the story's own user_id nor the existing row's own
+  // generated_by, so the ordinary session-client path below (RLS-gated on
+  // both) would silently drop image/audio continuity and then fail the
+  // upsert outright. assertCanEditStory tells us which case we're in; when
+  // it's the reviewer branch we swap to the admin client and stop filtering
+  // by generated_by, mirroring the serverAuth escape hatch updateBeatMediaState
+  // already uses for this exact generated_by mismatch (below, :991-:1095).
+  //
+  // A caller who is neither the owner nor an active reviewer is NOT forbidden
+  // here -- saveBeat is also the persistence path for "shared branching" (any
+  // authenticated user may continue someone else's non-archived story on
+  // their own branch; migration 003's beats INSERT/UPDATE policies are the
+  // real gate for that, untouched by this change). assertCanEditStory throwing
+  // in that case is expected and the catch below leaves this exactly as it
+  // was before Unit 9b.
+  let reviewerWrite = false;
+  try {
+    const { reviewer } = await assertCanEditStory(storyId, user.id, ['id']);
+    reviewerWrite = reviewer !== null;
+  } catch {
+    // Not an owner-or-reviewer edit -- fall through unchanged (see above).
+  }
+  const client = reviewerWrite ? createAdminClient() : supabase;
+
+  let existingBeatQuery = client
     .from('beats')
-      .select('image_url, audio_url, image_synced_at, audio_synced_at')
+    .select('image_url, audio_url, image_synced_at, audio_synced_at')
     .eq('story_id', storyId)
-    .eq('node_id', nodeId)
-    .eq('generated_by', user.id)
-    .maybeSingle();
+    .eq('node_id', nodeId);
+  // The reviewer's own id is never the existing row's generated_by (the story's
+  // agent persona is), so keeping this filter would always miss it. The
+  // ordinary owner/explorer path keeps the RLS-aligned filter unchanged.
+  if (!reviewerWrite) existingBeatQuery = existingBeatQuery.eq('generated_by', user.id);
+  const { data: existingBeat } = await existingBeatQuery.maybeSingle();
 
   const beatForSave: StoryNode = {
     ...node,
@@ -1415,7 +878,7 @@ export async function saveBeat(
     characters: node.data.characters || [],
   });
 
-  const { data, error } = await supabase
+  const { data, error } = await client
     .from('beats')
     .upsert(beatRow, { onConflict: 'story_id,node_id' })
     .select('id')
@@ -1423,7 +886,7 @@ export async function saveBeat(
 
   if (error) {
     if (isMissingBeatColumnError(error)) {
-      const { data: fallbackData, error: fallbackError } = await supabase
+      const { data: fallbackData, error: fallbackError } = await client
         .from('beats')
         .upsert(withoutAdditiveBeatColumns(beatRow), { onConflict: 'story_id,node_id' })
         .select('id')
@@ -1440,12 +903,12 @@ export async function saveBeat(
     throw new Error(`Failed to save beat: ${error.message}`);
   }
 
-  const { data: storyForPatch, error: storyForPatchError } = await supabase
+  let storyForPatchQuery = client
     .from('stories')
     .select('story_map')
-    .eq('id', storyId)
-    .eq('user_id', user.id)
-    .maybeSingle();
+    .eq('id', storyId);
+  if (!reviewerWrite) storyForPatchQuery = storyForPatchQuery.eq('user_id', user.id);
+  const { data: storyForPatch, error: storyForPatchError } = await storyForPatchQuery.maybeSingle();
 
   if (!storyForPatchError && storyForPatch?.story_map && typeof storyForPatch.story_map === 'object' && 'nodes' in storyForPatch.story_map) {
     const storyMap = storyForPatch.story_map as unknown as StoryMap;
@@ -1466,14 +929,15 @@ export async function saveBeat(
       rootNodeId: storyMap.rootNodeId || nodeId,
     };
 
-    const { error: storyMapPatchError } = await supabase
+    let storyMapPatchQuery = client
       .from('stories')
       .update({
         story_map: stripBase64(patchedMap, storyMap) as unknown as Record<string, unknown>,
         updated_at: new Date().toISOString(),
       })
-      .eq('id', storyId)
-      .eq('user_id', user.id);
+      .eq('id', storyId);
+    if (!reviewerWrite) storyMapPatchQuery = storyMapPatchQuery.eq('user_id', user.id);
+    const { error: storyMapPatchError } = await storyMapPatchQuery;
 
     if (storyMapPatchError) {
       console.warn('Failed to patch story_map during incremental beat save:', storyMapPatchError.message);
@@ -1769,41 +1233,66 @@ export async function updateBeatAssets(
 // ============================================================
 
 /**
- * Compute a path hash for duplicate storyline detection.
- * Uses a simple hash of the node_path joined by '|'.
- */
-async function computePathHash(nodePath: string[]): Promise<string> {
-  const data = new TextEncoder().encode(nodePath.join('|'));
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-/**
- * Walk from an ending beat back to root to get the full node path.
- */
-function walkPathToRoot(beats: DbBeat[], endingNodeId: string): string[] {
-  const beatMap = new Map<string, DbBeat>();
-  for (const beat of beats) {
-    beatMap.set(beat.node_id, beat);
-  }
-
-  const path: string[] = [];
-  let currentId: string | null = endingNodeId;
-  while (currentId) {
-    path.unshift(currentId);
-    const beat = beatMap.get(currentId);
-    currentId = beat?.parent_node_id || null;
-  }
-  return path;
-}
-
-/**
  * Auto-publish a completed storyline when an ending beat is reached.
  * - Checks for duplicate paths via path_hash
  * - Creates storyline + storyline_beats junction rows
  * - Auto-saves to user's saved_storylines
  */
+// ── Unit 9M / D15: nobody publishes somebody else's agent draft as themselves ──
+//
+// Both publish paths in this file -- publishStoryline (the PublishDialog's) and
+// autoPublishStoryline (the store's fire-and-forget on reaching an ending) -- stamp
+// `storylines.user_id` with the CALLER and author it under their display name. For an
+// ordinary author that is correct and is what has always happened. For an agent draft
+// finished by a reviewer it is not: the storyline would carry a real person's name on a
+// story the agentic persona wrote, which is exactly what D15 exists to prevent.
+// lib/agentic/review-publish.ts's publishReviewedStoryline is the path that gets this
+// right, and app/actions/agentic-review.ts's publishRunAction is how a reviewer reaches
+// it -- together with the decision row and run transition that a publish must record.
+//
+// This is a SERVER check because it is the only kind that counts. A server action is
+// directly invocable over its own RPC endpoint, so hiding a button decides nothing; the
+// StoryScreen change that accompanies this is UX, and this function is the boundary.
+//
+// Scope is deliberately narrow. It refuses only when the story is agent-owned AND the
+// caller is not its owner. It does NOT refuse a non-owner publishing an ordinary story:
+// "shared branching" lets any authenticated user continue someone else's story on their
+// own branch, and publishing that branch as themselves is the existing, intended
+// behaviour of this path -- widening the check to cover it would break a real feature to
+// fix a defect that only exists for agent drafts.
+//
+// SCHEMA TOLERANCE. stories.agent_persona_id arrives with migration 103, which
+// production has not applied. A missing column must therefore let publishing proceed --
+// on such a database there are no agent drafts to protect, and refusing would break
+// publishing for every user. Only the four missing-schema codes are treated that way;
+// any other error refuses, so a transient failure cannot silently reopen the hole.
+async function assertNotAnotherUsersAgentDraft(
+  supabase: SupabaseClient,
+  storyId: string,
+  callerUserId: string
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('stories')
+    .select('user_id, agent_persona_id')
+    .eq('id', storyId)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingReviewerSchemaError(error)) return;
+    throw new Error(`Failed to verify story ownership before publishing: ${error.message}`);
+  }
+  // No row visible is not this function's call to make -- the publish paths below
+  // already tolerate a missing source story, and their own queries decide what happens.
+  if (!data) return;
+
+  if (data.agent_persona_id && data.user_id !== callerUserId) {
+    throw new Error(
+      'This is an agent draft. Publish it from the review queue so it is credited to the '
+      + 'persona that wrote it.'
+    );
+  }
+}
+
 export async function autoPublishStoryline(
   storyId: string,
   endingNodeId: string,
@@ -1813,6 +1302,25 @@ export async function autoPublishStoryline(
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
+
+  // Before anything else: this path runs automatically when a story reaches an ending,
+  // with no dialog and no confirmation, so a reviewer continuing an agent draft to its
+  // end would silently publish it under their own name. See the helper.
+  await assertNotAnotherUsersAgentDraft(supabase, storyId, user.id);
+
+  // Round 1b fix D: this function never called getMediaPipelineSettings() and
+  // hardcoded is_public: true in both write branches below, so an admin disabling
+  // public publishing had no effect on a story that reaches its ending organically --
+  // only the manual publishStoryline path (lines ~2317-2323) honoured the switch.
+  // autoPublishStoryline always targets 'public' -- there is no "auto-publish
+  // unlisted" concept, mirroring why lib/agentic/review-publish.ts's
+  // publishReviewedStoryline deliberately never reads unlistedSharingEnabled either --
+  // so this is the same gate publishStoryline runs for requestedVisibility === 'public',
+  // simplified because that's the only visibility this function ever produces.
+  const pipelineSettings = await getMediaPipelineSettings();
+  if (!pipelineSettings.publicPublishingEnabled) {
+    throw new Error('Public publishing is currently disabled by the admin.');
+  }
 
   const { data: sourceStory, error: sourceStoryError } = await supabase
     .from('stories')
@@ -1894,7 +1402,7 @@ export async function autoPublishStoryline(
       endingForecast: b.ending_forecast,
       imageUrl: b.image_url,
       imageStatus: b.image_status,
-      imageError: b.image_error || undefined,
+      imageError: readerSafeImageError(b.image_error),
       audioUrl: b.audio_url,
       audioStatus: b.audio_status,
       audioError: b.audio_error || undefined,
@@ -1938,6 +1446,13 @@ export async function autoPublishStoryline(
       genre: normalizeStoredGenre(sourceStory?.genre),
       ...seriesFields,
       is_public: true,
+      // Round 1b fix D: previously unset, matching publishStoryline's own
+      // requestedVisibility === 'public' branch. withoutAdditiveColumns strips these
+      // below when migration 073 isn't applied yet, same as every other additive
+      // storyline column here.
+      visibility: 'public',
+      published_at: new Date().toISOString(),
+      moderation_status: pipelineSettings.moderationRequiredForPublic ? 'pending' : 'none',
     };
 
     const { error: refreshError } = await supabase
@@ -2025,7 +1540,7 @@ export async function autoPublishStoryline(
     endingForecast: b.ending_forecast,
     imageUrl: b.image_url,
     imageStatus: b.image_status,
-    imageError: b.image_error || undefined,
+    imageError: readerSafeImageError(b.image_error),
     audioUrl: b.audio_url,
     audioStatus: b.audio_status,
     audioError: b.audio_error || undefined,
@@ -2073,6 +1588,13 @@ export async function autoPublishStoryline(
     ...seriesFields,
     author_name: profile?.display_name || 'Anonymous',
     is_public: true,
+    // Round 1b fix D: previously unset, matching publishStoryline's own
+    // requestedVisibility === 'public' branch. withoutAdditiveColumns strips these
+    // below when migration 073 isn't applied yet, same as every other additive
+    // storyline column here.
+    visibility: 'public',
+    published_at: new Date().toISOString(),
+    moderation_status: pipelineSettings.moderationRequiredForPublic ? 'pending' : 'none',
     path_hash: pathHash,
   };
 
@@ -2779,6 +2301,45 @@ export async function publishStoryline(params: {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
+
+  // Refuse before any of the work below, and before any row is written. See the helper.
+  await assertNotAnotherUsersAgentDraft(supabase, params.storyId, user.id);
+
+  // Round 1b fix C: publishStoryline never checked that the caller owns the SOURCE
+  // story at all. `storylines` INSERT RLS only requires `user_id = auth.uid()` on the
+  // STORYLINE row being inserted, so nothing stopped a non-owner from publishing a
+  // storyline built from someone else's tree and crediting themselves as author --
+  // and params.beats/choices/nodePath are client-supplied, so a crafted direct call
+  // is the real attack, not the UI. This was previously *intended*, supporting shared
+  // branching (9c plan 11.3); branching is dormant now (D23), so that justification
+  // is gone. assertNotAnotherUsersAgentDraft above is a narrower, agent-draft-specific
+  // guard and stays exactly as it was -- this is the general case it doesn't cover.
+  //
+  // Deliberately a PLAIN ownership check, not assertCanEditStory. This path is reached
+  // only by the story's own owner: StoryScreen hides every publish affordance when
+  // `isAnotherUsersAgentDraft` (its own D15 comment, right above where these buttons
+  // are built), and a reviewer's legitimate publish goes through
+  // publishReviewedStoryline (lib/agentic/review-publish.ts) -- a wholly separate
+  // admin-client function that never calls this one. Granting reviewer access here via
+  // assertCanEditStory would let a reviewer publish an agent draft under THEIR OWN
+  // name via a direct call, reopening exactly the defect assertNotAnotherUsersAgentDraft
+  // exists to prevent.
+  {
+    const { data: ownerRow, error: ownerCheckError } = await supabase
+      .from('stories')
+      .select('user_id')
+      .eq('id', params.storyId)
+      .maybeSingle();
+    if (ownerCheckError) {
+      throw new Error(`Failed to verify story ownership before publishing: ${ownerCheckError.message}`);
+    }
+    // No row visible is not this function's call to make -- the same tolerance
+    // assertNotAnotherUsersAgentDraft uses above; the queries below already handle a
+    // missing source story on their own.
+    if (ownerRow && ownerRow.user_id !== user.id) {
+      throw new Error('Forbidden.');
+    }
+  }
 
   // Visibility + quality are server-validated; default keeps today's
   // public-publish behavior.

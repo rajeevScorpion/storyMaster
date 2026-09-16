@@ -15,6 +15,8 @@ import {
 } from '@/lib/ai/reference-adoption-prompts';
 import { getReferenceSettings } from '@/lib/references/reference-runtime';
 import { buildCanonicalReferenceKey } from '@/lib/references/reference-storage';
+import { REFERENCE_ADOPTION_FAILURE_MESSAGE, readerSafeAdoptionError } from '@/lib/references/adoption-errors.shared';
+import { errorDetail } from '@/lib/ai/text-gateway/types.shared';
 import type { InlineImagePart } from '@/app/actions/gemini-proxy';
 import type { ImageModelSelection } from '@/lib/ai/image-models.shared';
 import type { PlanKey } from '@/lib/types/pricing';
@@ -374,8 +376,9 @@ export async function runReferenceAdoptionJobs(input: { jobId?: string } = {}): 
       if (after?.status === 'failed') failed += 1;
       else processed += 1;
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Adoption failed.';
-      await retryOrFail(admin, claimedJob, message);
+      const detail = errorDetail(error, 'Adoption failed.');
+      console.error('[adoption-job-runner] job failed:', detail);
+      await retryOrFail(admin, claimedJob, readerSafeAdoptionError(detail) ?? REFERENCE_ADOPTION_FAILURE_MESSAGE);
     }
     if (input.jobId) break;
   }

@@ -1,6 +1,10 @@
 import Link from 'next/link';
 import { Activity, BarChart3, Coins, ExternalLink, GitBranch, UserRound } from 'lucide-react';
-import { getCostDashboardData, type AdminCostBeatRow } from '@/app/actions/cost-admin';
+import {
+  getCostDashboardData,
+  type AdminCostBeatRow,
+  type AdminDailyActivityCostRow,
+} from '@/app/actions/cost-admin';
 import { RECENT_BEAT_LIMIT_OPTIONS } from '@/lib/admin/cost-config';
 
 export const dynamic = 'force-dynamic';
@@ -70,6 +74,7 @@ function activityLabel(key: string) {
     generate_reel_thumbnail: 'Reel thumb',
     generate_story_text_overlay: 'Text overlay',
     batch_image_generation: 'Batch image',
+    agentic_creator: 'Agentic creator',
   };
   return labels[key] || key.replaceAll('_', ' ');
 }
@@ -165,6 +170,54 @@ function CostBreakdown({ beat }: { beat: AdminCostBeatRow }) {
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+// Shared by "Daily Cost by Activity" and the reviewer/agent-story segment below --
+// same columns, same empty-state pattern, different source rows.
+function DailyActivityTable({
+  rows,
+  dailyWindowDays,
+  emptyMessage,
+}: {
+  rows: AdminDailyActivityCostRow[];
+  dailyWindowDays: number;
+  emptyMessage: string;
+}) {
+  return (
+    <div className="overflow-x-auto rounded-lg border border-white/10">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-white/10 bg-white/5 text-left text-neutral-500">
+            <th className="px-4 py-3 font-medium">Day</th>
+            <th className="px-4 py-3 font-medium">Activity</th>
+            <th className="px-4 py-3 text-right font-medium">Cost INR</th>
+            <th className="px-4 py-3 text-right font-medium">Cost USD</th>
+            <th className="px-4 py-3 text-right font-medium">Beats</th>
+            <th className="px-4 py-3 text-right font-medium">Events</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={`${row.day}:${row.activityKey}`} className="border-b border-white/5 hover:bg-white/5">
+              <td className="px-4 py-3 text-neutral-300">{row.day}</td>
+              <td className="px-4 py-3 text-neutral-300">{activityLabel(row.activityKey)}</td>
+              <td className="px-4 py-3 text-right text-emerald-300">{formatInr(row.estimatedCostInr)}</td>
+              <td className="px-4 py-3 text-right text-neutral-500">{formatUsd(row.estimatedCostUsd)}</td>
+              <td className="px-4 py-3 text-right text-neutral-400">{row.beatCount || '-'}</td>
+              <td className="px-4 py-3 text-right text-neutral-400">{row.eventCount}</td>
+            </tr>
+          ))}
+          {rows.length === 0 && (
+            <tr>
+              <td colSpan={6} className="px-4 py-8 text-center text-neutral-500">
+                {emptyMessage.replace('{days}', String(dailyWindowDays))}
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -336,40 +389,38 @@ export default async function AdminCostPage({ searchParams }: AdminCostPageProps
           <Activity className="h-5 w-5 text-emerald-300" />
           <h2 className="text-xl font-serif text-neutral-100">Daily Cost by Activity</h2>
         </div>
+        <DailyActivityTable
+          rows={data.dailyActivity}
+          dailyWindowDays={data.dailyWindowDays}
+          emptyMessage="No cost events in the last {days} days."
+        />
+      </section>
 
-        <div className="overflow-x-auto rounded-lg border border-white/10">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/10 bg-white/5 text-left text-neutral-500">
-                <th className="px-4 py-3 font-medium">Day</th>
-                <th className="px-4 py-3 font-medium">Activity</th>
-                <th className="px-4 py-3 text-right font-medium">Cost INR</th>
-                <th className="px-4 py-3 text-right font-medium">Cost USD</th>
-                <th className="px-4 py-3 text-right font-medium">Beats</th>
-                <th className="px-4 py-3 text-right font-medium">Events</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.dailyActivity.map((row) => (
-                <tr key={`${row.day}:${row.activityKey}`} className="border-b border-white/5 hover:bg-white/5">
-                  <td className="px-4 py-3 text-neutral-300">{row.day}</td>
-                  <td className="px-4 py-3 text-neutral-300">{activityLabel(row.activityKey)}</td>
-                  <td className="px-4 py-3 text-right text-emerald-300">{formatInr(row.estimatedCostInr)}</td>
-                  <td className="px-4 py-3 text-right text-neutral-500">{formatUsd(row.estimatedCostUsd)}</td>
-                  <td className="px-4 py-3 text-right text-neutral-400">{row.beatCount || '-'}</td>
-                  <td className="px-4 py-3 text-right text-neutral-400">{row.eventCount}</td>
-                </tr>
-              ))}
-              {data.dailyActivity.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-neutral-500">
-                    No cost events in the last {data.dailyWindowDays} days.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+      <section className="space-y-3">
+        <div className="flex items-center gap-2">
+          <UserRound className="h-5 w-5 text-emerald-300" />
+          <h2 className="text-xl font-serif text-neutral-100">Reviewer Spend on Agent Stories</h2>
         </div>
+        <p className="max-w-2xl text-sm text-neutral-400">
+          Ordinary human activity above already includes this -- it is not autonomous pipeline spend
+          (that is <code className="rounded bg-white/5 px-1 py-0.5 text-xs">activity_key = agentic_creator</code>,
+          separable already). This is a REVIEWER&apos;s own action key, billed to the agent account, because the
+          story they acted on was agent-owned.
+        </p>
+        <div className="flex flex-wrap gap-3">
+          <div className="rounded-lg border border-white/10 bg-white/5 px-4 py-3">
+            <p className="text-xs uppercase tracking-[0.14em] text-neutral-500">Last {data.dailyWindowDays} days</p>
+            <p className="mt-1 text-lg font-semibold text-neutral-100">
+              {formatInr(data.reviewerAgentStorySpend.totalCostInr)}
+            </p>
+            <p className="text-xs text-neutral-500">{formatUsd(data.reviewerAgentStorySpend.totalCostUsd)}</p>
+          </div>
+        </div>
+        <DailyActivityTable
+          rows={data.reviewerAgentStorySpend.dailyActivity}
+          dailyWindowDays={data.dailyWindowDays}
+          emptyMessage="No reviewer spend on agent stories in the last {days} days."
+        />
       </section>
     </div>
   );

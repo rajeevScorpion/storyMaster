@@ -6,6 +6,12 @@ context that does not live in the code or in git history.
 **Snapshot taken:** 2026-08-26, on `dev` at `4c34dbd`. The migration ledger and flag states below were
 **verified directly against the development database** on that date, not carried over from notes.
 
+**Partially re-verified 2026-09-06** against both dev and prod via the read-only MCP connections, while
+planning the Agentic Creator System. Three corrections landed: migration 101 is applied on both (the row said
+"not yet applied anywhere"); Runware rows exist on prod and are disabled rather than absent; and the agentic
+migrations 102–108 are recorded, with 102–108 applied on dev and none on prod. Everything not named here still carries its
+2026-08-26 verification date.
+
 Keep this file current. When you finish a pack, move it out of "pending"; when you defer something, add it to
 "deferred".
 
@@ -73,9 +79,110 @@ select exists (select 1 from public.schema_migration_ledger where migration_numb
 | 098 | `harden_function_privileges` | `search_path` pinned; EXECUTE revoked from PUBLIC/anon/authenticated on 17 functions | **Applied on both** 2026-08-26. |
 | 099 | `managed_page_versioning` | `managed_pages` versioning columns, table `managed_page_versions`, flag `legal_consent_gate_enabled` | **Applied on both** 2026-08-29, verified by query. |
 | 100 | `legal_acceptances` | table `legal_acceptances` | **Applied on both** 2026-08-29, verified by query. |
-| 101 | `schema_migration_ledger` | table `schema_migration_ledger`, self-recorded by every migration from here on | **Not yet applied anywhere** — new as of 2026-08-29, awaiting the owner's manual apply to dev and prod. |
+| 101 | `schema_migration_ledger` | table `schema_migration_ledger`, self-recorded by every migration from here on | **Applied on both**, verified by querying the ledger 2026-09-06. (This row previously said "not yet applied anywhere", contradicting the paragraph below it — the ledger is the authority and it says applied.) |
 
 Everything up to 068 is long-applied.
+
+### Agentic Creator System (merged into `dev` 2026-09-14, `--no-ff`; **not** on `main`)
+
+**102-108 and 110-118 are all applied to dev; production still has none of them.** 102-107
+verified against `schema_migration_ledger` on 2026-09-07; **108 applied 2026-09-08** and verified against
+the schema itself rather than only its ledger row — 12 columns, RLS on, `anon`/`authenticated` denied
+SELECT, 0 rows, and `idx_agent_evaluations_pipeline_run` confirmed UNIQUE *and* partial. **111 and 112
+applied 2026-09-09**, **113 applied 2026-09-10**, and **114 applied 2026-09-10** (this file previously said
+114 was "written and committed but deliberately unapplied" here, contradicting its own row in the table
+below, which has carried the correct applied timestamp since 2026-09-11 — the table was right, this
+paragraph was stale; see that row for the verification detail). **115 (`115_beats_owner_only_writes.sql`,
+D23 — narrows `beats` INSERT/UPDATE RLS to also require the story owner) is written and committed but
+deliberately unapplied** — per WORKING_AGREEMENTS, the agent producing it never applies a migration; the
+owner runs it by hand, dev first, and only once the Phase 10 Round 1 application-level gates it backstops
+are confirmed live (see the migration table row and "Shared branching" below). **Production has none of
+them** — the prod ledger returns zero rows for `migration_number >= 103`, so the entire agentic schema is
+dev-only and prod will need 103-onward applied in order whenever it is promoted.
+
+**There is no migration 109, and there will not be one.** Phase 8 planned an
+`agentic_narration_enabled` flag to sit above each persona's `allow_narration`, mirroring
+`agentic_image_generation_enabled`. It was dropped when narration became a reviewer action rather
+than a pipeline stage (D10): with a human pressing the button, the human is the kill switch. The gap
+in the numbering is deliberate — do not go looking for the file, and do not treat 110 as blocked on
+it. Numeric order is convention here anyway; `schema_migration_ledger` is the only source of truth
+for what has actually run.
+
+| # | File | Introduces | dev | production |
+|---|---|---|---|---|
+| 102 | `agentic_creator_flags` | six `agentic_*` rows in `feature_flags`, all `false` | **Applied.** All six present. **`agentic_creator_enabled` and `agentic_billing_bypass_enabled` are ON** (both since 2026-09-07, to run the pipeline); the other four remain off | Not applied |
+| 103 | `agent_personas` | tables `agent_personas`, `agent_persona_memory` + AFTER INSERT trigger; `stories.agent_persona_id` | **Applied.** | Not applied |
+| 104 | `seed_agent_personas` | the 15 seed creator personas | **Applied.** 15 personas, and 15 `agent_persona_memory` rows created by 103's trigger | Not applied |
+| 105 | `agent_story_memory` | tables `agent_story_memory`, `agent_novelty_checks` + `pg_trgm` GIN indexes | **Applied**, both tables empty | Not applied |
+| 106 | `agent_tasks` | table `agent_tasks`; `stories.agent_task_id` | **Applied** 2026-09-07, 0 rows | Not applied |
+| 107 | `agent_runs` | tables `agent_runs`, `agent_run_events`, `agent_schedules` + the partial unique dedup index | **Applied** 2026-09-07, all three empty | Not applied |
+| 108 | `agent_evaluations` | table `agent_evaluations` + a PARTIAL unique index on `(run_id) WHERE trigger_source = 'pipeline'` | **Applied** 2026-09-08. Schema verified directly, not just the ledger row: 12 columns, RLS on, `anon`/`authenticated` denied SELECT, 0 rows, and the index confirmed UNIQUE *and* partial | Not applied |
+| 110 | `riya_sen_narration_voice` | data-only: moves `riya-sen`'s `preferred_voice` from `Leda` to `Callirrhoe`, resolving the one same-language voice collision among the seeds (both it and `madhurima-bose` are Bangla) | **Applied** 2026-09-08. Verified against the data, not only the ledger: `riya-sen` now holds `Callirrhoe`, and a group-by over `(preferred_voice, language)` returns **zero** personas sharing a voice within a language, with all 15 voices inside the exposed 12 | Not applied (depends on 103 + 104, not on a contiguous run below it) |
+| 111 | `agent_reviewers` | table `agent_reviewers` — Phase 9's reviewer authorization, read only through `requireReviewer()` (D6, D14) | **Applied** 2026-09-09 16:20:41+00. **0 rows**, and that matters: with the table empty, the only account that passes `requireReviewer()` is `ADMIN_USER_ID`, through the implicit short-circuit that never touches the table. Insert a row to exercise reviewer capability at all. **Superseded in part by 113**, which dropped `can_publish` / `can_trigger_media` in favour of a single `role` column | Not applied |
+| 112 | `agent_review_decisions` | table `agent_review_decisions` — Phase 9's append-only reviewer decision trail (Unit 9e) | **Applied** 2026-09-09 17:53:20+00. Schema verified directly, not just the ledger row: 9 columns, the `decision` CHECK carrying all four values (`approved`/`rejected`/`rewrite_requested`/`published`), 4 FKs (`run_id` CASCADE; `story_id`, `reviewer_id`, `storyline_id` SET NULL), RLS on with **0 policies**, 2 indexes. `reviewer_id` is nullable by design, with `reviewer_label` snapshotting the name at decision time so the trail survives an account deletion | Not applied |
+| 113 | `agent_reviewer_roles` | `agent_reviewers` gains `role` (`reviewer`\|`editor`, CHECK-constrained), the `age_groups`/`languages`/`genres` coverage arrays, and `updated_by`; **drops `can_publish` and `can_trigger_media`** — Phase 9b's D17, capability derived from role by pure functions rather than stored twice | **Applied** 2026-09-10 03:07:27+00. Schema verified directly, not just the ledger row: 12 columns, `role` NOT NULL DEFAULT `'reviewer'` with CHECK `('reviewer','editor')`, the three arrays NOT NULL DEFAULT `'{}'`, `updated_by` FK SET NULL, both booleans confirmed **gone**, **0 rows**. Dropping the booleans was only safe because the table was empty and prod has no agentic schema at all | Not applied |
+| 114 | `agent_review_assignments` | table `agent_review_assignments` — Phase 9b's D18, TASK-level manual reviewer assignment (Unit 9i). `source` (`manual`\|`auto`) and `status` (`active`\|`released`\|`superseded`) CHECK-constrained, a partial UNIQUE index enforcing at most one `active` row per task, `reviewer_id`/`assigned_by` both `ON DELETE SET NULL` | **Applied** 2026-09-10 08:07:22+00 (this row said "Not applied" until 2026-09-11 — the ledger and the live schema both disagreed with it). Verified directly, not just the ledger row: `agent_review_assignments_one_active_idx` is UNIQUE and partial (`WHERE status = 'active'`), which is the load-bearing part — it is what makes Unit 9J's auto-assignment idempotent | Not applied |
+| 115 | `beats_owner_only_writes` | narrows `beats` INSERT/UPDATE RLS from `003_normalize_beats.sql` by ANDing `s.user_id = auth.uid()` onto both policies — the database half of D23, shared branching going dormant. Must be applied only *after* the Phase 10 Round 1 application-level gates (doorway removed, `/story/[id]` + `/explore/[id]` layouts, pre-authorize refusal — plan section 3.2) are confirmed live, never before: applying it first alone would let a non-owner's continuation be charged and generated before the write is refused at the database — the charge-and-write-nothing defect class this phase keeps finding. Until applied, the original 003 policies still govern, and the four application-level layers (see "Shared branching" below) are what actually stop an explorer's write. Reviewer writes are unaffected either way — they run on the admin client and bypass RLS entirely | **Applied** 2026-09-12 16:59:55+00, after the Round 1 application-level gates were confirmed live. | **Not applied.** |
+| 116 | `narrow_anonymous_stories_read` | narrows 003's anon `stories` SELECT policy — which had no auth predicate and no `TO` clause — to rows backing a **public** storyline, scoped `TO anon` so the separate authenticated policy is untouched | **Applied** 2026-09-13 18:23:20+00. The check that matters is loading `/` **signed out** and confirming the gallery rails populate: `gallery.ts` joins `stories!inner(...)` on the anon client, so over-narrowing renders an empty gallery rather than erroring | Not applied |
+| 117 | `agent_review_decisions_reviewer_index` | additive index `idx_agent_review_decisions_reviewer` on `(reviewer_id, created_at DESC)` — 112 indexed only `run_id`, so "this reviewer's own history" full-scanned | **Applied** 2026-09-14 03:13:50+00 | Not applied |
+| 118 | `rename_agentic_pipeline_image_flag` | renames flag `agentic_image_generation_enabled` → `agentic_pipeline_image_generation_enabled`, so the name says what it gates (the autonomous pipeline only, never a reviewer's interactive regenerate) | **Applied** 2026-09-14 03:14:10+00. **Order-independent** — it UPDATEs the row if 102 already ran, or INSERTs it off if it lands first. ⚠ The flag is enforced **nowhere in code**; see "Deferred" | Not applied |
+
+### Text Model Gateway (`feature/text-model-gateway`, merged into `dev` 2026-09-14; not on production)
+
+| # | File | Introduces | dev | production |
+|---|---|---|---|---|
+| 119 | `text_model_registry` | table `text_model_registry`, one row per text model. `model_config.model_id` and persona `model_overrides[*].modelId` now name a `model_key` here. Touch trigger, RLS with no policies, 12 seed rows: 8 Gemini enabled, 4 OpenAI/OpenRouter disabled | **Applied** 2026-09-14 05:27:43+00. Verified against the schema, not only the ledger: 18 columns, every CHECK, the trigger, RLS with 0 policies, 12 seed rows with the right enabled flags. **Frozen** — changes ship as 120 | **Not applied.** First run `select task_key, model_id from public.model_config order by task_key;` — a text `model_id` with no seeded row runs on its task default once 119 lands. A server that is already running needs a redeploy afterwards (see GOTCHAS "Text models") |
+| 120 | `text_model_thinking` | column `model_config.reasoning_level` (CHECK on the level vocabulary); `capabilities.reasoningLevels` on every remaining registry row; Gemini rows stop accepting a task temperature; row `gemini-3.8-flash`. Moves text tasks and persona overrides off seven removed Gemini text models (the three economy tasks at Low thinking), records the move in `model_config_history`, then deletes those rows | **Applied** 2026-09-14 17:45:48+00. Verified against the schema: column and CHECK, 6 registry rows with levels, `graphic_style_extraction` and `voice_selection` moved to 3.8 Flash at Low with history rows, `agent_novelty_assessment` row inserted at Low, image and TTS rows untouched. **Frozen** — changes ship as 121 | **Not applied.** Needs 119 first. Run the read-only pre-apply check in `docs/text-model-thinking-plan.md` section 3 to see which tasks will move. Redeploy afterwards |
+| 121 | `text_task_content_block_fallback` | column `model_config.content_block_fallback_model_id` — a registry `model_key` as text, no foreign key. Read in its own query with its own missing-column latch (see GOTCHAS "Thinking levels, temperature and failure text") | **Applied** on dev (owner, 2026-09-15); merged into `dev` as `8df40e2`. **Frozen** — further changes ship as a new migration, not 122 (that number is the image prompt budget target) | **Not applied.** Needs 119 and 120 first. Without it the gateway still reports blocks and logs failures, but never retries; the card shows "Needs migration 121" |
+
+### Image composer continuity (merged into `dev` 2026-09-16, `f556e31`; not on production)
+
+| # | File | Introduces | dev | production |
+|---|---|---|---|---|
+| 122 | `image_prompt_budget_target` | raises `capabilities.promptCompiler.promptBudgetChars` from 2,800 to 3,000 on every `image_model_registry` row still at the 081 default — 7 rows on dev (1 Gemini, 6 Runware, 3 of those reel rows) | **Applied** 2026-09-16 by the owner. **Frozen** — further budget changes ship as a new migration. The number is a *target*, not a ceiling: compiler-v2 may exceed it up to a hard 5,000 cap in code, and reference-image binding lines are already reserved from it, so never lower it to make room for them | **Not applied.** Safe to defer — without it the target stays 2,800 and prompts simply compress a little harder |
+| 123 | `image_prompt_budget_3800` | raises the same target from 3,000 to 3,800 on rows still at 122's value | **Applied** 2026-09-16 08:50:33+00, verified against the ledger and the data: all 7 budgeted rows now read 3,800. **Frozen.** Pairs with the composer brevity rules in the same change: real beats compile to ~3,150–3,450 characters, so a 3,000 target made `over_target` fire on every beat | **Not applied.** Needs 122 first |
+
+#### Promoting the agentic system to production — checklist
+
+**The executable version of this is [../production-promotion-runbook.md](../production-promotion-runbook.md)** —
+rewritten 2026-09-16 and now covering **all 21 migrations** prod is missing (102-108, 110-123 — the agentic
+system plus the text model gateway, the content-block fallback and the image prompt budgets), in order, with
+the one that must not be applied early, the two settings decisions that are not migrations, and the
+post-deploy checks. The summary below is kept for context; the runbook is what to work through.
+
+Migrations are only one of three things prod needs. All three, in this order:
+
+1. **Apply migrations 102-118 by hand, in numeric order** (there is no 109 — see above). 103 must precede 104, 105 and 106.
+2. **Create a separate `AGENTIC_SYSTEM_USER_ID` auth user in the production Supabase project**, and set
+   its UUID as a Vercel environment variable. It is a *different* UUID from dev's — copying dev's value
+   across is wrong. This user owns every agent-generated story.
+   *Failure mode if this is missed or stale:* the billing bypass in `lib/pricing/enforcement.ts` compares
+   `input.userId === process.env.AGENTIC_SYSTEM_USER_ID`. A mismatch means the bypass silently stops
+   matching and agent runs are **denied** rather than billed. That fails closed, which is the safe
+   direction, but it presents as "agent runs mysteriously fail", not as a configuration error.
+3. **`CRON_SECRET` needs no action** — it is already set on Vercel and has been since the narration and
+   image workers shipped. The agentic worker route reuses it rather than minting a second secret, and
+   piggybacks the existing daily `/api/batch/reconcile` cron rather than adding a `vercel.json` entry
+   (the Hobby plan allows only one).
+
+Flags stay `false` after promotion. Turning the system on is a deliberate, separate act.
+
+**Apply in numeric order.** 103 must precede 104 (which inserts into its table), 105 and 106 (whose
+`persona_id` foreign keys point at `agent_personas`). Applying 102 and 103 changes nothing observable: every flag is
+`false` and the persona table lands empty.
+
+Post-apply verification on dev, all passing: 15 personas / 15 memory rows; 0 with
+`allow_image_generation`; 0 with `allow_narration`; 0 with `status <> 'draft'`; 0 whose
+`default_story_config.imageGenerationMode` is anything but `prompt_only`; 6 agentic flags, 0 enabled.
+
+All application code fails closed while these are unapplied — `lib/agentic/flags.ts` reads every flag with
+`fallback = false`, and the persona actions catch the missing-relation error and return an empty list rather
+than throwing. An un-migrated database therefore behaves exactly as it does today, which is the whole design.
+
+A caveat on the older rows worth knowing: ledger entries 001–101 all carry an identical `applied_at` per
+environment, because they were backfilled in one statement when 101 landed rather than recorded as each
+migration ran. For that historical range the ledger reflects what was *declared* applied, not independently
+observed. From 102 onward each migration records itself at execution time, so those rows are real evidence.
 
 **The legal/auth UX pack (Phases 0-7) merged into `dev` 2026-08-29** (`--no-ff`, commit `b2092ea`). On dev: the
 four legal documents (`terms`, `privacy_policy`, `ai_disclosure`, `content_usage_policy`) are published at
@@ -83,10 +190,11 @@ four legal documents (`terms`, `privacy_policy`, `ai_disclosure`, `content_usage
 acceptance are redirected to `/auth/accept-terms`. See `docs/legal-consent-model.md` for the schema and gate
 logic, and `lib/legal/business-config.ts` for the entity/address/contact facts the documents are built from.
 
-Migrations 099, 100 and 101 are now applied on both dev and production. **Before promoting to production:**
-prod's `managed_pages` rows still need the same publish steps run against them as were run on dev, before
-enabling `legal_consent_gate_enabled` there — do not assume enabling the flag on prod can happen in the same
-step as the code promotion; verify prod's documents are actually published first, exactly as was done on dev.
+Migrations 099, 100 and 101 are applied on both dev and production, and **the production half of this is
+done** — verified by query 2026-09-16: all four documents are published on prod at `1.0.0` (effective
+2026-08-29) and `legal_consent_gate_enabled` is on there. The legal pack needs **no action** during the next
+promotion. The publish steps recorded below are kept as the procedure for a future document revision, not as
+outstanding work.
 
 **Phase 8 landed 2026-08-29**: `docs/legal-content-architecture.md` and `docs/auth-legal-release-checklist.md`
 were written, the two remaining unit-test gaps (acceptance-state classification, missing-schema error
@@ -223,10 +331,13 @@ order by c.relname;
 
 ## Dormant / gated features
 
-Built and merged, but not live for users. Each is behind a flag that defaults to off or to a no-op mode.
+Not live for users. Most rows are built and merged, gated behind a flag that defaults to off or to a no-op
+mode; the "Shared branching" row is the deliberate exception — no flag (D23), and its code sits on the
+unmerged `feat/agentic-creator` branch rather than on `dev`.
 
-Flag state **differs between environments**, and that difference is the point — dev runs ahead. Both columns
-verified 2026-08-26.
+Flag state **differs between environments**, and that difference is the point — dev runs ahead. Most rows
+below were verified 2026-08-26; the Runware and Agentic rows were re-verified against both live databases on
+2026-09-06.
 
 | Feature | Flag | dev | production |
 |---|---|---|---|
@@ -236,8 +347,25 @@ verified 2026-08-26.
 | Image prompt compiler | `image_prompt_compiler_mode` | **`new`** — compiled prompts are sent | **`shadow`** — legacy prompt still sent |
 | Server-side beat bundle | `beat_bundle_enabled` | on | on |
 | Video export presets | `video_export_presets_json` | on, real preset JSON | on, real preset JSON |
-| Runware image models | rows in `image_model_registry` | seeded (unverified prices) | **absent** — 095 not applied |
-| Legal consent gate | `legal_consent_gate_enabled` | **on** — migrations 099/100 applied, four documents published 2026-08-29 | **off** — migration 099 applied 2026-08-29 (seeds the flag `false`); documents not yet published on prod, do not enable until they are |
+| Runware image models | rows in `image_model_registry` | seeded, **all 9 disabled** (unverified prices) | seeded, **all 9 disabled** (unverified prices) |
+| Legal consent gate | `legal_consent_gate_enabled` | **on** — migrations 099/100 applied, four documents published 2026-08-29 | **on** — verified 2026-09-16. All four documents are published on prod at `doc_version 1.0.0`, effective 2026-08-29, with `terms` requiring acceptance and the other three acknowledged. Earlier revisions of this row said the flag was off and the documents unpublished; both were wrong |
+| Agentic Creator System | six `agentic_*` flags | present; **`agentic_creator_enabled` + `agentic_billing_bypass_enabled` ON** since 2026-09-07, other four off. 102–108 all applied (105 on 2026-09-06, 106/107 on 2026-09-07, 108 on 2026-09-08), 15 personas seeded (all `draft`), **two real drafts generated** and sitting at `awaiting_review` | **absent** — 102–108 not applied |
+| Shared branching (continuing / forking someone else's story) | **none, deliberately (D23)** — the enforcement point is `beats` RLS, and a Postgres policy can't cheaply read `feature_flags`, so a flag here would gate the button while the database kept accepting the write | **dormant, application-level only** — Phase 10 Round 1's gates are code-complete on `feat/agentic-creator` (doorway removed, `/story/[id]` + `/explore/[id]` gated owner-or-reviewer, `continueStory` refuses a non-owner/non-reviewer before `authorize`); the database backstop, **migration 115, is written but not applied** | **still fully live** — none of Round 1 has reached production; the "Explore full story tree" doorway and the original, broader migration-003 `beats` RLS both still work there today |
+
+**Reversing D23 — what re-enabling shared branching needs**, so this is one lookup rather than an
+excavation: `115_beats_owner_only_writes_rollback.sql` applied (restores the two original
+`003_normalize_beats.sql` policies byte-for-byte); the "Explore full story tree" link restored in
+`components/story/StorylinePlayer.tsx`; and the owner-or-reviewer gate removed or relaxed in
+`app/story/[id]/layout.tsx` and `app/explore/[id]/layout.tsx` — plus reverting the pre-authorize checks in
+`lib/store/story-store.ts`, `app/actions/pricing-enforcement.ts`'s `authorizeCurrentUserStoryContinuation`,
+and `app/actions/beat-bundle.ts`'s `generateBeatCore`. Nothing here is scheduled; it is recorded because D23
+asked for it to be.
+
+The Runware row previously read "**absent** — 095 not applied" for production. That was wrong on both counts:
+the ledger records 095 applied on prod, and prod holds all 9 Runware rows. They are `is_enabled = false` on
+both environments, which is why nothing surfaced — dormant by row state, not by absence. The prices are still
+the unverified guesses noted against migration 095; check each model in Runware's Playground before enabling
+any row on either environment.
 
 Earlier revisions of this file described the reference feature and the compiler as dormant. That was an
 accurate description of **production** filed under a heading that read as though it covered dev. When
@@ -309,6 +437,17 @@ Work that is built and merged but has **not** been QA'd in a browser. The owner 
   actually arrives over Realtime and not by polling fallback.
 - **`@google/genai` 2.x live smoke** — confirm the legacy Interactions 400 warning is gone and stateful
   continuity actually carries via `previous_interaction_id`.
+- **The Agentic Creator pipeline has now executed end to end on dev** (branch `feat/agentic-creator`).
+  Two complete five-beat drafts exist, owned by the system user at `awaiting_review`. Verified by query:
+  `agent_story_memory` stayed at 0 before promotion, 0 storylines were published, 0 image jobs were
+  created (`prompt_only` holds), `ai_cost_events` carries real `agentic_creator` rows, and the system
+  user's beat balance was unchanged (the billing bypass works). `agentic_creator_enabled` and
+  `agentic_billing_bypass_enabled` are **on** on dev; the other four agentic flags remain off.
+  Running it found three defects review had missed — see `fe9406f`.
+- **Agentic admin surfaces are browser-verified.** `e2e/agentic-admin.spec.ts` now runs (15 passed, 0
+  skipped) and covers all six agentic routes including `/admin/agents/test-lab`. It had never run from
+  its documented setup: `playwright.config.ts` did not load `.env.local` and `dotenv` is not a
+  dependency, so the spec read `process.env`, found nothing and skipped silently. Fixed in `fe9406f`.
 
 That build backlog is cleared: `npm run build:verify` builds into its own directory, so the dev server can no
 longer block it, and a full production build now runs as part of the standard gate. Browser QA above is
@@ -322,7 +461,253 @@ hand-verified on 2026-08-26 and pass, but nothing automated covers them.
 
 ## Deferred / known gaps
 
+### Image composer continuity — deferred on purpose
+
+Framework phases 3–4 (`docs/visual-composer-continuity-framework.md`): prop lifecycle, physical-state and
+environment-state tracking, relationship geometry, and vision-based evaluation of a generated image with
+targeted regeneration. Also deferred: putting reels and portraits on the compiler (both still take the legacy
+path, so portrait prompts still carry a character's canonical, possibly non-Latin, name), and per-provider
+adapter tuning beyond negatives.
+
+Known limits of what shipped:
+
+- The continuity schema was live-tested on **GPT-5.6 Luna and Gemini 3.8 Flash only**; Qwen is untested.
+- **Provider-stateful image mode carries earlier images implicitly** (R10). The continuity rules cannot suppress
+  what the provider's own thread remembers.
+- Regenerating an old beat whose **stored plan predates the English rule** keeps its non-English panel action —
+  deliberately, so the image still depicts the event — and records a `non_english_prompt` warning.
+- The continue-story `promptOnly` legacy build still omits `worldAnchor`. It feeds diagnostics and the
+  shadow/error-fallback prompt only, never the compiled prompt that ships.
+- **Open decision:** real beats compile to ~3,700–4,700 characters against a 3,000 target, so `over_target`
+  fires on essentially every beat and Luna sits ~300 characters under the 5,000 hard cap. Either tighten the
+  composer's brevity limits, raise the target with a new migration, or accept the warning as noise.
+
 Deliberate decisions, not oversights. Don't "fix" them without checking why.
+
+**Agentic Creator (branch `feat/agentic-creator`)**
+
+- **DEFERRED BY THE OWNER, 2026-09-14 — assignment notifications.** When a draft is auto- or
+  manually assigned to a reviewer, nothing tells them. There is **no notification infrastructure in
+  this codebase at all** — no email sender, no in-app inbox, no table, no digest job — so this is a
+  from-scratch design job (delivery channel, opt-out, digest vs. per-event), not a feature to bolt on.
+  The owner's explicit call while promoting Phases 1-11 to `dev`: ship the promotion, design this
+  later. Do not start implementing it as part of unrelated work.
+- **DEFERRED BY THE OWNER, 2026-09-14 — role-change audit history.** `agent_reviewers` records only
+  `updated_by` (a "last editor" field), so promoting, demoting or suspending a reviewer overwrites
+  the previous value and the history is gone. Reconstructing who changed a role, when, and from what
+  is impossible after the fact. Needs a design decision plus a new append-only table and migration —
+  the shape `agent_review_decisions` (112) already models. Deferred alongside notifications, same call.
+- **The pipeline image-generation flag is enforced NOWHERE.** `agentic_pipeline_image_generation_enabled`
+  (renamed by 118) is read by the admin toggle and referenced in doc comments, and by nothing else —
+  no pipeline stage checks it, and nothing combines it with a persona's own `allow_image_generation`
+  despite a comment claiming it does. **An admin can switch it on or off and behaviour does not
+  change.** Pre-existing, surfaced by the 118 rename and deliberately left alone: wiring it up is a
+  behaviour change, not a cleanup. Decide what it should actually gate — pipeline-only kill switch,
+  or ANDed with the persona permission — before implementing.
+- **A reviewer who triggers narration on an agent draft is not recorded on the job row.** Unit 9d (D13)
+  re-stamps `narration_batch_jobs.user_id` with the story owner so the agentic billing bypass can fire,
+  which is correct — but the table has no metadata column (migrations 068 and 069 are its whole schema),
+  so the human who actually pressed the button survives only as a `console.info` line. That is an audit
+  gap on *paid platform spend*, which is exactly the thing worth attributing. The fix is one additive
+  column — `submitted_by_user_id uuid references auth.users(id)` — and a migration, deliberately not
+  invented inside 9d. Belongs with Unit 9c, which is the surface that would display it.
+- **`retryRun` cannot re-brief, so the admin Retry button is weaker than the automatic path.** A
+  novelty block now clears `brief_ready` and the cached verdict so the next *automatic* attempt
+  regenerates a brief (D12). `retryRun` resets `status`, `attempt_count` and `error_detail` but never
+  touches `checkpoint`, so pressing Retry on a novelty-failed run replays the cached block and burns
+  three more attempts achieving nothing. Not a regression — it behaved this way before D12 — but
+  newly conspicuous now that the automatic path self-corrects. The fix is small (clear the same two
+  keys `clearBriefForRebrief` clears) and belongs with whoever next touches `retryRun`.
+- **RESOLVED — agent-owned narration now bills the agent, on both paths.** This entry used to say Unit
+  8d was written up but not built. `57b516b` (Unit 9d) did the **batch** path: `actorKind` is forwarded and
+  `narration_batch_jobs.user_id` carries the story owner, so the bypass in `authorizeBillableAction` is
+  reachable. `04e739b` (Unit 9M) did the **interactive single-beat** path, which nobody had noticed was
+  separate: it resolves no agentic payer at all, so a reviewer pressing "generate narration" was charged
+  for both the narration and the overlay alignment — and, because the same missing identity also decided
+  which Supabase client wrote the beat, the audio it paid for was never persisted. Measured on dev before
+  and after; see phase9c-plan section 11.4. The image twin of that second half is still open — see the
+  entry below.
+- **Nothing in Phase 8 has been exercised against a live database.** The gate is entirely static
+  (tsc, lint, 854 unit tests, build:verify, e2e). Every prior agentic phase found real defects only
+  once a run touched Postgres. The verification queries are in the same handoff.
+- **RESOLVED 2026-09-11 — a reviewer can now edit an agent draft.** The RLS facts below are unchanged and
+  no policy was added: `stories` still allows any signed-in user to SELECT a non-archived story and still
+  restricts UPDATE to `auth.uid() = user_id`. What changed is the route in. Unit 9b (`b7041b2`) made four
+  write paths reviewer-aware through `assertCanEditStory` — `saveBeat`, beat editing, the narration batch
+  and the image batch — and Unit 9M (`3347ffb`) closed the fifth and worst, `saveStory`, which did not throw
+  `Forbidden.` as this entry predicted but reported success and wrote nothing (owner-only UPDATE matching
+  zero rows is not an error in PostgREST). All five run on the admin client with `assertCanEditStory` as the
+  entire boundary (D14) — the "admin-client server-action path" option this entry named, not the RLS one.
+  Still true and still worth knowing: `persistence.ts`'s `serverAuth` escape hatch does NOT cover any of
+  this; it remains scoped to worker media-state patches.
+- **The evaluator's restricted-theme check is effectively English-only against beat text.** All 15 seeded
+  personas store `restricted_themes` as ENGLISH phrases ("graphic violence", "self-harm"), including the 12
+  that write in Hindi, Bangla, Gujarati or Marathi — verified by query, not assumed. JS `\b` is defined over
+  `[A-Za-z0-9_]` and never holds beside a Devanagari/Bengali/Gujarati/Arabic character, and the English
+  phrase would not appear in that prose anyway. The `briefThemes` half works for every persona, because
+  `buildStoryBriefPrompt` asks for themes "in English" while the prose goes in the target language. It fails
+  OPEN — a missed restriction, never a false one — and the model's `safety` dimension covers the same ground
+  advisorily. Closing it properly needs script-aware boundaries plus translated restriction vocabularies.
+- **A standalone `/admin/agents/evaluations` page was deliberately not built.** The pack lists it as a
+  possible section; Phase 7 surfaces evaluations inside the Run monitor detail instead, because Phase 9's
+  reviewer queue is about to build that surface properly and two of them would diverge.
+- **Evaluation model calls are not billed through the coin economy.** Like the novelty adjudicator, the
+  `agent_story_evaluation` call writes a real `ai_cost_events` row (`activity_key = 'agentic_creator'`) but
+  takes no coin reservation. `PRICING_ACTION_KEYS` has no key that fits a platform-internal quality check no
+  user ever triggers, and inventing one would need a migration and an admin pricing entry for a cost nobody
+  chose to spend. `/admin/cost` still shows the true spend.
+- **`agent_schedules` (migration 107) is unused.** `enqueueCommissionedTasks` ignores cadence entirely and
+  drains whatever is commissioned. Wiring schedules into enqueue is unclaimed work, not an oversight.
+- **Agent spend is indistinguishable from human spend by action key.** It reuses `preview_seed_plan` and the
+  `*_prompt_only` beat keys; only `activity_key = 'agentic_creator'` separates it. Revisit in Phase 11
+  (renumbered from 12 — Phase 11 was never written; see docs/agentic-creator-phase10-plan.md section 0.7).
+- **A novelty `block` is now decided once, and only by the deterministic layer.** RESOLVED
+  2026-09-08 (`32f2c65`). The adjudicator may downgrade a verdict but never escalate one
+  (`applyAdjudication`, pure and tested), and the verdict is cached per run so a retry inherits it
+  rather than re-adjudicating. Kept here because the reasoning matters: four adjudications of
+  identical input returned block, block, warn, block, and the deterministic layer had never said
+  block at all -- 2 reused names against a threshold of 4. An unauditable model call was the sole
+  cause of a terminal run failure.
+- **`findSimilarStories` has no self-exclusion.** `runDraftCreatedStage` now runs its post-generation
+  check before writing to `agent_story_memory`, which avoids the problem at the only current call site.
+  The general fix — an `excludeStoryId` threaded through `runNoveltyCheck` — is deferred; any future
+  caller comparing an already-recorded story will hit the same self-match.
+- **The interactive per-beat image regeneration still bills the reviewer, not the agent.** Found
+  2026-09-11 by the Unit 9M browser run, alongside its narration twin, which WAS fixed (`04e739b`).
+  `regenerateImageForNode` bills through `authorizeCurrentUserImageModelBillableAction`, which resolves
+  the payer as `getCurrentUserId()`. This is **not** the "Create all visuals" batch — `a5e9bff` fixed
+  that, and it is fine. Left for a designed change rather than patched: narration's
+  authorize/run/finalize all sit inside one server action, so one resolved identity covered the whole
+  operation, whereas the interactive image path has the CLIENT call `authorize`, `finalize` and
+  `release` as three separately-invocable server actions, each deriving the payer from the session on
+  its own. Paying from the agent account means all three accepting a story-derived payer and each
+  re-running `assertCanEditStory` — a client-supplied `storyId` deciding who pays, on three endpoints.
+  Measure it the way the narration one was measured (a real press, then read
+  `beat_spend_reservations`), do not reason about it. Detail in phase9c-plan section 11.5.
+- **`/review` (Unit 9h) redirects a signed-out visitor to `/`, not to sign-in with a return URL.**
+  `app/review/layout.tsx`'s `requireReviewer()` gate mirrors `app/admin/layout.tsx`'s
+  `redirect('/')`-on-throw exactly, matching existing admin behaviour rather than inventing a nicer
+  flow for this one route. A sign-in redirect carrying `?next=/review` would be friendlier and is
+  deferred, not forgotten — plan section 4.4.
+- **Unit 9i (manual assignment) is code-complete; migration 114 is now applied on dev (2026-09-10, see the
+  migration table above) but the feature is still unproven live.** `ReviewQueueListFilters.assignment`
+  (`'mine' | 'unassigned' | 'all'`) is wired for real in `listReviewQueueAction`, and `ReviewQueue.tsx` has
+  an assignee pill plus Assign-to-.../Reassign.../Release-assignment row actions gated on `canAssignWork`
+  (editor role, D17). Before 114 was applied, every read degraded to "everyone unassigned" and every write
+  threw a clear "migration 114 is not applied yet" error rather than a raw Postgres one; with 114 applied
+  that fail-closed path is no longer exercised, but nobody has yet confirmed a real assignment row against
+  the live schema. **The reviewer-picker gap** (plan section 5.3 does not
+  say where the "Assign to..." dropdown's reviewer list comes from): `listReviewersAction` returns the
+  full admin roster row (including `notes`, admin-only commentary, and un-filtered by status), so a new
+  `listAssignableReviewersAction` was added instead — gated on `requireReviewer()` + `canAssignWork()`
+  (not `verifyAdmin()`), filtered to `status = 'active'`, and projected to just `userId`/`displayName`/
+  the three coverage arrays. The assignee pill itself resolves a display name through a separate,
+  un-gated join inside `listReviewQueueAction` (against `agent_reviewers` directly, not through that
+  action) so a plain reviewer — who cannot call the editor-gated picker — can still see who a draft is
+  assigned to, including a since-suspended reviewer's name.
+- **RESOLVED, partially — the `beats` INSERT policy no longer lets any signed-in user write into someone
+  else's story, at the application layer.** Previously filed as "pre-existing, unrelated to reviewers"
+  (`docs/agentic-creator-phase9d-handoff.md` lines 167-168). Phase 10 Round 1 (2026-09-12) closed the entry
+  points: `67fad24` removed the one non-owner doorway (`StorylinePlayer.tsx`'s "Explore full story tree"),
+  `e25d065`/`cc7ba14` gated `/story/[id]` and `/explore/[id]` to owner-or-reviewer (D24), and `d20ecb3`
+  refused a non-owner continuation before `authorize` on both the legacy and bundle paths. **Not fully
+  closed** — the RLS half is migration 115, which is written but not applied anywhere (see the migration
+  table and "Shared branching" above). Until it's applied, a direct `saveBeat` invocation bypassing the now
+  gated UI is still permitted by the database itself; the three application-level changes are what actually
+  stop it today, not RLS.
+- **RESOLVED — `autoPublishStoryline` now honours the public-publishing switch.** Previously filed as
+  "pre-existing" (`docs/agentic-creator-phase9c-plan.md` line 281: "`autoPublishStoryline` never checks
+  `publicPublishingEnabled` or `moderationRequiredForPublic`, so the auto-publish-on-ending path can publish
+  publicly while the admin switch is off"). Fixed in `08cd0c1` (Phase 10 Round 1, item 6): it now calls
+  `getMediaPipelineSettings()` and sets `visibility` / `published_at` / `moderation_status` explicitly in
+  both write branches, mirroring `publishStoryline`.
+- **Also closed in Round 1, not previously recorded as a gap here:** `publishStoryline` had no ownership
+  check on the source story at all (`storylines` INSERT RLS only constrains the storyline row being
+  inserted, nothing about which story it's built from) — fixed in `168f6c8` with a plain ownership check,
+  deliberately not `assertCanEditStory` (that would let a reviewer publish an agent draft under their own
+  name, reopening what `assertNotAnotherUsersAgentDraft` exists to prevent). And the bundle path's
+  `processBeatVisuals` compared `story.user_id` to the caller directly instead of going through
+  `assertCanEditStory`, so a reviewer continuing an agent draft through the bundle path (`beat_bundle_enabled`
+  is on in dev) was charged and the beat generated before being refused at that last check — fixed in
+  `2c7156e`.
+- **New, found by the Round 1 audit and deliberately not bundled into migration 115 (plan section 3.4) —
+  "Round 1b":**
+  - `stories` carries an anonymous SELECT policy with no auth predicate at all — `USING (is_archived =
+    false)` (`003_normalize_beats.sql` lines 219-222). Any anonymous caller can read any non-archived story
+    row, including unpublished drafts; the comment says "for gallery metadata" but the policy covers the
+    whole table. Not narrowed yet — it needs one targeted question answered first: what actually reads
+    `stories` anonymously, and does the gallery depend on it or does it read `storylines` instead?
+  - `storage.objects` lets any authenticated user read the `story-assets` bucket — comment says "needed for
+    exploration of other users' story trees" (`003_normalize_beats.sql` lines 228-234). With exploration now
+    gated to owner-or-reviewer (D24), that justification has expired, but the policy itself is untouched.
+    Same treatment: check what actually serves images today before narrowing.
+  - `storylines` has no UPDATE policy in any of the migration files. This is **fail-closed, a note rather
+    than a hole** — every storyline update must already be going through the service-role client. Recorded
+    so nobody adds a session-client update expecting it to work, and is baffled when it silently writes
+    nothing instead of erroring.
+- **Production consideration owed before migration 115 is ever applied there (plan section 3.6).** Dev has
+  no real shared-branching data; production does. A beat whose `generated_by` differs from its story's
+  `user_id` satisfies neither of 115's new policies through the session client — the explorer fails
+  `s.user_id = auth.uid()`, the owner fails `generated_by = auth.uid()` — so such rows become immutable via
+  the session client once 115 lands there. Narrow rather than alarming: batch narration/images run on the
+  admin client (unaffected), and the interactive single-beat path already refuses someone else's beat today
+  (`BEAT_ROW_NOT_FOUND`). Still owed before promoting 115 to production: count the affected rows and decide
+  deliberately whether to leave them, reassign `generated_by` to the story owner, or accept them read-only —
+  `select count(*) from beats b join stories s on s.id = b.story_id where b.generated_by <> s.user_id;` This
+  query has now been run: **prod holds 5 such rows** (verified 2026-09-16, read-only). Small enough that
+  leaving them read-only or reassigning `generated_by` to the story owner are both defensible — but the
+  choice is still the owner's, and it is owed before 115 reaches prod, not after.
+
+**Text models**
+- **Evaluate → writer-repair loop deferred** (owner, 2026-09-14). A cheap evaluator whose verdict triggers an
+  automatic writer repair conflicts with D9 ("a model call may never be the sole cause of an automatic
+  consequence"). Amend or scope around D9 before building it. Existing bounded behaviour is unchanged: beat and
+  seed generation get one code-validated repair retry; agent evaluation stays advisory.
+- **The text generation server actions are open RPCs.** The four wrappers in `app/actions/text-model-proxy.ts`
+  are `'use server'` exports any caller can invoke, exactly as the Gemini proxy was before. The gateway now
+  limits them to enabled registry models, but nothing limits who calls them or how often. Pre-existing; a fix
+  means moving the story path server-side or adding auth and rate limits.
+- **Three text calls record no cost event:** options regeneration, story bible and discovery metadata. No
+  activity key fits them, so `/admin/cost` undercounts those tokens.
+- **Content-safety transparency covers text beats and storyboard plans only** (`feature/content-block-fallback`).
+  Still open: image-model blocks have no fallback or content message; reel generation in
+  `app/actions/story-runtime.ts` still throws across the server-action boundary; the published viewer
+  (`StorylinePlayer`) does not show the "simpler plan" note. No unit test covers the browser-versus-server switch
+  in `callTextModelForReader`.
+- **Beat length misses are only a console line** (`feature/beat-length-allowance`). When beat generation runs in
+  the browser the warning never reaches server logs, so there is no admin view of how often models run long.
+  **Production `prompt_configs` has now been checked (2026-09-16) and this is real.** Prod carries exactly one
+  published override — `story_generation`, last touched 2026-04-04 — and it still says "a short paragraph" and
+  carries no series/episode rules. Dev has **no overrides at all**, so every dev verification ran against the
+  default template. Promoting without republishing that row means prod generates on April's instructions; the
+  runtime length contract still applies, but the prompt half does not match what was tested. Decide it during
+  promotion — see the runbook, section 5. No unit test covers the
+  retry flow of the three generators.
+- **Slow reasoning models vs reader wait.** Checked 2026-09-15: the Vercel project is on Hobby with Fluid
+  compute, so page server actions, including beat generation, get the 300s default and maximum (API routes and
+  the test lab set 300 explicitly; a dashboard override was not readable from the tools). Luna's row caps a call
+  at 120s, so one call cannot hit the function limit; a call past 120s fails that beat, and a repair retry
+  doubles the wait. The real constraint is the reader: Gemini 3.5 Flash beats on dev ran ~12s median, ~20s p90,
+  up to 35s, with no thinking level set. No Luna call on a real task was recorded as of that date — measure
+  per-beat latency (`ai_cost_events.latency_ms`) before settling a reader-facing task on Luna above Low.
+- **`app/actions/playground.ts` is dead code** (nothing imports it) and was deliberately not migrated.
+- **"Used by" on Text Models counts task assignments only**, not agent persona overrides.
+- **Gemini 3.8 Flash's introductory price ends 2026-12-31.** From 2027-01-01 it is $1.50 / $7.50 per 1M
+  (cached $0.15). Update its entry in `lib/ai/pricing.ts` then, or Gemini cost rows understate by half.
+- **Thinking level is not settable in the Story Playground or on agent persona overrides.** The playground
+  tests a model at its own default level; a persona override runs at the model's default, never the task's
+  level (by design — the task level belongs to the task's assigned model).
+- **Admin Story Playground shows a masked error in production when a test fails.** `runPlaygroundTest` throws
+  instead of returning the failure, so Next hides the detail. Pre-existing; return `errorDetail(error)` instead.
+- **Thinking levels for Qwen 3.7 Flash and DeepSeek V4 Flash were seeded from OpenRouter's general docs**, not
+  per-model confirmation. DeepSeek has had no live call at any level.
+- **Qwen 3.7 Flash on OpenRouter returned HTTP 429 under back-to-back calls** in the live smoke, then passed on
+  its own. The gateway reports `rate_limited` and never retries. Fine for advisory evaluation, which already
+  tolerates a failed model call; not yet suitable for anything a reader waits on. A second run the same day,
+  with 3s between OpenRouter calls, saw no 429.
+- **Economy tasks may be cheaper on 3.5 Flash at Minimal than 3.8 Flash at Low.** 3.8 Flash's floor is Low; in
+  the live smoke a one-word answer cost $0.000169 on 3.8 Low against $0.000077 on 3.5 Minimal. Migration 120 put
+  graphic style extraction, voice selection and novelty assessment on 3.8 Low — compare on real calls.
 
 **Billing and cost**
 - The Story Bible LLM call is **unbilled** — it consumes tokens without a coin charge.
@@ -380,6 +765,29 @@ used. `app/actions/story.ts` was a dead orphan and has been deleted.
 
 ## Roadmap notes
 
+- **Text Model Gateway — merged into `dev`** (2026-09-14, `a10a8fc`); not on production (119 and 120 unapplied
+  there). Registry-backed text models across Gemini, OpenAI and OpenRouter, an admin Text Models page with task
+  assignments and per-task thinking, and a live smoke test on all three providers. Nothing routes off Gemini
+  until an admin enables a row and assigns it. Verification, routing and follow-ups:
+  [../text-model-gateway-report.md](../text-model-gateway-report.md); handoff:
+  [../text-model-gateway-working-memory.md](../text-model-gateway-working-memory.md).
+- **Image composer continuity — merged into `dev`** (2026-09-16, `f556e31`). English-only
+  image prompts, a 3,000-character target with a 5,000 hard cap, non-Latin text surviving the compiler, and
+  attribute-specific continuity (LOCKED / EVOLVE / FREE) instead of sameness. Handoff:
+  [../image-composer-continuity-handoff.md](../image-composer-continuity-handoff.md); spec:
+  [../visual-composer-continuity-framework.md](../visual-composer-continuity-framework.md).
+- **Text task guidance — merged into `dev`** (2026-09-15, `e1dd637`). Each Task assignments card
+  says what the task does, whether a user waits on it and how often it runs, and suggests a thinking level with
+  a reason; a note shows when the setting is two or more steps off. Judgment, not measurement. Code-only copy:
+  no migration, no flag. Plan: [../text-task-guidance-plan.md](../text-task-guidance-plan.md).
+- **Content-block fallback — merged into `dev`** (2026-09-15, `8df40e2`); migration 121 applied on dev. Content-safety blocks are named (`content_blocked`) instead of "empty response"; every failed text call
+  is a `failed` cost row; a blocked call retries once on the task's fallback model (migration 121, per-task
+  dropdown on the card); readers see the content-safety cause when a beat still can't be written, and a note when
+  a storyboard used the backup plan. Plan: [../content-block-fallback-plan.md](../content-block-fallback-plan.md).
+- **Beat length allowance — merged into `dev`** (2026-09-15, `a70c93f`). Word count never retries or fails a story beat, seeded beat or seed plan; a beat far off length is
+  kept and logged. Length ranges scale with the target and are no longer clipped at Brief and Immersive; the
+  model is told one range plus a per-panel guide. The admin default length shows every audience's words. Code
+  only: no migration, no flag. Plan: [../beat-length-allowance-plan.md](../beat-length-allowance-plan.md).
 - **Model Playground phase 2** — multi-provider support. Phase 1 (Gemini-only per-task model/cost testing) is
   live at `/admin/playground`. Phase 2 was scoped as either a single gateway (Vercel AI Gateway / OpenRouter)
   or independent providers per task. Much of this has since been overtaken by the real multi-provider image

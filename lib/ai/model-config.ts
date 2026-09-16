@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
+import { TEXT_REASONING_LEVELS, type TextReasoningLevel } from '@/lib/ai/text-models.shared';
 
 // Re-export shared types and constants for server-side consumers
 export {
@@ -33,53 +34,171 @@ export function invalidateCache() {
   cache.clear();
 }
 
+// ── model_config.reasoning_level column-availability latch (migration 120) ───────────────
+//
+// Per GOTCHAS.md "Column-availability latches are per migration group": classify by which
+// query ran, never by the error text alone. 42703 ("column does not exist") and PGRST204
+// (PostgREST's schema-cache variant of the same thing) are generic codes that could in
+// principle come from any missing column on any table -- but every query in this module that
+// can raise them selects `reasoning_level` as its one migration-120 column, so either code
+// from one of THOSE selects unambiguously means migration 120 is absent. getModelConfig's
+// `.single()` also raises PGRST116 for "no row for this task_key", which is not a missing
+// column and must NOT latch -- it already falls through to the DEFAULT_MODELS fallback the
+// same way it did before this migration existed.
+let reasoningLevelColumnUnavailable = false;
+let reasoningLevelColumnChecked = false;
+
+function isMissingReasoningLevelColumnError(error: { code?: string } | null | undefined): boolean {
+  return error?.code === '42703' || error?.code === 'PGRST204';
+}
+
+function markReasoningLevelColumnAvailable() {
+  reasoningLevelColumnChecked = true;
+}
+
+function markReasoningLevelColumnUnavailable() {
+  reasoningLevelColumnUnavailable = true;
+  reasoningLevelColumnChecked = true;
+}
+
+function normalizeStoredReasoningLevel(value: unknown): TextReasoningLevel | null {
+  return typeof value === 'string' && (TEXT_REASONING_LEVELS as readonly string[]).includes(value)
+    ? (value as TextReasoningLevel)
+    : null;
+}
+
+type ModelConfigWideRow = { task_key: string; model_id: string; temperature: number | null; reasoning_level?: unknown; updated_at: string };
+type SupabaseAdminClient = ReturnType<typeof createAdminClient>;
+
+/** One task's row, trying the wide (reasoning_level-including) select first and falling back
+ * to the narrow, pre-120 column list on a missing-column error. A real error either way
+ * (including PGRST116 "no row") is returned as-is for the caller to treat as "use defaults". */
+async function selectModelConfigRow(
+  supabase: SupabaseAdminClient,
+  task: TaskKey
+): Promise<{ data: ModelConfigWideRow | null; error: { code?: string; message?: string } | null }> {
+  if (!reasoningLevelColumnUnavailable) {
+    const wide = await supabase
+      .from('model_config')
+      .select('task_key, model_id, temperature, reasoning_level, updated_at')
+      .eq('task_key', task)
+      .single();
+    if (!wide.error) {
+      markReasoningLevelColumnAvailable();
+      return wide;
+    }
+    if (isMissingReasoningLevelColumnError(wide.error)) {
+      markReasoningLevelColumnUnavailable();
+      // Fall through to the narrow retry below.
+    } else {
+      return wide;
+    }
+  }
+
+  const narrow = await supabase
+    .from('model_config')
+    .select('task_key, model_id, temperature, updated_at')
+    .eq('task_key', task)
+    .single();
+  return narrow;
+}
+
+/** All rows, same wide-then-narrow strategy as selectModelConfigRow. */
+async function selectAllModelConfigRows(
+  supabase: SupabaseAdminClient
+): Promise<{ data: ModelConfigWideRow[] | null; error: { code?: string; message?: string } | null }> {
+  if (!reasoningLevelColumnUnavailable) {
+    const wide = await supabase
+      .from('model_config')
+      .select('task_key, model_id, temperature, reasoning_level, updated_at')
+      .order('task_key');
+    if (!wide.error) {
+      markReasoningLevelColumnAvailable();
+      return wide;
+    }
+    if (isMissingReasoningLevelColumnError(wide.error)) {
+      markReasoningLevelColumnUnavailable();
+      // Fall through to the narrow retry below.
+    } else {
+      return wide;
+    }
+  }
+
+  const narrow = await supabase
+    .from('model_config')
+    .select('task_key, model_id, temperature, updated_at')
+    .order('task_key');
+  return narrow;
+}
+
+/** Whether model_config.reasoning_level can be read/written in this process. Probes once (via
+ * getAllModelConfigs) if this process has not yet determined it either way; otherwise returns
+ * the latched/known state without another round-trip. */
+export async function isReasoningLevelColumnAvailable(): Promise<boolean> {
+  if (!reasoningLevelColumnChecked) {
+    await getAllModelConfigs();
+  }
+  return !reasoningLevelColumnUnavailable;
+}
+
 // ── Public API ─────────────────────────────────────────────────
 
-export async function getModelConfig(task: TaskKey): Promise<{ model: string; temperature: number | null }> {
+export async function getModelConfig(
+  task: TaskKey
+): Promise<{ model: string; temperature: number | null; reasoningLevel: TextReasoningLevel | null }> {
   const cached = getCached(task);
-  if (cached) return { model: cached.modelId, temperature: cached.temperature };
+  if (cached) return { model: cached.modelId, temperature: cached.temperature, reasoningLevel: cached.reasoningLevel };
 
   try {
     const supabase = createAdminClient();
-    const { data, error } = await supabase
-      .from('model_config')
-      .select('task_key, model_id, temperature, updated_at')
-      .eq('task_key', task)
-      .single();
+    const { data, error } = await selectModelConfigRow(supabase, task);
+
+    if (error?.code === 'PGRST116') {
+      // No row for this task_key -- this is the ordinary DEFAULT_MODELS fallback (most agent_*
+      // tasks, story bible, discovery metadata never get an explicit row), not a migration or
+      // connectivity problem, so it is safe -- and worth doing -- to cache like any other
+      // resolved config. Without this, a task with no row hits the database on every single
+      // call the router makes for it, defeating the point of the 60s TTL cache below.
+      const fallback = DEFAULT_MODELS[task];
+      setCache({ taskKey: task, modelId: fallback.modelId, temperature: fallback.temperature, reasoningLevel: null, updatedAt: new Date().toISOString() });
+      return { model: fallback.modelId, temperature: fallback.temperature, reasoningLevel: null };
+    }
 
     if (error || !data) {
+      // Any other error (missing column already handled inside selectModelConfigRow, transient
+      // DB errors, etc.) falls back to defaults WITHOUT caching -- a real problem should be
+      // retried on the very next call, not papered over for a minute.
       const fallback = DEFAULT_MODELS[task];
-      return { model: fallback.modelId, temperature: fallback.temperature };
+      return { model: fallback.modelId, temperature: fallback.temperature, reasoningLevel: null };
     }
 
     const config: ModelConfig = {
-      taskKey: data.task_key,
+      taskKey: data.task_key as TaskKey,
       modelId: data.model_id,
       temperature: data.temperature,
+      reasoningLevel: normalizeStoredReasoningLevel(data.reasoning_level),
       updatedAt: data.updated_at,
     };
     setCache(config);
-    return { model: config.modelId, temperature: config.temperature };
+    return { model: config.modelId, temperature: config.temperature, reasoningLevel: config.reasoningLevel };
   } catch (err) {
     console.error('model-config: getModelConfig failed, using defaults:', err);
     const fallback = DEFAULT_MODELS[task];
-    return { model: fallback.modelId, temperature: fallback.temperature };
+    return { model: fallback.modelId, temperature: fallback.temperature, reasoningLevel: null };
   }
 }
 
 export async function getAllModelConfigs(): Promise<ModelConfig[]> {
   try {
     const supabase = createAdminClient();
-    const { data, error } = await supabase
-      .from('model_config')
-      .select('task_key, model_id, temperature, updated_at')
-      .order('task_key');
+    const { data, error } = await selectAllModelConfigRows(supabase);
 
     if (error || !data) {
       return Object.entries(DEFAULT_MODELS).map(([key, val]) => ({
         taskKey: key as TaskKey,
         modelId: val.modelId,
         temperature: val.temperature,
+        reasoningLevel: null,
         updatedAt: new Date().toISOString(),
       }));
     }
@@ -88,6 +207,7 @@ export async function getAllModelConfigs(): Promise<ModelConfig[]> {
       taskKey: row.task_key as TaskKey,
       modelId: row.model_id,
       temperature: row.temperature,
+      reasoningLevel: normalizeStoredReasoningLevel(row.reasoning_level),
       updatedAt: row.updated_at,
     }));
 
@@ -99,9 +219,205 @@ export async function getAllModelConfigs(): Promise<ModelConfig[]> {
       taskKey: key as TaskKey,
       modelId: val.modelId,
       temperature: val.temperature,
+      reasoningLevel: null,
       updatedAt: new Date().toISOString(),
     }));
   }
+}
+
+/**
+ * Sets (or clears, with `null`) a task's per-task thinking-level override. Throws when
+ * migration 120 is absent rather than silently writing nothing -- a write path must know its
+ * write didn't happen, unlike a read path, which is expected to fail closed to defaults.
+ * Upserts the full row so an update never blanks model_id/temperature: it carries forward the
+ * existing row's values, or this task's code defaults when no row exists yet.
+ */
+export async function updateTaskReasoningLevel(taskKey: TaskKey, level: TextReasoningLevel | null): Promise<void> {
+  const available = await isReasoningLevelColumnAvailable();
+  if (!available) {
+    throw new Error('Migration 120 is not applied.');
+  }
+
+  const supabase = createAdminClient();
+  const { data: existing } = await supabase
+    .from('model_config')
+    .select('model_id, temperature')
+    .eq('task_key', taskKey)
+    .single();
+
+  const fallback = DEFAULT_MODELS[taskKey];
+  const modelId = existing?.model_id ?? fallback.modelId;
+  const temperature = existing ? existing.temperature : fallback.temperature;
+
+  const { error } = await supabase.from('model_config').upsert({
+    task_key: taskKey,
+    model_id: modelId,
+    temperature,
+    reasoning_level: level,
+    updated_at: new Date().toISOString(),
+  });
+
+  if (error) throw new Error(`Failed to update task reasoning level: ${error.message}`);
+  invalidateCache();
+}
+
+// ── model_config.content_block_fallback_model_id column-availability latch (migration 121) ──
+//
+// Deliberately separate from the reasoning_level latch above -- see the migration's own comment:
+// this column must never join the wide select that latch guards, or a database missing only 121
+// would look like one missing 120 too, and every task thinking level would silently stop
+// applying. Same 42703 / PGRST204 classification as above, but only for queries whose one 121
+// column is content_block_fallback_model_id -- per GOTCHAS.md "Column-availability latches are
+// per migration group", classify by which query ran, never by the error text alone.
+let contentBlockFallbackColumnUnavailable = false;
+let contentBlockFallbackColumnChecked = false;
+
+function isMissingContentBlockFallbackColumnError(error: { code?: string } | null | undefined): boolean {
+  return error?.code === '42703' || error?.code === 'PGRST204';
+}
+
+function markContentBlockFallbackColumnAvailable() {
+  contentBlockFallbackColumnChecked = true;
+}
+
+function markContentBlockFallbackColumnUnavailable() {
+  contentBlockFallbackColumnUnavailable = true;
+  contentBlockFallbackColumnChecked = true;
+}
+
+type ContentBlockFallbackRow = { task_key: string; content_block_fallback_model_id: string | null };
+
+// Own 60s cache, independent of the ModelConfig cache above -- this reads one column that cache
+// never carries.
+let contentBlockFallbackCache: Map<TaskKey, { data: string | null; ts: number }> = new Map();
+
+function getCachedContentBlockFallback(key: TaskKey): { data: string | null } | undefined {
+  const entry = contentBlockFallbackCache.get(key);
+  return entry && Date.now() - entry.ts < CACHE_TTL ? entry : undefined;
+}
+
+function setCachedContentBlockFallback(key: TaskKey, data: string | null) {
+  contentBlockFallbackCache.set(key, { data, ts: Date.now() });
+}
+
+function invalidateContentBlockFallbackCache() {
+  contentBlockFallbackCache.clear();
+}
+
+/**
+ * One task's configured content-block fallback model key, or null when it has none, migration
+ * 121 is absent, or the read failed. Own 60s cache. Never throws -- a lookup failure here must
+ * never fail the call that is asking whether to retry.
+ */
+export async function getContentBlockFallbackModel(taskKey: TaskKey): Promise<string | null> {
+  const cached = getCachedContentBlockFallback(taskKey);
+  if (cached) return cached.data;
+  if (contentBlockFallbackColumnUnavailable) return null;
+
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from('model_config')
+      .select('task_key, content_block_fallback_model_id')
+      .eq('task_key', taskKey)
+      .maybeSingle<ContentBlockFallbackRow>();
+
+    if (error) {
+      if (isMissingContentBlockFallbackColumnError(error)) {
+        markContentBlockFallbackColumnUnavailable();
+      }
+      // Not cached -- a real problem should be retried on the very next call.
+      return null;
+    }
+
+    markContentBlockFallbackColumnAvailable();
+    const value = data?.content_block_fallback_model_id ?? null;
+    setCachedContentBlockFallback(taskKey, value);
+    return value;
+  } catch (err) {
+    console.error('model-config: getContentBlockFallbackModel failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Every task's configured content-block fallback, as a Map skipping tasks with none set. Same
+ * fail-closed behaviour as getContentBlockFallbackModel: any problem returns an empty map.
+ */
+export async function getAllContentBlockFallbacks(): Promise<Map<TaskKey, string>> {
+  if (contentBlockFallbackColumnUnavailable) return new Map();
+
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from('model_config')
+      .select('task_key, content_block_fallback_model_id')
+      .order('task_key');
+
+    if (error) {
+      if (isMissingContentBlockFallbackColumnError(error)) {
+        markContentBlockFallbackColumnUnavailable();
+      }
+      return new Map();
+    }
+
+    markContentBlockFallbackColumnAvailable();
+    const result = new Map<TaskKey, string>();
+    for (const row of (data ?? []) as ContentBlockFallbackRow[]) {
+      const key = row.task_key as TaskKey;
+      setCachedContentBlockFallback(key, row.content_block_fallback_model_id ?? null);
+      if (row.content_block_fallback_model_id) result.set(key, row.content_block_fallback_model_id);
+    }
+    return result;
+  } catch (err) {
+    console.error('model-config: getAllContentBlockFallbacks failed:', err);
+    return new Map();
+  }
+}
+
+/** Whether model_config.content_block_fallback_model_id (migration 121) can be read/written in
+ * this process. Probes once (via getAllContentBlockFallbacks) if not yet known either way. */
+export async function isContentBlockFallbackColumnAvailable(): Promise<boolean> {
+  if (!contentBlockFallbackColumnChecked) {
+    await getAllContentBlockFallbacks();
+  }
+  return !contentBlockFallbackColumnUnavailable;
+}
+
+/**
+ * Sets (or clears, with `null`) a task's content-block fallback model. Throws when migration 121
+ * is absent rather than silently writing nothing, mirroring updateTaskReasoningLevel. Upserts the
+ * full row so a write never blanks model_id/temperature: it carries forward the existing row's
+ * values, or this task's code defaults when no row exists yet.
+ */
+export async function updateTaskContentBlockFallback(taskKey: TaskKey, modelKey: string | null): Promise<void> {
+  const available = await isContentBlockFallbackColumnAvailable();
+  if (!available) {
+    throw new Error('Migration 121 is not applied.');
+  }
+
+  const supabase = createAdminClient();
+  const { data: existing } = await supabase
+    .from('model_config')
+    .select('model_id, temperature')
+    .eq('task_key', taskKey)
+    .single();
+
+  const fallback = DEFAULT_MODELS[taskKey];
+  const modelId = existing?.model_id ?? fallback.modelId;
+  const temperature = existing ? existing.temperature : fallback.temperature;
+
+  const { error } = await supabase.from('model_config').upsert({
+    task_key: taskKey,
+    model_id: modelId,
+    temperature,
+    content_block_fallback_model_id: modelKey,
+    updated_at: new Date().toISOString(),
+  });
+
+  if (error) throw new Error(`Failed to update content-block fallback: ${error.message}`);
+  invalidateCache();
+  invalidateContentBlockFallbackCache();
 }
 
 // ── Feature Flags ──────────────────────────────────────────────

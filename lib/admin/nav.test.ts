@@ -57,10 +57,12 @@ function collectAllHrefs(): string[] {
 
 describe('admin nav config', () => {
   it('has no duplicate hrefs across the whole tree (ignoring hub self-links)', () => {
-    // Parent hub items (Global Settings, Pricing and offers) intentionally
-    // share an href with their overview child, so dedupe those before checking.
+    // Parent hub items (Global Settings, Pricing and offers, Agents, Authors)
+    // intentionally share an href with their overview child, so dedupe those
+    // before checking.
     const hrefs = collectAllHrefs().filter(
-      (href) => href !== '/admin/settings' && href !== '/admin/pricing'
+      (href) =>
+        href !== '/admin/settings' && href !== '/admin/pricing' && href !== '/admin/agents' && href !== '/admin/authors'
     );
     expect(new Set(hrefs).size).toBe(hrefs.length);
   });
@@ -111,6 +113,40 @@ describe('admin nav config', () => {
   it('includes story visuals as a top-level Studio item', () => {
     const studio = ADMIN_NAV.find((group) => group.id === 'studio');
     expect(studio?.items.find((item) => item.href === '/admin/settings/story-visuals')).toBeDefined();
+  });
+
+  it('includes the task pool as an Agents child, after Personas', () => {
+    const agentic = ADMIN_NAV.find((group) => group.id === 'agentic');
+    const agents = agentic?.items.find((item) => item.href === '/admin/agents');
+    const ids = agents?.childGroups?.flatMap((group) => group.items.map((item) => item.id)) ?? [];
+    expect(ids.indexOf('tasks')).toBeGreaterThan(-1);
+    expect(ids.indexOf('tasks')).toBeGreaterThan(ids.indexOf('personas'));
+  });
+
+  it('includes the run monitor and routing reference as Agents children, after the task pool', () => {
+    const agentic = ADMIN_NAV.find((group) => group.id === 'agentic');
+    const agents = agentic?.items.find((item) => item.href === '/admin/agents');
+    const childItems = agents?.childGroups?.flatMap((group) => group.items) ?? [];
+    const ids = childItems.map((item) => item.id);
+
+    expect(ids.indexOf('runs')).toBeGreaterThan(-1);
+    expect(ids.indexOf('routing')).toBeGreaterThan(-1);
+    expect(ids.indexOf('runs')).toBeGreaterThan(ids.indexOf('tasks'));
+    expect(ids.indexOf('routing')).toBeGreaterThan(ids.indexOf('tasks'));
+
+    expect(childItems.find((item) => item.id === 'runs')?.href).toBe('/admin/agents/runs');
+    expect(childItems.find((item) => item.id === 'routing')?.href).toBe('/admin/agents/routing');
+  });
+
+  it('includes Authors as an Agentic sibling of Agents, with its own reviewer roster child', () => {
+    const agentic = ADMIN_NAV.find((group) => group.id === 'agentic');
+    const authors = agentic?.items.find((item) => item.href === '/admin/authors');
+    expect(authors).toBeDefined();
+    expect(authors?.childGroups).not.toBe(agentic?.items.find((item) => item.href === '/admin/agents')?.childGroups);
+
+    const childItems = authors?.childGroups?.flatMap((group) => group.items) ?? [];
+    expect(childItems.find((item) => item.id === 'review-queue')?.href).toBe('/admin/authors');
+    expect(childItems.find((item) => item.id === 'reviewers')?.href).toBe('/admin/authors/reviewers');
   });
 
   it('resolves items by id', () => {

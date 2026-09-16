@@ -22,7 +22,8 @@ export type CostActivityKey =
   | 'generate_reel_thumbnail'
   | 'generate_story_text_overlay'
   | 'batch_image_generation'
-  | 'stateful_image_generation';
+  | 'stateful_image_generation'
+  | 'agentic_creator';
 
 export interface CostTelemetryContext {
   activityKey: CostActivityKey;

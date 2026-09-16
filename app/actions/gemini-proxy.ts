@@ -1,15 +1,14 @@
 'use server';
 
 import { GoogleGenAI } from '@google/genai';
-import { beatSchema, reelDraftSchema, seedPlanSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
 import { LOCKED_PROMPT_GUARDRAILS } from '@/lib/ai/prompt-config.shared';
 import type { TaskKey } from '@/lib/ai/model-config.shared';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type { GeminiImageSize } from '@/lib/ai/pricing';
+import { logTiming as logTimingEvent } from '@/lib/logging/timing.shared';
 
-const GEMINI_TEXT_TIMEOUT_MS = 30_000;
 const GEMINI_IMAGE_TIMEOUT_MS = 90_000;
 const GEMINI_TTS_TIMEOUT_MS = 120_000;
 
@@ -27,14 +26,14 @@ async function timeGeminiStep<T>(
   const startedAt = geminiNowMs();
   try {
     const result = await fn();
-    console.info(`[timing:${scope}]`, {
+    logTimingEvent(scope, {
       durationMs: Math.round(geminiNowMs() - startedAt),
       success: true,
       ...meta,
     });
     return result;
   } catch (error) {
-    console.info(`[timing:${scope}]`, {
+    logTimingEvent(scope, {
       durationMs: Math.round(geminiNowMs() - startedAt),
       success: false,
       ...meta,
@@ -59,202 +58,9 @@ function getAI(): GoogleGenAI {
   return new GoogleGenAI({ apiKey: key });
 }
 
-export interface TextCallParams {
-  task: Extract<TaskKey, 'story_generation' | 'reel_story_generation' | 'seed_plan_generation' | 'seeded_beat_materialization' | 'visual_prompt' | 'reel_visual_prompt'>;
-  model: string;
-  prompt: string;
-  temperature?: number;
-  telemetry?: CostTelemetryContext;
-}
-
-export interface VisionTextCallParams {
-  task: Extract<TaskKey, 'graphic_style_extraction'>;
-  model: string;
-  prompt: string;
-  referenceParts: InlineImagePart[];
-  temperature?: number;
-  telemetry?: CostTelemetryContext;
-}
-
-export async function callGeminiText(params: TextCallParams): Promise<string> {
-  const { task, model, prompt, temperature, telemetry } = params;
-  const ai = getAI();
-
-  const schemaMap = {
-    story_generation: beatSchema,
-    reel_story_generation: reelDraftSchema,
-    seed_plan_generation: seedPlanSchema,
-    seeded_beat_materialization: beatSchema,
-    visual_prompt: storyboardPlanSchema,
-    reel_visual_prompt: storyboardPlanSchema,
-  } as const;
-
-  const flagVal = await getFeatureFlagValue('gemini_text_timeout_ms');
-  const timeoutMs = (flagVal ? parseInt(flagVal, 10) : 0) || GEMINI_TEXT_TIMEOUT_MS;
-
-  const startedAt = geminiNowMs();
-  const response = await timeGeminiStep(
-    `gemini_proxy.${task}`,
-    {
-      model,
-      timeoutMs,
-      promptChars: prompt.length,
-    },
-    () => withTimeout(
-      ai.models.generateContent({
-        model,
-        contents: prompt,
-        config: {
-          systemInstruction: LOCKED_PROMPT_GUARDRAILS[task],
-          responseMimeType: 'application/json',
-          responseSchema: schemaMap[task],
-          temperature: temperature ?? 0.7,
-        },
-      }),
-      timeoutMs,
-      task
-    )
-  );
-
-  if (telemetry) {
-    await recordModelCostEvent({
-      context: telemetry,
-      taskKey: task,
-      modelId: model,
-      inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
-      outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
-      latencyMs: geminiNowMs() - startedAt,
-      metadata: {
-        promptChars: prompt.length,
-        temperature: temperature ?? 0.7,
-      },
-    });
-  }
-
-  const text = response.text;
-  if (!text) throw new Error(`Empty response from Gemini for task: ${task}`);
-  return text;
-}
-
-export async function callGeminiVisionText(params: VisionTextCallParams): Promise<string> {
-  const { task, model, prompt, referenceParts, temperature, telemetry } = params;
-  const ai = getAI();
-
-  const parts: any[] = [{ text: prompt }];
-  for (const ref of referenceParts) {
-    parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.data } });
-  }
-  const contents = [{ role: 'user', parts }];
-
-  const flagVal = await getFeatureFlagValue('gemini_text_timeout_ms');
-  const timeoutMs = (flagVal ? parseInt(flagVal, 10) : 0) || GEMINI_TEXT_TIMEOUT_MS;
-
-  const startedAt = geminiNowMs();
-  const response = await timeGeminiStep(
-    `gemini_proxy.${task}`,
-    { model, timeoutMs, referenceCount: referenceParts.length, promptChars: prompt.length },
-    () => withTimeout(
-      ai.models.generateContent({
-        model,
-        contents,
-        config: {
-          systemInstruction: LOCKED_PROMPT_GUARDRAILS[task],
-          responseMimeType: 'text/plain',
-          temperature: temperature ?? 0.4,
-        },
-      }),
-      timeoutMs,
-      task
-    )
-  );
-
-  if (telemetry) {
-    await recordModelCostEvent({
-      context: telemetry,
-      taskKey: task,
-      modelId: model,
-      inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
-      outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
-      latencyMs: geminiNowMs() - startedAt,
-      metadata: { promptChars: prompt.length, referenceCount: referenceParts.length },
-    });
-  }
-
-  const text = response.text;
-  if (!text) throw new Error(`Empty response from Gemini for task: ${task}`);
-  return text.trim();
-}
-
 export interface InlineImagePart {
   mimeType: string;
   data: string; // raw base64, no data: prefix
-}
-
-export interface ReferenceAnalysisCallParams {
-  task: Extract<TaskKey, 'reference_character_analysis' | 'reference_world_analysis'>;
-  model: string;
-  /** Full instruction prompt (built inline in lib/ai/reference-analysis.ts). */
-  prompt: string;
-  referenceParts: InlineImagePart[];
-  temperature?: number;
-  telemetry?: CostTelemetryContext;
-}
-
-/**
- * Multimodal identity / World DNA extraction: sends the uploaded reference image
- * plus a JSON-instruction prompt and returns the raw JSON text for the caller to
- * parse. Separate from callGeminiVisionText because these tasks are not part of
- * the admin prompt playground (no LOCKED_PROMPT_GUARDRAILS entry) and require
- * JSON output.
- */
-export async function callGeminiReferenceAnalysis(params: ReferenceAnalysisCallParams): Promise<string> {
-  const { task, model, prompt, referenceParts, temperature, telemetry } = params;
-  const ai = getAI();
-
-  const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
-    { text: prompt },
-  ];
-  for (const ref of referenceParts) {
-    parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.data } });
-  }
-
-  const flagVal = await getFeatureFlagValue('gemini_text_timeout_ms');
-  const timeoutMs = (flagVal ? parseInt(flagVal, 10) : 0) || GEMINI_TEXT_TIMEOUT_MS;
-
-  const startedAt = geminiNowMs();
-  const response = await timeGeminiStep(
-    `gemini_proxy.${task}`,
-    { model, timeoutMs, referenceCount: referenceParts.length, promptChars: prompt.length },
-    () =>
-      withTimeout(
-        ai.models.generateContent({
-          model,
-          contents: [{ role: 'user', parts }],
-          config: {
-            responseMimeType: 'application/json',
-            temperature: temperature ?? 0.2,
-          },
-        }),
-        timeoutMs,
-        task
-      )
-  );
-
-  if (telemetry) {
-    await recordModelCostEvent({
-      context: telemetry,
-      taskKey: task,
-      modelId: model,
-      inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
-      outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
-      latencyMs: geminiNowMs() - startedAt,
-      metadata: { promptChars: prompt.length, referenceCount: referenceParts.length },
-    });
-  }
-
-  const text = response.text;
-  if (!text) throw new Error(`Empty response from Gemini for task: ${task}`);
-  return text.trim();
 }
 
 export interface ImageCallParams {

@@ -1,0 +1,639 @@
+// ── Agentic Creator: novelty scoring ───────────────────────────────────
+//
+// Pure and isomorphic. The server half (lib/agentic/memory.ts) fetches
+// candidate priors and records verdicts; everything that decides whether a
+// story is too similar to one we already have lives here, so it can be tested
+// without a database.
+//
+// DECISION D3 (docs/agentic-creator-decisions.md): there is no pgvector in this
+// database and none is being added. Similarity is deterministic text scoring
+// plus, only inside a narrow ambiguous band, one economy-tier model call.
+//
+// What is reused rather than rewritten, from lib/ai/character-novelty.shared.ts
+// (already proven, already tested, already covered by a smoke suite):
+//   - normalizeCharacterName / findSimilarRecentName for cast reuse. That
+//     module's name matching already handles titles ("Captain X"), single-token
+//     containment and one-character edits, which is exactly the problem here.
+//   - appearanceSimilarity as the token-overlap measure for PROSE fields
+//     (premise, setting). It is a Dice coefficient over content tokens and
+//     requires >= 5 tokens on each side, which premises and setting summaries
+//     comfortably clear.
+//
+// What is new here, and why: titles are two to five words, so they fall under
+// appearanceSimilarity's 5-token floor and always score 0. Titles therefore get
+// trigramSimilarity() below, which reimplements Postgres pg_trgm's algorithm
+// (word padding + 3-grams + Jaccard). That is deliberate: lib/agentic/memory.ts
+// retrieves candidate priors with SQL similarity() over pg_trgm GIN indexes, and
+// the in-process scorer needs to agree with the index that selected the rows.
+// Two different notions of "similar" across those layers would silently drop
+// candidates the scorer would have flagged.
+
+import {
+  appearanceSimilarity,
+  findSimilarRecentName,
+  normalizeCharacterName,
+  type RecentCharacterNoveltyEntry,
+} from '@/lib/ai/character-novelty.shared';
+
+// ── Thresholds ─────────────────────────────────────────────────────────
+// Exported so tests pin them and so an operator reading a verdict can see the
+// number it was measured against. Never inline these values at a call site.
+
+/** Title trigram similarity at or above this is a duplicate outright. */
+export const TITLE_BLOCK_THRESHOLD = 0.72;
+/** Title trigram similarity at or above this is worth a human glance. */
+export const TITLE_WARN_THRESHOLD = 0.45;
+
+/** Premise token overlap at or above this means the same story premise. */
+export const PREMISE_BLOCK_THRESHOLD = 0.55;
+export const PREMISE_WARN_THRESHOLD = 0.35;
+
+/** Setting token overlap at or above this means the same place, again. */
+export const SETTING_WARN_THRESHOLD = 0.5;
+
+/** How many reused cast names across UNRELATED stories before we warn. */
+export const CHARACTER_REUSE_WARN_COUNT = 2;
+/** ...and before we block. */
+export const CHARACTER_REUSE_BLOCK_COUNT = 4;
+
+/** How many unrelated priors may share a theme before the theme is saturated. */
+export const THEME_SATURATION_WARN_COUNT = 6;
+
+/**
+ * The band where deterministic scoring is genuinely unsure. Below it, the
+ * candidate is clearly novel; above it, clearly derivative. Only inside it is a
+ * model call worth paying for.
+ */
+export const AMBIGUOUS_BAND_LOW = 0.35;
+export const AMBIGUOUS_BAND_HIGH = 0.62;
+
+/** Priors carried into one scoring pass. Matches the SQL side's top-N fetch. */
+export const NOVELTY_PRIOR_FETCH_LIMIT = 20;
+
+// ── Types ──────────────────────────────────────────────────────────────
+
+export type NoveltyVerdict = 'clear' | 'warn' | 'block';
+export type NoveltyStage = 'pre_generation' | 'post_generation';
+
+/** What we are about to write, or have just written. */
+export interface NoveltyCandidate {
+  title: string;
+  premise: string;
+  themes: string[];
+  characterNames: string[];
+  settingSummary?: string | null;
+  language?: string | null;
+  ageGroup?: string | null;
+  genre?: string | null;
+  /** Set when this story is an episode of an existing series. */
+  seriesId?: string | null;
+}
+
+/** One row of agent_story_memory, as the scorer sees it. */
+export interface NoveltyPrior {
+  id: string;
+  title: string;
+  premise: string;
+  themes: string[];
+  characterNames: string[];
+  settingSummary?: string | null;
+  seriesId?: string | null;
+  episodeNumber?: number | null;
+}
+
+export interface NoveltyTopCandidate {
+  priorId: string;
+  title: string;
+  signal: 'title' | 'premise' | 'setting' | 'character_reuse';
+  score: number;
+  /** True when this prior is another episode of the candidate's own series. */
+  sameSeries: boolean;
+}
+
+export interface NoveltyScoreResult {
+  verdict: NoveltyVerdict;
+  /** Strongest single signal, 0..1. Drives needsModelAdjudication(). */
+  score: number;
+  reasons: string[];
+  topCandidates: NoveltyTopCandidate[];
+}
+
+export interface ScoreNoveltyInput {
+  candidate: NoveltyCandidate;
+  priors: NoveltyPrior[];
+  /**
+   * Explicit series context. Normally left unset — the candidate's own
+   * seriesId is used. Pass it to score a candidate as part of a series before
+   * the series id has been written onto it.
+   */
+  seriesContext?: { seriesId: string | null };
+}
+
+// ── Reason text formatting ───────────────────────────────────────────────
+// Prior titles are untrusted-ish free text: they come from a persona's own
+// generated brief, stored verbatim in agent_story_memory. A reason string
+// naming one ends up in agent_run_events.message and the admin timeline, so
+// one pathological title (a wall of whitespace, embedded newlines, absurd
+// length) must never be interpolated raw into an operator-facing string.
+
+/** Bound on a prior title once it is interpolated into a reason or event message. */
+export const NOVELTY_REASON_TITLE_MAX_CHARS = 60;
+
+/**
+ * Collapses whitespace/newlines and bounds length on a prior title before it
+ * is named in a novelty reason or an agent_run_events message. Returns '' for
+ * absent/blank input so callers render their own fallback wording instead of
+ * an empty quote or the literal word "undefined".
+ */
+export function sanitizeNoveltyTitleForDisplay(
+  title: string | null | undefined,
+  maxChars: number = NOVELTY_REASON_TITLE_MAX_CHARS
+): string {
+  const collapsed = (title ?? '').replace(/\s+/g, ' ').trim();
+  if (!collapsed) return '';
+  return collapsed.length > maxChars ? `${collapsed.slice(0, maxChars).trimEnd()}…` : collapsed;
+}
+
+/**
+ * Finds, among `topCandidates`, the entry for `signal` whose score equals the
+ * running top score for that signal -- i.e. the specific prior that IS the
+ * top score a reason is about to quote. `score` is always the exact value
+ * that was pushed into `topCandidates` for the prior that set it (see the
+ * scoring loop below), so an exact match always succeeds when the caller's
+ * threshold was actually crossed; a mismatch degrades to "no named prior"
+ * rather than guessing.
+ */
+function bestCandidateForSignal(
+  topCandidates: NoveltyTopCandidate[],
+  signal: NoveltyTopCandidate['signal'],
+  score: number
+): NoveltyTopCandidate | undefined {
+  return topCandidates.find((entry) => entry.signal === signal && entry.score === score);
+}
+
+/**
+ * Renders "an existing story" (or `fallbackNoun`) alone when no usable prior
+ * title is available, or "an existing story ("The Real Title")" when one is.
+ * Never renders an empty quote.
+ */
+function describePrior(title: string | null | undefined, fallbackNoun: string): string {
+  const clean = sanitizeNoveltyTitleForDisplay(title);
+  return clean ? `${fallbackNoun} ("${clean}")` : fallbackNoun;
+}
+
+// ── pg_trgm-compatible trigram similarity ──────────────────────────────
+
+/**
+ * Postgres pg_trgm's tokenization: lowercase, split on non-alphanumerics, pad
+ * each word with two leading spaces and one trailing space, then take every
+ * 3-character window. Reimplemented rather than approximated so the in-process
+ * score agrees with the SQL similarity() that selected the candidate rows.
+ */
+function trigrams(value: string): Set<string> {
+  const out = new Set<string>();
+  const words = value
+    .normalize('NFKC')
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+
+  for (const word of words) {
+    const padded = `  ${word} `;
+    for (let i = 0; i + 3 <= padded.length; i += 1) {
+      out.add(padded.slice(i, i + 3));
+    }
+  }
+  return out;
+}
+
+/** Jaccard over trigram sets, matching pg_trgm's similarity(). Range 0..1. */
+export function trigramSimilarity(left: string, right: string): number {
+  const a = trigrams(left);
+  const b = trigrams(right);
+  if (a.size === 0 || b.size === 0) return 0;
+
+  let intersection = 0;
+  for (const gram of a) {
+    if (b.has(gram)) intersection += 1;
+  }
+  const union = a.size + b.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
+// ── Scoring ────────────────────────────────────────────────────────────
+
+function toRecentEntries(names: string[]): RecentCharacterNoveltyEntry[] {
+  return names
+    .filter((name) => typeof name === 'string' && name.trim().length > 0)
+    .map((name) => ({ displayName: name, normalizedName: normalizeCharacterName(name) }));
+}
+
+function prose(value: string | null | undefined): string {
+  return typeof value === 'string' ? value : '';
+}
+
+/**
+ * Scores a candidate against recent priors.
+ *
+ * SERIES CONTINUITY IS NOT DUPLICATION. When a prior belongs to the same series
+ * as the candidate, recurring cast and a recurring setting are the entire point
+ * of a series -- suppressing those two signals for sibling episodes is what
+ * stops the system from refusing to write episode 4 because it has the same
+ * characters as episode 3. Theme saturation likewise ignores siblings, since a
+ * series is expected to keep working the same themes.
+ *
+ * What is NOT suppressed for siblings: title and premise similarity. Episode 4
+ * must not retell episode 2, and that is a real failure the check must still
+ * catch. Getting this distinction wrong in either direction is the single most
+ * likely defect in this file.
+ */
+export function scoreNovelty({ candidate, priors, seriesContext }: ScoreNoveltyInput): NoveltyScoreResult {
+  const reasons: string[] = [];
+  const topCandidates: NoveltyTopCandidate[] = [];
+
+  const seriesId = seriesContext ? seriesContext.seriesId : (candidate.seriesId ?? null);
+  const isSibling = (prior: NoveltyPrior): boolean =>
+    Boolean(seriesId) && Boolean(prior.seriesId) && prior.seriesId === seriesId;
+
+  if (priors.length === 0) {
+    return { verdict: 'clear', score: 0, reasons: ['No prior stories in memory to compare against.'], topCandidates: [] };
+  }
+
+  let titleTop = 0;
+  let premiseTop = 0;
+  let settingTop = 0;
+
+  for (const prior of priors) {
+    const sameSeries = isSibling(prior);
+
+    // Title and premise are scored for every prior, siblings included.
+    const titleScore = trigramSimilarity(candidate.title, prior.title);
+    if (titleScore > titleTop) titleTop = titleScore;
+    if (titleScore >= TITLE_WARN_THRESHOLD) {
+      topCandidates.push({ priorId: prior.id, title: prior.title, signal: 'title', score: titleScore, sameSeries });
+    }
+
+    const premiseScore = appearanceSimilarity(prose(candidate.premise), prose(prior.premise));
+    if (premiseScore > premiseTop) premiseTop = premiseScore;
+    if (premiseScore >= PREMISE_WARN_THRESHOLD) {
+      topCandidates.push({ priorId: prior.id, title: prior.title, signal: 'premise', score: premiseScore, sameSeries });
+    }
+
+    // Setting repetition is expected within a series; skip siblings.
+    if (!sameSeries) {
+      const settingScore = appearanceSimilarity(prose(candidate.settingSummary), prose(prior.settingSummary));
+      if (settingScore > settingTop) settingTop = settingScore;
+      if (settingScore >= SETTING_WARN_THRESHOLD) {
+        topCandidates.push({ priorId: prior.id, title: prior.title, signal: 'setting', score: settingScore, sameSeries });
+      }
+    }
+  }
+
+  // Cast reuse, counted only against stories outside the candidate's series.
+  const unrelatedPriors = priors.filter((prior) => !isSibling(prior));
+  const unrelatedCast = toRecentEntries(unrelatedPriors.flatMap((prior) => prior.characterNames ?? []));
+  const reusedNames = candidate.characterNames.filter((name) => findSimilarRecentName(name, unrelatedCast));
+  const reuseCount = reusedNames.length;
+
+  if (reuseCount > 0) {
+    const owner = unrelatedPriors.find((prior) =>
+      (prior.characterNames ?? []).some((priorName) =>
+        reusedNames.some((reused) => normalizeCharacterName(reused) === normalizeCharacterName(priorName))
+      )
+    );
+    if (owner) {
+      topCandidates.push({
+        priorId: owner.id,
+        title: owner.title,
+        signal: 'character_reuse',
+        score: Math.min(1, reuseCount / CHARACTER_REUSE_BLOCK_COUNT),
+        sameSeries: false,
+      });
+    }
+  }
+
+  // Theme saturation, likewise ignoring the candidate's own series.
+  const candidateThemes = new Set(candidate.themes.map((theme) => theme.trim().toLowerCase()).filter(Boolean));
+  const saturatedCount = candidateThemes.size === 0
+    ? 0
+    : unrelatedPriors.filter((prior) =>
+        (prior.themes ?? []).some((theme) => candidateThemes.has(theme.trim().toLowerCase()))
+      ).length;
+
+  // ── Verdict ──────────────────────────────────────────────────────────
+  let verdict: NoveltyVerdict = 'clear';
+  const raise = (next: NoveltyVerdict) => {
+    if (next === 'block' || (next === 'warn' && verdict === 'clear')) verdict = next;
+  };
+
+  if (titleTop >= TITLE_BLOCK_THRESHOLD) {
+    raise('block');
+    const ref = describePrior(bestCandidateForSignal(topCandidates, 'title', titleTop)?.title, 'an existing story');
+    reasons.push(`Title is ${(titleTop * 100).toFixed(0)}% similar to ${ref} (block at ${TITLE_BLOCK_THRESHOLD * 100}%).`);
+  } else if (titleTop >= TITLE_WARN_THRESHOLD) {
+    raise('warn');
+    const ref = describePrior(bestCandidateForSignal(topCandidates, 'title', titleTop)?.title, 'an existing story');
+    reasons.push(`Title is ${(titleTop * 100).toFixed(0)}% similar to ${ref}.`);
+  }
+
+  if (premiseTop >= PREMISE_BLOCK_THRESHOLD) {
+    raise('block');
+    const ref = describePrior(bestCandidateForSignal(topCandidates, 'premise', premiseTop)?.title, 'an existing story');
+    reasons.push(`Premise overlaps ${ref} by ${(premiseTop * 100).toFixed(0)}% (block at ${PREMISE_BLOCK_THRESHOLD * 100}%).`);
+  } else if (premiseTop >= PREMISE_WARN_THRESHOLD) {
+    raise('warn');
+    const ref = describePrior(bestCandidateForSignal(topCandidates, 'premise', premiseTop)?.title, 'an existing story');
+    reasons.push(`Premise overlaps ${ref} by ${(premiseTop * 100).toFixed(0)}%.`);
+  }
+
+  if (reuseCount >= CHARACTER_REUSE_BLOCK_COUNT) {
+    raise('block');
+    reasons.push(`${reuseCount} character names reused from unrelated stories: ${reusedNames.join(', ')}.`);
+  } else if (reuseCount >= CHARACTER_REUSE_WARN_COUNT) {
+    raise('warn');
+    reasons.push(`${reuseCount} character names reused from unrelated stories: ${reusedNames.join(', ')}.`);
+  }
+
+  if (settingTop >= SETTING_WARN_THRESHOLD) {
+    raise('warn');
+    const ref = describePrior(bestCandidateForSignal(topCandidates, 'setting', settingTop)?.title, 'an unrelated story');
+    reasons.push(`Setting repeats ${ref} by ${(settingTop * 100).toFixed(0)}%.`);
+  }
+
+  if (saturatedCount >= THEME_SATURATION_WARN_COUNT) {
+    raise('warn');
+    reasons.push(`${saturatedCount} recent unrelated stories already share these themes.`);
+  }
+
+  if (seriesId && priors.some(isSibling)) {
+    reasons.push('Series continuity: recurring cast and setting from sibling episodes were not counted as repetition.');
+  }
+
+  if (verdict === 'clear' && reasons.length === 0) {
+    reasons.push('No significant similarity to recent stories.');
+  }
+
+  const score = Math.max(
+    titleTop,
+    premiseTop,
+    settingTop,
+    reuseCount / CHARACTER_REUSE_BLOCK_COUNT,
+    saturatedCount / THEME_SATURATION_WARN_COUNT
+  );
+
+  topCandidates.sort((left, right) => right.score - left.score);
+
+  return { verdict, score: Math.min(1, score), reasons, topCandidates: topCandidates.slice(0, 5) };
+}
+
+/**
+ * True only inside the band where deterministic scoring is genuinely unsure.
+ * Outside it a model call buys nothing: below the band the candidate is clearly
+ * novel, above it clearly derivative, and either way the verdict stands.
+ */
+export function needsModelAdjudication(score: number): boolean {
+  return score >= AMBIGUOUS_BAND_LOW && score < AMBIGUOUS_BAND_HIGH;
+}
+
+/** Severity order for a novelty verdict. Higher blocks harder. */
+export const NOVELTY_VERDICT_SEVERITY: Record<NoveltyVerdict, number> = { clear: 0, warn: 1, block: 2 };
+
+/**
+ * Combines the deterministic verdict with the model adjudicator's opinion.
+ *
+ * THE ADJUDICATOR MAY DOWNGRADE, NEVER ESCALATE. It can rescue a candidate the
+ * thresholds were too harsh on; it can never invent a severity the tested,
+ * deterministic layer did not already reach. The result is therefore always the
+ * LESS severe of the two.
+ *
+ * This is a response to measured behaviour, not a hypothetical. On four
+ * adjudications of identical input (top_score 0.5000, two reused character
+ * names) the model returned block, block, warn, block. Because a block failed
+ * the run and a retry re-adjudicated, that made a 'block' mean 'blocked unless
+ * one of up to three coin flips disagrees'. Worse, the deterministic layer had
+ * never said block at all: CHARACTER_REUSE_BLOCK_COUNT is 4 and only 2 names
+ * were reused, so 0.5 is literally 2/4 -- a warn. An unauditable model call was
+ * the sole cause of a terminal run failure, which is exactly the property this
+ * codebase refuses elsewhere (see rankCoverageGaps' determinism test: an
+ * unauditable supervisor is worse than none).
+ *
+ * A deterministic block inside the ambiguous band is still reachable and still
+ * downgradable -- a premise scoring 0.55-0.62 crosses PREMISE_BLOCK_THRESHOLD
+ * while staying inside the band -- so the adjudicator keeps the job it was
+ * actually introduced to do.
+ */
+export function applyAdjudication(deterministic: NoveltyVerdict, adjudicated: NoveltyVerdict): NoveltyVerdict {
+  return NOVELTY_VERDICT_SEVERITY[adjudicated] < NOVELTY_VERDICT_SEVERITY[deterministic] ? adjudicated : deterministic;
+}
+
+/** Prompt for the economy-tier adjudication call (TaskKey agent_novelty_assessment). */
+export function buildNoveltyAdjudicationPrompt(
+  candidate: NoveltyCandidate,
+  topCandidates: NoveltyTopCandidate[]
+): string {
+  const priorLines = topCandidates.length
+    ? topCandidates
+        .map((entry, index) =>
+          `${index + 1}. "${entry.title}" — flagged on ${entry.signal} at ${(entry.score * 100).toFixed(0)}%${entry.sameSeries ? ' (same series as the candidate)' : ''}`
+        )
+        .join('\n')
+    : '(none)';
+
+  return [
+    'You are checking whether a proposed new story is too similar to stories a platform has already published.',
+    '',
+    'Proposed story:',
+    `Title: ${candidate.title}`,
+    `Premise: ${candidate.premise}`,
+    `Themes: ${candidate.themes.join(', ') || '(none given)'}`,
+    `Characters: ${candidate.characterNames.join(', ') || '(none given)'}`,
+    `Setting: ${prose(candidate.settingSummary) || '(none given)'}`,
+    candidate.seriesId ? 'This story is an episode of an existing series.' : 'This story is standalone.',
+    '',
+    'Existing stories flagged as similar by deterministic scoring:',
+    priorLines,
+    '',
+    'Judge whether the proposed story is genuinely derivative, or merely shares surface features',
+    'such as a genre, an age group, or a common setting. If the proposed story is an episode of a',
+    'series, shared characters and settings with its own series are expected and are NOT duplication —',
+    'only a repeated plot is.',
+    '',
+    'Respond with JSON only, no prose outside it:',
+    '{"verdict":"clear|warn|block","reason":"one sentence"}',
+  ].join('\n');
+}
+
+// ── Persona memory → brief prompt injection ─────────────────────────────
+//
+// Storage (lib/agentic/memory.ts's updatePersonaMemory / appendCapped) keeps
+// up to PERSONA_TITLE_HISTORY_LIMIT / PERSONA_THEME_HISTORY_LIMIT /
+// CHARACTER_NAME_HISTORY_LIMIT (50/50/75) entries per persona. That is a
+// scratchpad sized to answer "has this persona done this before" -- it was
+// never meant to be a prompt payload, and nothing read it back into
+// generation until now (the defect this file's caller exists to fix).
+//
+// Injecting the whole scratchpad into every brief would grow the prompt
+// without bound as a persona's story count climbs toward those caps -- the
+// owner's explicit worry. So injection uses a SEPARATE, DELIBERATELY SMALLER
+// budget: a handful of the persona's most recent entries per field, premises
+// truncated to a short prefix (they are 2-4 sentences and by far the largest
+// contributor), and a hard ceiling on the whole rendered block's length so
+// even a pathological input -- more entries than the storage cap should ever
+// allow, or unexpectedly long strings -- cannot blow the prompt up. Never
+// derive these from the storage caps; they answer a different question
+// ("what's worth mentioning to steer this one brief" vs "what's worth
+// keeping at all").
+
+/** How many of the persona's most recent titles to mention. */
+export const MEMORY_BRIEF_TITLE_LIMIT = 5;
+/** How many of the persona's most recent premises to mention. */
+export const MEMORY_BRIEF_PREMISE_LIMIT = 3;
+/** How many of the persona's most recent character names to mention. */
+export const MEMORY_BRIEF_CHARACTER_NAME_LIMIT = 10;
+/** How many of the persona's most recent settings to mention. */
+export const MEMORY_BRIEF_SETTING_LIMIT = 5;
+/** How many of the persona's most recent themes to mention. */
+export const MEMORY_BRIEF_THEME_LIMIT = 5;
+/** A premise is 2-4 sentences; only a short prefix is worth spending tokens on. */
+export const MEMORY_BRIEF_PREMISE_TRUNCATE_CHARS = 120;
+/** Hard ceiling on the whole rendered block, regardless of what is handed in. */
+export const MEMORY_BRIEF_MAX_CHARS = 1500;
+
+/**
+ * The slice of AgentPersonaMemory (personas.shared.ts) this formatter needs.
+ * Declared locally rather than importing that type, so this pure module does
+ * not take on a dependency on the persona module just to describe five
+ * string arrays -- an AgentPersonaMemory value satisfies this structurally.
+ */
+export interface PersonaMemorySnapshot {
+  recentTitles: string[];
+  recentPremises: string[];
+  characterNames: string[];
+  settingsUsed: string[];
+  themesUsed: string[];
+}
+
+export interface FormatPersonaMemoryOptions {
+  titleLimit?: number;
+  premiseLimit?: number;
+  characterNameLimit?: number;
+  settingLimit?: number;
+  themeLimit?: number;
+  premiseTruncateChars?: number;
+  maxChars?: number;
+}
+
+function cleanList(values: string[] | null | undefined): string[] {
+  return (values ?? [])
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .map((value) => value.trim());
+}
+
+/**
+ * Most-recent-first slice of a persona-memory array.
+ *
+ * appendCapped (lib/agentic/memory.ts) builds each stored array as
+ * `[...incoming, ...(existing ?? [])]` before deduping and capping, so index
+ * 0 is always the NEWEST entry and the array degrades toward its tail as it
+ * grows past the storage cap. Taking the tail here instead of the head would
+ * silently feed the persona its OLDEST history -- both ends typecheck
+ * identically as string[], so nothing but a test that pins the direction
+ * (see memory.shared.test.ts) would catch getting this backwards.
+ */
+function takeMostRecent(values: string[], limit: number): string[] {
+  return values.slice(0, Math.max(0, limit));
+}
+
+function truncatePremise(premise: string, limit: number): string {
+  if (premise.length <= limit) return premise;
+  return `${premise.slice(0, limit).trimEnd()}…`;
+}
+
+/**
+ * Formats a persona's own recent-story memory into an instruction block to
+ * splice into the brief prompt, or '' when there is nothing worth saying --
+ * absent memory, or a memory whose fields are all empty (the common case
+ * right after migration 103's AFTER INSERT trigger creates a fresh row and
+ * the persona has not written anything yet).
+ *
+ * Rendered as an instruction ("here is what you already wrote, do something
+ * different"), not as raw data dumped on the model -- the model is meant to
+ * read this as its own recent output and diverge from it.
+ *
+ * THIS IS A NUDGE, NOT A GUARANTEE. It reduces how often a persona repeats a
+ * recent title, premise, cast or setting; it does not decide whether a story
+ * IS too similar to a prior one. That authority stays entirely with
+ * runNoveltyCheck (lib/agentic/memory.ts), per decision D9 -- a model call
+ * (and a fortiori a hint fed to one) never gets to be the thing that clears
+ * or blocks a story. Do not remove or weaken runNoveltyCheck on the theory
+ * that this prompt block makes it redundant; it does not.
+ */
+export function formatPersonaMemoryForBrief(
+  memory: PersonaMemorySnapshot | null | undefined,
+  options: FormatPersonaMemoryOptions = {}
+): string {
+  if (!memory) return '';
+
+  const titleLimit = options.titleLimit ?? MEMORY_BRIEF_TITLE_LIMIT;
+  const premiseLimit = options.premiseLimit ?? MEMORY_BRIEF_PREMISE_LIMIT;
+  const characterNameLimit = options.characterNameLimit ?? MEMORY_BRIEF_CHARACTER_NAME_LIMIT;
+  const settingLimit = options.settingLimit ?? MEMORY_BRIEF_SETTING_LIMIT;
+  const themeLimit = options.themeLimit ?? MEMORY_BRIEF_THEME_LIMIT;
+  const premiseTruncateChars = options.premiseTruncateChars ?? MEMORY_BRIEF_PREMISE_TRUNCATE_CHARS;
+  const maxChars = options.maxChars ?? MEMORY_BRIEF_MAX_CHARS;
+
+  const titles = takeMostRecent(cleanList(memory.recentTitles), titleLimit);
+  const premises = takeMostRecent(cleanList(memory.recentPremises), premiseLimit).map((premise) =>
+    truncatePremise(premise, premiseTruncateChars)
+  );
+  const characterNames = takeMostRecent(cleanList(memory.characterNames), characterNameLimit);
+  const settings = takeMostRecent(cleanList(memory.settingsUsed), settingLimit);
+  const themes = takeMostRecent(cleanList(memory.themesUsed), themeLimit);
+
+  if (!titles.length && !premises.length && !characterNames.length && !settings.length && !themes.length) {
+    return '';
+  }
+
+  const lines: string[] = [
+    "This persona's own recent work -- do not repeat it. Write a clearly different title, premise, cast and setting from every story listed below.",
+  ];
+  if (titles.length) lines.push(`Recent titles: ${titles.join(' | ')}`);
+  if (premises.length) {
+    lines.push('Recent premises:');
+    for (const premise of premises) lines.push(`- ${premise}`);
+  }
+  if (characterNames.length) {
+    lines.push(`Recently used character names (reuse only for an intentional recurring character): ${characterNames.join(', ')}`);
+  }
+  if (settings.length) lines.push(`Recently used settings: ${settings.join(', ')}`);
+  if (themes.length) lines.push(`Recently used themes: ${themes.join(', ')}`);
+
+  const block = lines.join('\n');
+  // Defensive, not expected to fire given the per-field caps above: whatever
+  // this function is handed, it must never hand back more than maxChars.
+  return block.length > maxChars ? block.slice(0, maxChars) : block;
+}
+
+/**
+ * True when a Postgres/PostgREST error means migration 105 has not run on this
+ * database, as opposed to any other failure that should surface as a real error.
+ *
+ * Codes only, deliberately. Phase 2a shipped a defect where the personas latch
+ * also matched the table name in the error message, which made a duplicate-key
+ * violation look like an unapplied migration -- the most misleading diagnosis
+ * available. See isMissingPersonaSchemaError in personas.shared.ts.
+ *
+ * This is a latch for migration 105 alone. Per GOTCHAS.md, latches are one per
+ * migration group and are never shared across groups.
+ */
+export function isMissingMemorySchemaError(
+  error: { code?: string; message?: string } | null | undefined
+): boolean {
+  if (!error) return false;
+  return (
+    error.code === '42P01' ||    // undefined_table: agent_story_memory / agent_novelty_checks absent
+    error.code === '42703' ||    // undefined_column
+    error.code === 'PGRST200' || // PostgREST: relationship not found in schema cache
+    error.code === 'PGRST204'    // PostgREST: column not found in schema cache
+  );
+}

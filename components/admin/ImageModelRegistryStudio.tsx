@@ -610,7 +610,7 @@ export default function ImageModelRegistryStudio() {
                               <input
                                 type="number"
                                 min={1200}
-                                max={20000}
+                                max={5000}
                                 step={100}
                                 value={compiler.promptBudgetChars}
                                 onChange={(event) => updatePromptCompiler(record.id, { promptBudgetChars: Number(event.target.value) })}

@@ -1,17 +1,16 @@
 'use server';
 
-import { GoogleGenAI } from '@google/genai';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getModelConfig } from '@/lib/ai/model-config';
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import { LOCKED_PROMPT_GUARDRAILS, resolvePromptTemplate } from '@/lib/ai/prompt-config.shared';
 import { storylineDiscoveryMetadataSchema } from '@/lib/ai/generation-schemas';
+import { generateText } from '@/lib/ai/text-gateway/router';
 import { normalizeDiscoveryIntro } from '@/lib/story/discovery-intro';
 import { normalizeStoredGenre } from '@/lib/story/genres';
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
+import { isAgeGroup } from '@/lib/story/age-groups';
 import type { AgeGroup } from '@/lib/types/story';
-
-const AGE_GROUPS: AgeGroup[] = ['all_ages', 'kids_3_5', 'kids_5_8', 'kids_8_12', 'teens', 'adults'];
 
 const MAX_BEATS_IN_PROMPT = 8;
 const MAX_BEAT_CHARS = 160;
@@ -77,9 +76,6 @@ export async function generateStorylineDiscoveryMetadata(input: {
   title: string;
   beats: unknown;
 }): Promise<StorylineDiscoveryMetadata | null> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
-
   const beatSummaries = buildBeatSummaries(input.beats);
   if (!beatSummaries) return null;
 
@@ -116,21 +112,19 @@ export async function generateStorylineDiscoveryMetadata(input: {
       beatSummaries,
     });
 
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model,
-      contents: prompt,
-      config: {
-        systemInstruction: LOCKED_PROMPT_GUARDRAILS.storyline_discovery_metadata,
-        responseMimeType: 'application/json',
-        responseSchema: storylineDiscoveryMetadataSchema,
-        temperature: temperature ?? 0.4,
-      },
+    const { text } = await generateText({
+      taskKey: 'storyline_discovery_metadata',
+      modelKey: model,
+      prompt,
+      systemInstruction: LOCKED_PROMPT_GUARDRAILS.storyline_discovery_metadata,
+      schema: storylineDiscoveryMetadataSchema,
+      schemaName: 'storyline_discovery_metadata',
+      temperature: temperature ?? 0.4,
     });
 
-    if (!response.text) return null;
+    if (!text) return null;
 
-    const parsed = JSON.parse(response.text) as {
+    const parsed = JSON.parse(text) as {
       intro?: unknown;
       genre?: unknown;
       ageFit?: unknown;
@@ -144,7 +138,7 @@ export async function generateStorylineDiscoveryMetadata(input: {
     return {
       intro,
       genre: normalizeStoredGenre(parsed.genre),
-      ageFit: AGE_GROUPS.includes(ageFit as AgeGroup) ? (ageFit as AgeGroup) : null,
+      ageFit: isAgeGroup(ageFit) ? ageFit : null,
     };
   } catch (error) {
     console.error('Storyline discovery metadata generation failed:', error);

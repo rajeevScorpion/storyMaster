@@ -15,8 +15,13 @@ export interface PromptCompilerCapability {
 }
 
 export const MIN_PROMPT_BUDGET_CHARS = 1200;
-export const MAX_PROMPT_BUDGET_CHARS = 20000;
-export const DEFAULT_PROMPT_BUDGET_CHARS = 2800;
+// The stored promptBudgetChars is a TARGET, not a ceiling: the compiler is
+// allowed to exceed it (recording `over_target`) up to this hard cap, never
+// beyond it. Migration 122 moves every registry row still at the 081 default
+// (2800) up to the new default below.
+export const PROMPT_HARD_MAX_CHARS = 5000;
+export const MAX_PROMPT_BUDGET_CHARS = PROMPT_HARD_MAX_CHARS;
+export const DEFAULT_PROMPT_BUDGET_CHARS = 3000;
 
 const KNOWN_ADAPTER_VERSIONS: readonly PromptCompilerAdapterVersion[] = ['neutral-v1', 'gemini-v1'];
 

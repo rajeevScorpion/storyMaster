@@ -6,7 +6,7 @@ import type { PromptCompilerCapability } from './capability.shared';
 
 const GEMINI: PromptCompilerCapability = {
   enabled: true,
-  promptBudgetChars: 2800,
+  promptBudgetChars: 3000,
   supportsNegativePrompt: false,
   adapterVersion: 'gemini-v1',
 };

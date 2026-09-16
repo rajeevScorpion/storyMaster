@@ -5,13 +5,15 @@
 // options, and image version restore. All actions verify story ownership and
 // enforce feature flags server-side (UI gating alone is not trusted).
 
-import { GoogleGenAI } from '@google/genai';
 import { v4 as uuidv4 } from 'uuid';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { assertCanEditStory } from '@/lib/agentic/reviewers';
 import { getFeatureFlag, getFeatureFlagValue, getModelConfig } from '@/lib/ai/model-config';
 import { optionsRegenerationSchema } from '@/lib/ai/generation-schemas';
 import { OPTIONS_REGENERATION_PROMPT } from '@/lib/ai/prompts';
+import { generateText } from '@/lib/ai/text-gateway/router';
+import { TextGatewayError, errorDetail } from '@/lib/ai/text-gateway/types.shared';
 import { releaseBillableAction } from '@/lib/pricing/enforcement';
 import { signMixedUrls } from '@/lib/media/storage-url-signing';
 import {
@@ -112,10 +114,17 @@ async function requireFeature(flagKey: string, label: string): Promise<void> {
 
 interface OwnedStoryContext {
   userId: string;
-  supabase: Awaited<ReturnType<typeof createClient>>;
+  supabase: Awaited<ReturnType<typeof createClient>> | ReturnType<typeof createAdminClient>;
   storyMap: StoryMap;
 }
 
+// D14/Unit 9b: ownership used to be baked straight into the query
+// (`.eq('user_id', user.id)`), so both a bad storyId and a non-owner
+// produced the same zero-rows "Story not found." -- never "Forbidden.".
+// assertCanEditStory distinguishes owner/reviewer/stranger internally, but
+// this function preserves that original single message for every caller it
+// rejects (a genuine stranger, same as a missing story) rather than leaking
+// "Forbidden." to a caller who was never told this endpoint is owner-only.
 async function requireOwnedStory(storyId: string): Promise<OwnedStoryContext> {
   const supabase = await createClient();
   const {
@@ -123,15 +132,22 @@ async function requireOwnedStory(storyId: string): Promise<OwnedStoryContext> {
   } = await supabase.auth.getUser();
   if (!user) throw new BeatControlError('Not authenticated.');
 
-  const { data: story, error } = await supabase
-    .from('stories')
-    .select('id, user_id, story_map')
-    .eq('id', storyId)
-    .eq('user_id', user.id)
-    .single();
-  if (error || !story?.story_map) throw new BeatControlError('Story not found.');
+  let access: Awaited<ReturnType<typeof assertCanEditStory>>;
+  try {
+    access = await assertCanEditStory(storyId, user.id, ['story_map']);
+  } catch {
+    throw new BeatControlError('Story not found.');
+  }
+  if (!access.story.story_map) throw new BeatControlError('Story not found.');
 
-  return { userId: user.id, supabase, storyMap: story.story_map as StoryMap };
+  // A reviewer write must run on the admin client: stories.UPDATE
+  // (`auth.uid() = user_id`) and beats.UPDATE (`generated_by = auth.uid()`)
+  // both key their RLS predicate on the story's own owner / the beat's own
+  // generated_by, neither of which a reviewer satisfies. The owner path is
+  // untouched -- same session client as before Unit 9b.
+  const client = access.reviewer ? createAdminClient() : supabase;
+
+  return { userId: user.id, supabase: client, storyMap: access.story.story_map as StoryMap };
 }
 
 export interface TimelineImpact {
@@ -522,20 +538,17 @@ export async function regenerateBeatOptions(input: {
       audience,
     })}\n\n${formatAudienceBranchingContract(storyConfig.ageGroup)}`;
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return { status: 'failed', error: 'Story generation is not configured.' };
     const { model, temperature } = await getModelConfig('story_generation');
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: optionsRegenerationSchema,
-        temperature: temperature ?? 0.7,
-      },
+    // No systemInstruction here, matching this call site's behavior before the gateway --
+    // unlike callTextModel's story_generation branch, options regeneration never had a guardrail.
+    const { text: raw } = await generateText({
+      taskKey: 'story_generation',
+      modelKey: model,
+      prompt,
+      schema: optionsRegenerationSchema,
+      schemaName: 'options_regeneration',
+      temperature: temperature ?? 0.7,
     });
-    const raw = response.text;
     if (!raw) return { status: 'failed', error: 'No options were generated. Please try again.' };
     let parsed: { options?: Array<{ label?: string; intent?: string }> };
     try {
@@ -567,9 +580,12 @@ export async function regenerateBeatOptions(input: {
 
     return { status: 'updated', options: nextOptions };
   } catch (error) {
+    console.error('[beat-control] regenerateBeatOptions failed:', errorDetail(error));
     return {
       status: 'failed',
-      error: error instanceof Error ? error.message : 'Failed to regenerate options.',
+      error: error instanceof BeatControlError || error instanceof TextGatewayError
+        ? error.message
+        : 'Failed to regenerate options.',
     };
   }
 }

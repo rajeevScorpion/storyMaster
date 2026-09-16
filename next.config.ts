@@ -30,6 +30,12 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: false,
   },
+  // Next 16.3's dev Server Function logging prints each call's arguments in full
+  // (e.g. full prompt strings), flooding the terminal. Keep incoming-request
+  // logging on; only silence the per-call argument dump.
+  logging: {
+    serverFunctions: false,
+  },
   // Allow access to remote image placeholder.
   images: {
     // Cover artwork is immutable once published and served from stable paths,

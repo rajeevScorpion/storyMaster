@@ -1,5 +1,7 @@
 // Shared types and constants — safe to import from both client and server code
 
+import type { TextReasoningLevel } from '@/lib/ai/text-models.shared';
+
 export type TaskKey =
   | 'story_generation'
   | 'reel_story_generation'
@@ -18,12 +20,19 @@ export type TaskKey =
   | 'tts'
   | 'reel_tts'
   | 'story_text_overlay_alignment'
-  | 'voice_selection';
+  | 'voice_selection'
+  | 'agent_novelty_assessment'
+  | 'agent_supervisor_planning'
+  | 'agent_story_brief'
+  | 'agent_seed_story_writing'
+  | 'agent_story_evaluation';
 
 export interface ModelConfig {
   taskKey: TaskKey;
   modelId: string;
   temperature: number | null;
+  /** Null when the task has no override, or when migration 120 is not applied. */
+  reasoningLevel: TextReasoningLevel | null;
   updatedAt: string;
 }
 
@@ -54,6 +63,11 @@ export const TASK_DEFINITIONS: {
   { key: 'reel_tts', label: 'Reel Text-to-Speech', description: 'Narrates reel text with short-form pacing and selected narration style' },
   { key: 'story_text_overlay_alignment', label: 'Story Text Overlay Alignment', description: 'Aligns generated narration audio to story text for timed overlay highlighting' },
   { key: 'voice_selection', label: 'Legacy Voice Selection', description: 'Legacy AI selector used only when user-led narration voice selection is off' },
+  { key: 'agent_novelty_assessment', label: 'Agent Novelty Assessment', description: 'Economy-tier second opinion on whether an agent-proposed story is genuinely derivative, called only when deterministic scoring lands in the ambiguous band' },
+  { key: 'agent_supervisor_planning', label: 'Agent Supervisor Planning', description: 'Editorial Supervisor call that turns ranked catalogue coverage gaps into proposed story commissions for active personas' },
+  { key: 'agent_story_brief', label: 'Agent Story Brief', description: 'Turns a commissioned task into a working title, premise, themes and characters before any prose is written' },
+  { key: 'agent_seed_story_writing', label: 'Agent Seed Story Writing', description: 'Writes the full source prose for an agent-commissioned story, in the persona\'s own language, for the seeded-story pipeline' },
+  { key: 'agent_story_evaluation', label: 'Agent Story Evaluation', description: 'Independent model pass judging coherence, age fit, persona fidelity, pacing and safety before a run reaches human review' },
 ];
 
 export const DEFAULT_MODELS: Record<TaskKey, { modelId: string; temperature: number | null }> = {
@@ -68,24 +82,28 @@ export const DEFAULT_MODELS: Record<TaskKey, { modelId: string; temperature: num
   image_generation: { modelId: DEFAULT_IMAGE_MODEL_ID, temperature: null },
   reel_image_generation: { modelId: DEFAULT_IMAGE_MODEL_ID, temperature: null },
   portrait_generation: { modelId: DEFAULT_IMAGE_MODEL_ID, temperature: null },
-  graphic_style_extraction: { modelId: 'gemini-2.5-flash', temperature: 0.4 },
+  graphic_style_extraction: { modelId: 'gemini-3.8-flash', temperature: 0.4 },
   reference_character_analysis: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.2 },
   reference_world_analysis: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.2 },
   tts: { modelId: DEFAULT_TTS_MODEL_ID, temperature: null },
   reel_tts: { modelId: DEFAULT_TTS_MODEL_ID, temperature: null },
   story_text_overlay_alignment: { modelId: 'elevenlabs-forced-alignment', temperature: null },
   voice_selection: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.3 },
+  // Economy tier by design: this call only breaks ties inside a narrow
+  // ambiguous band, and runs on every agent story. Economy now means Low
+  // thinking on Gemini 3.8 Flash, set per task in model_config -- see decision D3.
+  agent_novelty_assessment: { modelId: 'gemini-3.8-flash', temperature: 0.2 },
+  agent_supervisor_planning: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.4 },
+  agent_story_brief: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.6 },
+  agent_seed_story_writing: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.85 },
+  agent_story_evaluation: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.3 },
 };
 
 // Known Gemini models for the playground dropdown
 export const KNOWN_MODELS = {
   text: [
+    'gemini-3.8-flash',
     'gemini-3.5-flash',
-    'gemini-3.1-pro-preview',
-    'gemini-3.1-flash-lite',
-    'gemini-2.5-pro',
-    'gemini-2.5-flash',
-    'gemini-2.5-flash-lite',
   ],
   image: [
     'gemini-3.1-flash-image',

@@ -14,7 +14,7 @@ import {
   resolvePromptTemplate,
   validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
-import { beatSchema, reelDraftSchema, seedPlanSchema, storyBibleGenerationSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
+import { beatSchema, reelDraftSchema, seedPlanSchema, storyBibleGenerationSchema, storyboardPlanSchema, storyboardContinuityPlanSchema } from '@/lib/ai/generation-schemas';
 import {
   getPromptPlaygroundState,
   getPublishedPrompt,
@@ -24,6 +24,9 @@ import {
   savePromptDraft,
   type PromptPlaygroundState,
 } from '@/lib/ai/prompt-config';
+import { generateText } from '@/lib/ai/text-gateway/router';
+import { computeTextCostUsd } from '@/lib/ai/text-gateway/cost.shared';
+import { getTextModelRegistry, validateTextModelSelection } from '@/lib/ai/text-models';
 
 const AVAILABLE_VOICES = [
   'Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Orus', 'Aoede',
@@ -123,6 +126,9 @@ export async function applyModelToProduction(
   temperature: number | null
 ): Promise<void> {
   await verifyAdmin();
+  const registry = await getTextModelRegistry();
+  const issue = validateTextModelSelection(taskKey, modelId, registry);
+  if (issue) throw new Error(issue);
   await updateModelConfig(taskKey, modelId, temperature);
 }
 
@@ -139,6 +145,10 @@ async function resolveTestPromptBody(taskKey: TaskKey, promptBody?: string): Pro
   return resolvedPrompt;
 }
 
+function geminiClient(): GoogleGenAI {
+  return new GoogleGenAI({ apiKey: getApiKey() });
+}
+
 async function executeTaskTest(
   taskKey: TaskKey,
   modelId: string,
@@ -146,42 +156,78 @@ async function executeTaskTest(
   inputs: Record<string, string>,
   promptBody?: string
 ): Promise<TestResult> {
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
-
   switch (taskKey) {
     case 'story_generation':
-      return runStoryGenerationTest(ai, modelId, temperature ?? 0.7, inputs, promptBody!);
+      return runStoryGenerationTest(modelId, temperature ?? 0.7, inputs, promptBody!);
     case 'reel_story_generation':
-      return runReelStoryGenerationTest(ai, modelId, temperature ?? 0.7, inputs, promptBody!);
+      return runReelStoryGenerationTest(modelId, temperature ?? 0.7, inputs, promptBody!);
     case 'seed_plan_generation':
-      return runSeedPlanGenerationTest(ai, modelId, temperature ?? 0.3, inputs, promptBody!);
+      return runSeedPlanGenerationTest(modelId, temperature ?? 0.3, inputs, promptBody!);
     case 'seeded_beat_materialization':
-      return runSeededBeatMaterializationTest(ai, modelId, temperature ?? 0.4, inputs, promptBody!);
+      return runSeededBeatMaterializationTest(modelId, temperature ?? 0.4, inputs, promptBody!);
     case 'story_bible_generation':
-      return runStoryBibleGenerationTest(ai, modelId, temperature ?? 0.35, inputs, promptBody!);
+      return runStoryBibleGenerationTest(modelId, temperature ?? 0.35, inputs, promptBody!);
     case 'visual_prompt':
-      return runVisualPromptTest(ai, modelId, temperature ?? 0.7, inputs, promptBody!);
+      return runVisualPromptTest(modelId, temperature ?? 0.7, inputs, promptBody!);
     case 'reel_visual_prompt':
-      return runReelVisualPromptTest(ai, modelId, temperature ?? 0.5, inputs, promptBody!);
+      return runReelVisualPromptTest(modelId, temperature ?? 0.5, inputs, promptBody!);
     case 'image_generation':
-      return runImageGenerationTest(ai, modelId, inputs, promptBody!);
+      return runImageGenerationTest(geminiClient(), modelId, inputs, promptBody!);
     case 'reel_image_generation':
-      return runReelImageGenerationTest(ai, modelId, inputs, promptBody!);
+      return runReelImageGenerationTest(geminiClient(), modelId, inputs, promptBody!);
     case 'portrait_generation':
-      return runPortraitGenerationTest(ai, modelId, inputs, promptBody!);
+      return runPortraitGenerationTest(geminiClient(), modelId, inputs, promptBody!);
     case 'tts':
-      return runTTSTest(ai, modelId, inputs, promptBody!);
+      return runTTSTest(geminiClient(), modelId, inputs, promptBody!);
     case 'reel_tts':
-      return runReelTTSTest(ai, modelId, inputs, promptBody!);
+      return runReelTTSTest(geminiClient(), modelId, inputs, promptBody!);
     case 'voice_selection':
-      return runVoiceSelectionTest(ai, modelId, temperature ?? 0.3, inputs, promptBody!);
+      return runVoiceSelectionTest(modelId, temperature ?? 0.3, inputs, promptBody!);
     default:
       throw new Error('Unknown task');
   }
 }
 
+/**
+ * Runs one text-task playground test through the gateway instead of GoogleGenAI directly.
+ * `strictModel: true` so testing a disabled or unknown model key errors instead of silently
+ * exercising the task's fallback -- an admin testing "gemini-2.5-flash-lite" must not
+ * accidentally see gemini-3.5-flash's output and think the model they picked works.
+ */
+async function runTextGatewayTest(
+  taskKey: TaskKey,
+  modelId: string,
+  temperature: number,
+  prompt: string,
+  outputType: 'json' | 'text',
+  options: { systemInstruction?: string; schema?: unknown } = {}
+): Promise<TestResult> {
+  const start = Date.now();
+  const result = await generateText({
+    taskKey,
+    modelKey: modelId,
+    prompt,
+    temperature,
+    strictModel: true,
+    schemaName: taskKey,
+    ...options,
+  });
+  const latencyMs = Date.now() - start;
+  const estimatedCostUsd =
+    computeTextCostUsd(result.resolution.record, result.usage) ??
+    estimateCost(modelId, result.usage.inputTokens, result.usage.outputTokens);
+
+  return {
+    output: result.text,
+    outputType,
+    latencyMs,
+    tokenCounts: { input: result.usage.inputTokens, output: result.usage.outputTokens },
+    estimatedCostUsd,
+    model: modelId,
+  };
+}
+
 async function runSeedPlanGenerationTest(
-  ai: GoogleGenAI,
   modelId: string,
   temperature: number,
   inputs: Record<string, string>,
@@ -198,23 +244,13 @@ async function runSeedPlanGenerationTest(
     strictSourceSegments: inputs.strictSourceSegments || '',
   });
 
-  const start = Date.now();
-  const response = await ai.models.generateContent({
-    model: modelId,
-    contents: prompt,
-    config: {
-      systemInstruction: LOCKED_PROMPT_GUARDRAILS.seed_plan_generation,
-      responseMimeType: 'application/json',
-      responseSchema: seedPlanSchema,
-      temperature,
-    },
+  return runTextGatewayTest('seed_plan_generation', modelId, temperature, prompt, 'json', {
+    systemInstruction: LOCKED_PROMPT_GUARDRAILS.seed_plan_generation,
+    schema: seedPlanSchema,
   });
-  const latencyMs = Date.now() - start;
-  return buildResult(response.text || '', 'json', latencyMs, response.usageMetadata, modelId);
 }
 
 async function runSeededBeatMaterializationTest(
-  ai: GoogleGenAI,
   modelId: string,
   temperature: number,
   inputs: Record<string, string>,
@@ -229,23 +265,13 @@ async function runSeededBeatMaterializationTest(
     seedBeat: inputs.seedBeat || '{}',
   });
 
-  const start = Date.now();
-  const response = await ai.models.generateContent({
-    model: modelId,
-    contents: prompt,
-    config: {
-      systemInstruction: LOCKED_PROMPT_GUARDRAILS.seeded_beat_materialization,
-      responseMimeType: 'application/json',
-      responseSchema: beatSchema,
-      temperature,
-    },
+  return runTextGatewayTest('seeded_beat_materialization', modelId, temperature, prompt, 'json', {
+    systemInstruction: LOCKED_PROMPT_GUARDRAILS.seeded_beat_materialization,
+    schema: beatSchema,
   });
-  const latencyMs = Date.now() - start;
-  return buildResult(response.text || '', 'json', latencyMs, response.usageMetadata, modelId);
 }
 
 async function runStoryBibleGenerationTest(
-  ai: GoogleGenAI,
   modelId: string,
   temperature: number,
   inputs: Record<string, string>,
@@ -261,23 +287,13 @@ async function runStoryBibleGenerationTest(
     episodeNumber: inputs.episodeNumber || '1',
   });
 
-  const start = Date.now();
-  const response = await ai.models.generateContent({
-    model: modelId,
-    contents: prompt,
-    config: {
-      systemInstruction: LOCKED_PROMPT_GUARDRAILS.story_bible_generation,
-      responseMimeType: 'application/json',
-      responseSchema: storyBibleGenerationSchema,
-      temperature,
-    },
+  return runTextGatewayTest('story_bible_generation', modelId, temperature, prompt, 'json', {
+    systemInstruction: LOCKED_PROMPT_GUARDRAILS.story_bible_generation,
+    schema: storyBibleGenerationSchema,
   });
-  const latencyMs = Date.now() - start;
-  return buildResult(response.text || '', 'json', latencyMs, response.usageMetadata, modelId);
 }
 
 async function runStoryGenerationTest(
-  ai: GoogleGenAI,
   modelId: string,
   temperature: number,
   inputs: Record<string, string>,
@@ -291,23 +307,13 @@ async function runStoryGenerationTest(
     selectedOptionLabel: inputs.selectedOptionLabel || 'None yet - first beat',
   });
 
-  const start = Date.now();
-  const response = await ai.models.generateContent({
-    model: modelId,
-    contents: prompt,
-    config: {
-      systemInstruction: LOCKED_PROMPT_GUARDRAILS.story_generation,
-      responseMimeType: 'application/json',
-      responseSchema: beatSchema,
-      temperature,
-    },
+  return runTextGatewayTest('story_generation', modelId, temperature, prompt, 'json', {
+    systemInstruction: LOCKED_PROMPT_GUARDRAILS.story_generation,
+    schema: beatSchema,
   });
-  const latencyMs = Date.now() - start;
-  return buildResult(response.text || '', 'json', latencyMs, response.usageMetadata, modelId);
 }
 
 async function runReelStoryGenerationTest(
-  ai: GoogleGenAI,
   modelId: string,
   temperature: number,
   inputs: Record<string, string>,
@@ -332,23 +338,13 @@ async function runReelStoryGenerationTest(
     narrationStyleDefiner: inputs.narrationStyleDefiner || 'Expressive: expressive narrator with natural pauses and energy',
   });
 
-  const start = Date.now();
-  const response = await ai.models.generateContent({
-    model: modelId,
-    contents: prompt,
-    config: {
-      systemInstruction: LOCKED_PROMPT_GUARDRAILS.reel_story_generation,
-      responseMimeType: 'application/json',
-      responseSchema: reelDraftSchema,
-      temperature,
-    },
+  return runTextGatewayTest('reel_story_generation', modelId, temperature, prompt, 'json', {
+    systemInstruction: LOCKED_PROMPT_GUARDRAILS.reel_story_generation,
+    schema: reelDraftSchema,
   });
-  const latencyMs = Date.now() - start;
-  return buildResult(response.text || '', 'json', latencyMs, response.usageMetadata, modelId);
 }
 
 async function runVisualPromptTest(
-  ai: GoogleGenAI,
   modelId: string,
   temperature: number,
   inputs: Record<string, string>,
@@ -370,23 +366,13 @@ async function runVisualPromptTest(
     seedAuthoringContext: inputs.seedAuthoringContext || '',
   });
 
-  const start = Date.now();
-  const response = await ai.models.generateContent({
-    model: modelId,
-    contents: prompt,
-    config: {
-      systemInstruction: LOCKED_PROMPT_GUARDRAILS.visual_prompt,
-      responseMimeType: 'application/json',
-      responseSchema: storyboardPlanSchema,
-      temperature,
-    },
+  return runTextGatewayTest('visual_prompt', modelId, temperature, prompt, 'json', {
+    systemInstruction: LOCKED_PROMPT_GUARDRAILS.visual_prompt,
+    schema: storyboardContinuityPlanSchema,
   });
-  const latencyMs = Date.now() - start;
-  return buildResult(response.text || '', 'json', latencyMs, response.usageMetadata, modelId);
 }
 
 async function runReelVisualPromptTest(
-  ai: GoogleGenAI,
   modelId: string,
   temperature: number,
   inputs: Record<string, string>,
@@ -411,19 +397,10 @@ async function runReelVisualPromptTest(
     previousStoryboardContext: inputs.previousStoryboardContext || 'None yet - first beat',
   });
 
-  const start = Date.now();
-  const response = await ai.models.generateContent({
-    model: modelId,
-    contents: prompt,
-    config: {
-      systemInstruction: LOCKED_PROMPT_GUARDRAILS.reel_visual_prompt,
-      responseMimeType: 'application/json',
-      responseSchema: storyboardPlanSchema,
-      temperature,
-    },
+  return runTextGatewayTest('reel_visual_prompt', modelId, temperature, prompt, 'json', {
+    systemInstruction: LOCKED_PROMPT_GUARDRAILS.reel_visual_prompt,
+    schema: storyboardPlanSchema,
   });
-  const latencyMs = Date.now() - start;
-  return buildResult(response.text || '', 'json', latencyMs, response.usageMetadata, modelId);
 }
 
 async function runImageGenerationTest(
@@ -674,7 +651,6 @@ async function runReelTTSTest(
 }
 
 async function runVoiceSelectionTest(
-  ai: GoogleGenAI,
   modelId: string,
   temperature: number,
   inputs: Record<string, string>,
@@ -688,36 +664,9 @@ async function runVoiceSelectionTest(
     availableVoices: AVAILABLE_VOICES.join(', '),
   });
 
-  const start = Date.now();
-  const response = await ai.models.generateContent({
-    model: modelId,
-    contents: prompt,
-    config: {
-      systemInstruction: LOCKED_PROMPT_GUARDRAILS.voice_selection,
-      temperature,
-    },
+  return runTextGatewayTest('voice_selection', modelId, temperature, prompt, 'text', {
+    systemInstruction: LOCKED_PROMPT_GUARDRAILS.voice_selection,
   });
-  const latencyMs = Date.now() - start;
-  return buildResult((response.text || '').trim(), 'text', latencyMs, response.usageMetadata, modelId);
-}
-
-function buildResult(
-  output: string,
-  outputType: TestResult['outputType'],
-  latencyMs: number,
-  usage: { promptTokenCount?: number; candidatesTokenCount?: number } | undefined,
-  modelId: string
-): TestResult {
-  const inputTokens = usage?.promptTokenCount || 0;
-  const outputTokens = usage?.candidatesTokenCount || 0;
-  return {
-    output,
-    outputType,
-    latencyMs,
-    tokenCounts: { input: inputTokens, output: outputTokens },
-    estimatedCostUsd: estimateCost(modelId, inputTokens, outputTokens),
-    model: modelId,
-  };
 }
 
 function buildPromptValidationError(taskKey: PromptTaskKey, validation: PromptValidationResult): string {

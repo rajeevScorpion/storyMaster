@@ -20,7 +20,7 @@ import { MEDIEVAL_MARKET_INPUT, MINIMAL_INPUT } from './__fixtures__/scenes';
 
 const GEMINI: PromptCompilerCapability = {
   enabled: true,
-  promptBudgetChars: 2800,
+  promptBudgetChars: 3000,
   supportsNegativePrompt: false,
   adapterVersion: 'gemini-v1',
 };

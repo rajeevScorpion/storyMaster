@@ -18,6 +18,8 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   'gemini-3.1-pro-preview':       { inputPerMToken: 2.00, outputPerMToken: 12.00 },
 
   // 3.x Flash models
+  // Introductory pricing through 2026-12-31; becomes 1.50 / 7.50 per 1M on 2027-01-01.
+  'gemini-3.8-flash':             { inputPerMToken: 0.75, outputPerMToken: 3.75 },
   'gemini-3.5-flash':             { inputPerMToken: 1.50, outputPerMToken: 9.00 },
   'gemini-3.1-flash-lite':        { inputPerMToken: 0.25, outputPerMToken: 1.50 },
   'gemini-3-flash-preview':       { inputPerMToken: 0.50, outputPerMToken: 3.00 },

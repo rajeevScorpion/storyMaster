@@ -121,6 +121,96 @@ export const MINIMAL_INPUT: BuildCanonicalSceneInput = {
   aspectRatio: '16:9',
 };
 
+// --- Non-English fixtures (Unicode-safety regression coverage) ------------
+// Invented and anonymized — not copied from any real story. Exercises the
+// Devanagari/Arabic/Japanese paths the compiler's tokenizer and name matcher
+// used to silently destroy (see docs/image-composer-continuity-handoff.md
+// section 2a).
+
+export const ANVI: Character = character({
+  id: 'c1a2b3c4-1111-4abc-9def-abcdefabcdef',
+  name: 'अन्वी',
+  type: 'human',
+  appearanceSummary: 'दस साल की लड़की, काले बाल और पीली फ्रॉक',
+  portraitUrl: 'r2://characters/anvi-portrait.webp',
+});
+
+export const RAGHAV: Character = character({
+  id: 'd2b3c4d5-2222-4abc-9def-abcdefabcdef',
+  name: 'राघव',
+  type: 'human',
+  appearanceSummary: 'बुज़ुर्ग किसान, सफ़ेद कुर्ता और घनी मूंछें',
+  portraitUrl: 'r2://characters/raghav-portrait.webp',
+});
+
+export const HINDI_VILLAGE_PLAN: StoryboardPlan = {
+  sharedVisualInvariants: [
+    'धुंधली सुबह की रोशनी खेतों पर फैली हुई है',
+    'गाँव के घरों की मिट्टी की दीवारें और खपरैल छतें',
+    'दूर पहाड़ों की हल्की नीली रूपरेखा',
+    'गाँव के बीचोंबीच एक पुराना बरगद का पेड़',
+  ],
+  portraitTasks: [],
+  topLeft: frame({
+    description: 'राघव अपने खेत की मेड़ पर खड़े होकर सूरज की ओर देख रहे हैं।',
+    cameraAngle: 'चौड़ा स्थापना शॉट',
+    visualFocus: ['हरे-भरे खेत', 'सुबह की धुंध', 'दूर के पहाड़'],
+    emotion: 'शांत और संतुष्ट',
+    continuityAnchor: 'यही सुबह की रोशनी अगले दृश्य में भी बनी रहती है।',
+    charactersPresent: ['राघव'],
+  }),
+  topRight: frame({
+    description: 'अन्वी दौड़ती हुई राघव के पास आती है और उनका हाथ पकड़ लेती है।',
+    cameraAngle: 'मध्यम शॉट',
+    visualFocus: ['अन्वी की पीली फ्रॉक', 'राघव की मुस्कान'],
+    emotion: 'अन्वी उत्साहित है; राघव स्नेहपूर्ण हैं',
+    continuityAnchor: 'राघव वही खेत की मेड़ पर खड़े हैं।',
+    charactersPresent: ['अन्वी', 'राघव'],
+  }),
+  bottomLeft: frame({
+    description: 'राघव अन्वी को कंधे पर बिठाकर बरगद के पेड़ की ओर चलते हैं; अन्वी हँस रही है।',
+    cameraAngle: 'मध्यम क्लोज़-अप',
+    visualFocus: ['बरगद का घना पेड़', 'अन्वी की खिलखिलाहट'],
+    emotion: 'खुशी और अपनापन',
+    continuityAnchor: 'वही बरगद का पेड़ जो शुरुआती दृश्य में दिखा था।',
+    charactersPresent: ['राघव', 'अन्वी'],
+  }),
+  bottomRight: frame({
+    description: 'अन्वी अकेली बरगद के पेड़ के नीचे बैठी किताब पढ़ रही है। राघव अनुपस्थित हैं।',
+    cameraAngle: 'चौड़ा शॉट',
+    visualFocus: ['खुली हुई पुरानी किताब', 'पेड़ की घनी छाया'],
+    emotion: 'गहरी एकाग्रता',
+    continuityAnchor: 'वही बरगद का पेड़, अब शांत दोपहर में।',
+    charactersPresent: ['अन्वी'],
+  }),
+  negativeConstraints: ['टेक्स्ट', 'कैप्शन', 'आधुनिक वस्तुएँ', 'डुप्लिकेट पात्र'],
+};
+
+export const HINDI_VILLAGE_INPUT: BuildCanonicalSceneInput = {
+  storyboardPlan: HINDI_VILLAGE_PLAN,
+  continuityNotes: ['बरगद का पेड़ पूरी कहानी में एक जैसा रहता है।'],
+  characters: [RAGHAV, ANVI],
+  visualStyle: 'गर्म रंगों वाली भारतीय ग्रामीण चित्रण शैली, नरम रोशनी',
+  aspectRatio: '16:9',
+  worldAnchor: 'सुबह की सुनहरी रोशनी में एक शांत भारतीय गाँव, मिट्टी के घर और बरगद का पेड़।',
+};
+
+/** Small Arabic character, for name-matching tests (no full scene needed). */
+export const LAYLA: Character = character({
+  id: 'e3c4d5e6-3333-4abc-9def-abcdefabcdef',
+  name: 'ليلى',
+  type: 'human',
+  appearanceSummary: 'فتاة صغيرة ذات شعر أسود طويل وفستان أزرق',
+});
+
+/** Small Japanese character, for name-matching tests (no full scene needed). */
+export const SAKURA: Character = character({
+  id: 'f4d5e6f7-4444-4abc-9def-abcdefabcdef',
+  name: 'さくら',
+  type: 'human',
+  appearanceSummary: '黒い髪の少女、赤い着物を着ている',
+});
+
 /** Legacy conversion input: no storyboard plan, only a rendered brief. */
 export const LEGACY_TEXT_INPUT: BuildCanonicalSceneInput = {
   storyboardPlan: null,

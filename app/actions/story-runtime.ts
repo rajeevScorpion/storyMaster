@@ -1,26 +1,23 @@
 'use client';
 
-import { StorySession, StoryBeat, StoryboardPlan, SeedBeatOutline, SeedPlan, SourceFidelity, StoryConfig, type StoryAspectRatio, type StoryTextParts } from '@/lib/types/story';
+import { StorySession, StoryBeat, StoryboardPlan, StoryConfig, type StoryAspectRatio, type StoryTextParts } from '@/lib/types/story';
 import { compressImage, sanitizeStoryboardGridImage } from '@/lib/utils/image';
 import { splitBase64DataUrl } from '@/lib/utils/data-url';
-import { callGeminiText, type InlineImagePart } from '@/app/actions/gemini-proxy';
+import type { InlineImagePart } from '@/app/actions/gemini-proxy';
+import { callTextModel } from '@/app/actions/text-model-proxy';
 import { generateSelectedImage } from '@/app/actions/image-generation';
 import {
   buildPromptCharacterAnchors,
-  buildValidationRepairNote,
   formatStoryBible,
-  validateGeneratedBeat,
 } from '@/lib/ai/story-bible';
 import { buildReferenceBindingLines } from '@/lib/ai/reference-binding';
+import { PROMPT_HARD_MAX_CHARS } from '@/lib/ai/prompt-compiler/capability.shared';
 import { isR2Reference } from '@/lib/media/r2-reference';
 import { resolveReferenceImageKeys } from '@/app/actions/references';
 import {
   normalizePortraitReferenceConfig,
-  deriveVisualStyleSummary,
   getPreludeText,
   isReelStoryConfig,
-  getSeedPlan,
-  getSeedSourceText,
   normalizeStoryConfig,
   REEL_LANGUAGE_OPTIONS,
 } from '@/lib/ai/story-config';
@@ -41,13 +38,6 @@ import {
 } from '@/lib/constants/media';
 import type { Character, PortraitReferenceConfig } from '@/lib/types/story';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
-import { splitStrictSeedSource } from '@/lib/ai/strict-seed-segmentation';
-import { applyCharacterNameProvenance } from '@/lib/ai/character-novelty.shared';
-import {
-  SEED_GUIDANCE_WORD_CAP,
-  SEED_SOURCE_WORD_CAP,
-  countAuthoringWords,
-} from '@/lib/story/authoring-limits';
 import type {
   ImageContinuityProviderState,
   ImageContinuityStrategy,
@@ -79,12 +69,6 @@ import {
   normalizeStoryboardImageQualitySettings,
   type StoryboardImageQualitySettings,
 } from '@/lib/types/storyboard-settings';
-import {
-  countStoryWords,
-  formatAudienceNarrativeContract,
-  getStoryAudienceProfile,
-  resolveStoryBeatLength,
-} from '@/lib/ai/story-audience';
 
 // Text-side orchestration (beat generation, storyboard planning, prompt
 // formatting) lives in lib/ai/beat-orchestration.ts so the server beat bundle
@@ -92,18 +76,12 @@ import {
 // image processing, portraits, reels) and re-exports the moved API so
 // existing imports keep working.
 import {
-  appendStoryTextPartsOutputContract,
-  appendNarrativeVisualBoundaryContract,
   buildFinalStoryboardImagePrompt,
   describeReelNoFaceRule,
   describeReelTextOverlayMode,
-  formatNarrativeStoryConfig,
-  formatNarrativeStoryState,
   getStoryboardLayoutHardRequirements,
   getStoryboardMaxDimensions,
   normalizeStoryboardAspectRatio,
-  normalizeStoryBeatTextParts,
-  normalizeStoryTextParts,
   resolveReelVisualStyle,
   timeRuntimeStep,
   VERTICAL_STORY_PROMPT_INSTRUCTION,
@@ -119,206 +97,11 @@ export {
 } from '@/lib/ai/beat-orchestration';
 export type { StoryModelOverrides, StoryboardImagePromptOptions } from '@/lib/ai/beat-orchestration';
 
-function appendExtraVisualGuidanceContract(prompt: string, guidanceText?: string): string {
-  if (!guidanceText?.trim()) {
-    return prompt;
-  }
-
-  return [
-    prompt,
-    '',
-    'Extra Guidance Role:',
-    'Extra Guidance contains visual reference details only. Use it for character appearance, scenes, locations, and world design; never use it to change source wording, dialogue, plot, or events.',
-  ].join('\n');
-}
-
-export interface SeedPlanPreviewInput {
-  storyConfig: StoryConfig;
-  sourceText: string;
-  beatCount: number;
-  workingTitle?: string;
-  guidanceText?: string;
-  sourceFidelity?: SourceFidelity;
-  modelOverrides?: StoryModelOverrides;
-  costTelemetry?: CostTelemetryContext;
-}
-
-export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Promise<SeedPlan> {
-  if (countAuthoringWords(input.sourceText) > SEED_SOURCE_WORD_CAP) {
-    throw new Error(`Source text must be ${SEED_SOURCE_WORD_CAP} words or fewer.`);
-  }
-  if (countAuthoringWords(input.guidanceText || '') > SEED_GUIDANCE_WORD_CAP) {
-    throw new Error(`Extra guidance must be ${SEED_GUIDANCE_WORD_CAP} words or fewer.`);
-  }
-
-  const storyConfig = normalizeStoryConfig({
-    ...input.storyConfig,
-    authoring: {
-      mode: 'seeded',
-      workingTitle: input.workingTitle,
-      sourceText: input.sourceText,
-      guidanceText: input.guidanceText,
-      sourceFidelity: input.sourceFidelity,
-    },
-  });
-  const strictSourceSegments = storyConfig.authoring.sourceFidelity === 'strictly_follow'
-    ? splitStrictSeedSource(storyConfig.authoring.sourceText || '', input.beatCount)
-    : null;
-  const seedPlanTemplateCandidate = input.modelOverrides?.seedPlanPrompt || getDefaultPromptBody('seed_plan_generation');
-  const seedPlanTemplate = validatePromptTemplate('seed_plan_generation', seedPlanTemplateCandidate).isValid
-    ? seedPlanTemplateCandidate
-    : getDefaultPromptBody('seed_plan_generation');
-  const resolvedPrompt = appendNarrativeVisualBoundaryContract(resolvePromptTemplate(seedPlanTemplate, {
-    language: storyConfig.language,
-    storyConfig: formatNarrativeStoryConfig({ storyConfig, currentBeat: 0 }),
-    workingTitle: storyConfig.authoring.workingTitle || '',
-    sourceFidelity: storyConfig.authoring.sourceFidelity || 'strictly_follow',
-    guidanceText: storyConfig.authoring.guidanceText || '',
-    sourceText: storyConfig.authoring.sourceText || '',
-    beatCount: input.beatCount,
-    strictSourceSegments: strictSourceSegments ? JSON.stringify(strictSourceSegments) : '',
-  }));
-  const strictPrompt = strictSourceSegments && !/\{\{\s*strictSourceSegments\s*\}\}/u.test(seedPlanTemplate)
-    ? [
-        resolvedPrompt,
-        '',
-        'Strict Follow Source Segments (authoritative):',
-        JSON.stringify(strictSourceSegments),
-        'Copy segment N exactly into beat N storyText. Do not rewrite, translate, correct, expand, or shorten any segment.',
-      ].join('\n')
-    : resolvedPrompt;
-  const prompt = appendExtraVisualGuidanceContract(
-    `${strictPrompt}\n\n${formatAudienceNarrativeContract(storyConfig.ageGroup, storyConfig.beatLength?.level)}`,
-    storyConfig.authoring.guidanceText
-  );
-
-  const generatePlanAttempt = async (repairNote?: string): Promise<SeedPlan> => {
-    const text = await callGeminiText({
-      task: 'seed_plan_generation',
-      model: input.modelOverrides?.seedPlanModel || DEFAULT_TEXT_MODEL_ID,
-      prompt: repairNote ? `${prompt}\n\nQuality Repair Note:\n${repairNote}` : prompt,
-      temperature: input.modelOverrides?.seedPlanTemperature ?? 0.3,
-      telemetry: input.costTelemetry,
-    });
-
-    try {
-      return normalizeSeedPlanResult(JSON.parse(text) as SeedPlan, storyConfig);
-    } catch {
-      throw new Error(`Failed to parse seed plan JSON: ${text.slice(0, 200)}`);
-    }
-  };
-
-  const validatePlan = (plan: SeedPlan): string[] => {
-    if (plan.beats.length !== input.beatCount) {
-      return [`Seed plan returned ${plan.beats.length} beats, expected ${input.beatCount}.`];
-    }
-    if (strictSourceSegments) return [];
-
-    const length = resolveStoryBeatLength(storyConfig.ageGroup, storyConfig.beatLength?.level);
-    const audience = getStoryAudienceProfile(storyConfig.ageGroup);
-    return plan.beats.flatMap((beat) => {
-      const words = countStoryWords(beat.storyText);
-      return words >= length.targetMinWords && words <= length.targetMaxWords
-        ? []
-        : [`Beat ${beat.beatIndex} has ${words} words; ${audience.label} at ${length.label} requires ${length.targetMinWords}-${length.targetMaxWords}.`];
-    });
-  };
-
-  let normalizedPlan = await generatePlanAttempt();
-  let planIssues = validatePlan(normalizedPlan);
-  if (planIssues.length > 0) {
-    normalizedPlan = await generatePlanAttempt(buildValidationRepairNote(planIssues));
-    planIssues = validatePlan(normalizedPlan);
-    if (planIssues.length > 0) {
-      throw new Error(`Seed plan validation failed after retry: ${planIssues.join('; ')}`);
-    }
-  }
-
-  if (!strictSourceSegments) {
-    return normalizedPlan;
-  }
-
-  return {
-    ...normalizedPlan,
-    beats: normalizedPlan.beats.map((beat, index) => ({
-      ...beat,
-      storyText: strictSourceSegments[index],
-    })),
-  };
-}
-
-export async function materializeSeededBeat(
-  seedBeat: SeedBeatOutline,
-  sessionState: Partial<StorySession> | null,
-  modelOverrides?: StoryModelOverrides,
-  costTelemetry?: CostTelemetryContext
-): Promise<StoryBeat> {
-  const normalizedSessionState = sessionState
-    ? {
-        ...sessionState,
-        storyConfig: normalizeStoryConfig(sessionState.storyConfig),
-        visualStyle: sessionState.visualStyle || deriveVisualStyleSummary(sessionState.storyConfig?.visualSettings),
-      }
-    : null;
-  const storyConfig = normalizeStoryConfig(normalizedSessionState?.storyConfig);
-  const materializationTemplateCandidate = modelOverrides?.seededBeatPrompt || getDefaultPromptBody('seeded_beat_materialization');
-  const materializationTemplate = validatePromptTemplate('seeded_beat_materialization', materializationTemplateCandidate).isValid
-    ? materializationTemplateCandidate
-    : getDefaultPromptBody('seeded_beat_materialization');
-  const basePrompt = appendNarrativeVisualBoundaryContract(
-    appendStoryTextPartsOutputContract(
-      appendExtraVisualGuidanceContract(
-        resolvePromptTemplate(materializationTemplate, {
-          language: storyConfig.language,
-          storyConfig: formatNarrativeStoryConfig(normalizedSessionState),
-          storyState: formatNarrativeStoryState(normalizedSessionState),
-          sourceText: getSeedSourceText(storyConfig),
-          guidanceText: storyConfig.authoring.guidanceText || '',
-          seedBeat: JSON.stringify(reorderCanonicalOptions(seedBeat)),
-        }),
-        storyConfig.authoring.guidanceText
-      )
-    )
-  ) + `\n\n${formatAudienceNarrativeContract(storyConfig.ageGroup, storyConfig.beatLength?.level)}`;
-
-  const generateAttempt = async (repairNote?: string): Promise<StoryBeat> => {
-    const text = await callGeminiText({
-      task: 'seeded_beat_materialization',
-      model: modelOverrides?.seededBeatModel || DEFAULT_TEXT_MODEL_ID,
-      prompt: repairNote ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}` : basePrompt,
-      temperature: modelOverrides?.seededBeatTemperature ?? 0.4,
-      telemetry: costTelemetry,
-    });
-
-    try {
-      const mergedBeat = mergeSeededBeatWithGeneratedFields(seedBeat, JSON.parse(text) as StoryBeat);
-      return storyConfig.authoring.sourceFidelity === 'strictly_follow'
-        ? {
-            ...mergedBeat,
-            storyTextParts: normalizeStoryTextParts(undefined, mergedBeat.storyText),
-          }
-        : mergedBeat;
-    } catch {
-      throw new Error(`Failed to parse seeded beat JSON: ${text.slice(0, 200)}`);
-    }
-  };
-
-  let beat = await generateAttempt();
-  const issues = validateGeneratedBeat(beat, normalizedSessionState);
-  if (issues.length > 0) {
-    beat = await generateAttempt(buildValidationRepairNote(issues));
-    const retryIssues = validateGeneratedBeat(beat, normalizedSessionState);
-    if (retryIssues.length > 0) {
-      throw new Error(`Seeded beat validation failed after retry: ${retryIssues.join('; ')}`);
-    }
-  }
-
-  return normalizeStoryBeatTextParts(applyCharacterNameProvenance(
-    beat,
-    normalizedSessionState,
-    getSeedSourceText(storyConfig)
-  ));
-}
+// Seed-authoring (seed plan preview + seeded-beat materialization) lives in
+// lib/ai/seed-authoring.ts so Phase 6 agentic story generation can call it
+// directly. Re-exported here so existing imports keep working.
+export { generateSeedPlanPreview, materializeSeededBeat } from '@/lib/ai/seed-authoring';
+export type { SeedPlanPreviewInput } from '@/lib/ai/seed-authoring';
 
 export interface ReelDraftBeatOutput {
   beatIndex: number;
@@ -386,7 +169,7 @@ export async function distributeReelTextAction(input: {
     '"""',
   ].join('\n');
 
-  const raw = await callGeminiText({
+  const raw = await callTextModel({
     task: 'reel_story_generation',
     model: DEFAULT_TEXT_MODEL_ID,
     prompt,
@@ -506,7 +289,7 @@ export async function generateReelDraft(
   const text = await timeRuntimeStep(
     'story_runtime.generate_reel_draft',
     { beatCount, language: lang },
-    () => callGeminiText({
+    () => callTextModel({
       task: 'reel_story_generation',
       model: modelOverrides?.reelStoryModel || modelOverrides?.storyModel || DEFAULT_TEXT_MODEL_ID,
       prompt,
@@ -624,96 +407,6 @@ async function maybeProcessStoryboardImage(
       settings.webpQualityPercent / 100
     )
   );
-}
-
-function mergeSeededBeatWithGeneratedFields(seedBeat: SeedBeatOutline, generatedBeat: StoryBeat): StoryBeat {
-  const normalizedSeedBeat = reorderCanonicalOptions(seedBeat);
-  const canonicalOptionId = normalizedSeedBeat.isEnding
-    ? undefined
-    : normalizedSeedBeat.options.find((option) => option.isCanonical)?.id ?? normalizedSeedBeat.options[0]?.id;
-
-  return {
-    ...generatedBeat,
-    title: normalizedSeedBeat.title,
-    beatNumber: normalizedSeedBeat.beatIndex,
-    isEnding: normalizedSeedBeat.isEnding,
-    storyText: normalizedSeedBeat.storyText,
-    storyTextParts: normalizeStoryTextParts(generatedBeat.storyTextParts, normalizedSeedBeat.storyText),
-    sceneSummary: normalizedSeedBeat.sceneSummary,
-    options: normalizedSeedBeat.isEnding
-      ? []
-      : normalizedSeedBeat.options.map((option) => ({
-          id: option.id,
-          label: option.label,
-          intent: option.intent,
-        })),
-    originKind: 'seeded_canonical',
-    seedPlanBeatIndex: normalizedSeedBeat.beatIndex,
-    canonicalOptionId,
-  };
-}
-
-function normalizeSeedPlanResult(plan: SeedPlan, storyConfig: StoryConfig): SeedPlan {
-  const normalizedConfig = normalizeStoryConfig({
-    ...storyConfig,
-    authoring: {
-      ...storyConfig.authoring,
-      mode: 'seeded',
-      seedPlan: plan,
-    },
-  });
-  const normalizedPlan = getSeedPlan(normalizedConfig);
-  if (!normalizedPlan) {
-    throw new Error('Seed plan generation returned an invalid plan.');
-  }
-
-  const beats = normalizedPlan.beats.map(reorderCanonicalOptions);
-  const audience = getStoryAudienceProfile(storyConfig.ageGroup);
-  if (beats.some((beat) => (
-    !beat.isEnding
-    && (audience.optionCount === 'exactly_3'
-      ? beat.options.length !== 3
-      : beat.options.length < 3 || beat.options.length > 4)
-  ))) {
-    throw new Error(
-      audience.optionCount === 'exactly_3'
-        ? `Seed plan generation must return exactly 3 options for ${audience.label}.`
-        : `Seed plan generation must return 3 or 4 options for ${audience.label}.`
-    );
-  }
-  if (beats.some((beat, index) => beat.beatIndex !== index + 1)) {
-    throw new Error('Seed plan beat indexes must be sequential starting from 1.');
-  }
-  if (!beats[beats.length - 1]?.isEnding) {
-    throw new Error('The final seed-plan beat must be marked as an ending.');
-  }
-
-  return {
-    beatCount: beats.length,
-    beats,
-  };
-}
-
-function reorderCanonicalOptions(seedBeat: SeedBeatOutline): SeedBeatOutline {
-  if (seedBeat.isEnding) {
-    return {
-      ...seedBeat,
-      options: [],
-    };
-  }
-
-  const canonicalIndex = seedBeat.options.findIndex((option) => option.isCanonical);
-  const resolvedCanonicalIndex = canonicalIndex === -1 ? 0 : canonicalIndex;
-  const canonical = seedBeat.options[resolvedCanonicalIndex];
-  const alternates = seedBeat.options.filter((_, index) => index !== resolvedCanonicalIndex);
-
-  return {
-    ...seedBeat,
-    options: [canonical, ...alternates].map((option, index) => ({
-      ...option,
-      isCanonical: index === 0,
-    })),
-  };
 }
 
 export function buildReelPanelCaptions(
@@ -834,6 +527,17 @@ export async function generateImage(
         // compact binding form to avoid duplicating it.
         const bindingLines = buildReferenceBindingLines(referenceSurvivors, { compact: compiledEngine });
         const boundImagePrompt = bindingLines ? `${finalImagePrompt}\n\n${bindingLines}` : finalImagePrompt;
+        // The compiler already reserved room for these binding lines (Unit 4b), so
+        // this should be unreachable -- a survivor count above what was planned for
+        // (or a reservation computed from a different reference list) is the only
+        // way to get here. Warn instead of trimming; trimming here could cut
+        // mid-word or through a section the compiler protects.
+        if (compiledEngine && boundImagePrompt.length > PROMPT_HARD_MAX_CHARS) {
+          console.warn('[image_prompt.over_hard_max]', {
+            chars: boundImagePrompt.length,
+            referenceCount: referenceSurvivors.length,
+          });
+        }
         const storyboardImageSettings = normalizeStoryboardImageQualitySettings(modelOverrides?.storyboardImageSettings);
         const imageSize = storyboardImageSettings.imageSize;
 
@@ -956,7 +660,7 @@ export async function generateImage(
       finalPromptText: finalImagePrompt,
       imageGenerationMetadata: {
         placeholder: true,
-        reason: error instanceof Error ? error.message : 'image_generation_failed',
+        reason: 'image_generation_failed',
       },
     };
   }

@@ -6,7 +6,7 @@ import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import { createPortal } from 'react-dom';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Clock3, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Clapperboard, Focus, SlidersHorizontal, Info, BookmarkPlus, BookmarkCheck, type LucideIcon } from 'lucide-react';
+import { ArrowLeft, ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Clock3, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Clapperboard, Focus, SlidersHorizontal, Info, BookmarkPlus, BookmarkCheck, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { resolveStoryContinuationDisplayQuote } from '@/lib/pricing/story-continuation.shared';
@@ -21,7 +21,7 @@ import BatchVisualsBanner from './BatchVisualsBanner';
 import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
 import Timeline from './Timeline';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import NarrationButton from './NarrationButton';
 import AutoScrollButton from './AutoScrollButton';
 import FilterDropdown from '@/components/ui/FilterDropdown';
@@ -1688,6 +1688,20 @@ export default function StoryScreen() {
   const permanentlyDeleteCharacterReferenceSheet = useStoryStore((state) => state.permanentlyDeleteCharacterReferenceSheet);
   const { user } = useAuth();
   const { data: pricing } = usePricingRuntime();
+  // Unit 9M: the way back to the review queue. The marker is read from the URL on
+  // every render on purpose -- lib/store/story-store.ts is a module singleton with
+  // no persistence, so anything stashed there would vanish on the first reload and
+  // strand a reviewer on a screen with no way back.
+  //
+  // Only ever the literal string 'review' is honoured, and the destination below is
+  // the hardcoded '/review'. The query string never supplies a path to navigate to.
+  //
+  // Gated on the viewer's own reviewer standing (pricing.reviewer, D20) for the same
+  // reason the agent-draft panel below gates its link: /review redirects anyone who
+  // is not an active reviewer straight back to '/', so offering it to them would be
+  // a dead end. `reviewer` is null until the pricing runtime resolves, so the link
+  // appears a moment after the screen does.
+  const cameFromReviewQueue = useSearchParams().get('from') === 'review';
   const [isAdminUser, setIsAdminUser] = useState(false);
   const [cycleSettings, setCycleSettings] = useState<StoryRuntimeSettings>({
     cycleOverride: false,
@@ -1870,6 +1884,10 @@ export default function StoryScreen() {
       lastPublishResult={lastPublishResult}
       cycleSettings={cycleSettings}
       pricing={pricing}
+      isAnotherUsersAgentDraft={Boolean(
+        session.agentPersonaId && user && session.savedByUserId && session.savedByUserId !== user.id
+      )}
+      showReviewQueueReturn={cameFromReviewQueue && Boolean(pricing.reviewer)}
       isAdminUser={isAdminUser}
       continueCoinCost={continueCoinCost}
       continueIncludesImage={continuationQuote.includesImage}
@@ -1926,6 +1944,8 @@ function StoryScreenInner({
   lastPublishResult,
   cycleSettings,
   pricing,
+  isAnotherUsersAgentDraft,
+  showReviewQueueReturn,
   isAdminUser,
   continueCoinCost,
   continueIncludesImage,
@@ -2017,6 +2037,19 @@ function StoryScreenInner({
   lastPublishResult: { alreadyPublished: boolean; storylineId: string; error?: string } | null;
   cycleSettings: StoryRuntimeSettings;
   pricing: PricingRuntimeContext;
+  /**
+   * Unit 9M / D15: this story was written by the agentic pipeline and the signed-in user
+   * does not own it -- a reviewer finishing an agent draft (D19). Computed in the outer
+   * StoryScreen, which is where useAuth's `user` lives. See where it is consumed below.
+   */
+  isAnotherUsersAgentDraft: boolean;
+  /**
+   * Unit 9M: the reviewer arrived from the review queue (`/story/[id]?from=review`),
+   * and is a reviewer who can actually get back in. Resolved in the outer StoryScreen
+   * from the URL plus the pricing runtime's `reviewer` standing -- see the comment
+   * there for why neither half can be cached in the store.
+   */
+  showReviewQueueReturn: boolean;
   isAdminUser: boolean;
   continueCoinCost: number;
   continueIncludesImage: boolean;
@@ -2629,8 +2662,25 @@ function StoryScreenInner({
   const activeCharacterStorageKey = activeCharacterPromptItem?.referenceSheetStorageKey;
   const activeCharacterHasSheet = Boolean(activeCharacterPromptItem?.referenceSheetUrl);
   const activeCharacterHasReference = Boolean(activeCharacterPromptItem?.referenceSheetUrl || activeCharacterPromptItem?.generatedReferenceUrl);
+  // Unit 9M / D15: somebody else's agent draft is never published from here.
+  //
+  // A reviewer finishing an agent story reaches this screen with full editing rights
+  // (D19), and every publish affordance on it runs publishStoryline or
+  // autoPublishStoryline -- both of which stamp the storyline with the CALLER and
+  // author it under their display name. Publishing here would therefore put a real
+  // person's name on a story the agentic persona wrote. The correct path is
+  // publishReviewedStoryline, reached through the review queue's own Publish, which
+  // also records the decision row and moves the run; doing it from here would either
+  // skip that or duplicate it (phase 9c plan section 3.5: reuse publishRunAction, do
+  // not write a second transition).
+  //
+  // app/actions/persistence.ts's assertNotAnotherUsersAgentDraft is the real boundary;
+  // these three flags only keep the UI honest about what will happen. An ordinary
+  // author's story has no agentPersonaId and is unaffected on every line below, as is
+  // an un-migrated database, where the field is always null.
   const publishPath = isEnding ? extractStoryline(session.storyMap, currentNodeId) : null;
   const canPublishStandardStoryline = Boolean(
+    !isAnotherUsersAgentDraft &&
     publishPath?.beats.every((beat) => {
       const normalizedBeat = normalizeBeatMediaFields(beat);
       return Boolean(normalizedBeat.imageUrl || normalizedBeat.persistedImageUrl);
@@ -2638,6 +2688,7 @@ function StoryScreenInner({
   );
   const canPublishAudioStoryline = Boolean(
     isEnding &&
+    !isAnotherUsersAgentDraft &&
     isPromptOnlyStory &&
     !canPublishStandardStoryline &&
     cycleSettings.audioStorylinePublishEnabled
@@ -2678,7 +2729,24 @@ function StoryScreenInner({
             Publish as Audio Story
           </button>
         )}
-        {!lastPublishResult && onSave && isPromptOnlyStory && !canPublishStandardStoryline && !cycleSettings.audioStorylinePublishEnabled && (
+        {!lastPublishResult && isAnotherUsersAgentDraft && (
+          <div className="max-w-xl rounded-xl border border-indigo-500/25 bg-indigo-500/10 px-4 py-3 text-sm text-indigo-100">
+            <p>
+              This is an agent draft. Publishing it from here would credit it to you — it
+              has to be published from the review queue so it goes out under the persona
+              that wrote it.
+            </p>
+            {pricing.reviewer && (
+              <Link
+                href="/review"
+                className="mt-2 inline-flex items-center gap-1.5 font-medium text-indigo-200 underline underline-offset-2 transition-colors hover:text-white"
+              >
+                Open the review queue
+              </Link>
+            )}
+          </div>
+        )}
+        {!lastPublishResult && onSave && !isAnotherUsersAgentDraft && isPromptOnlyStory && !canPublishStandardStoryline && !cycleSettings.audioStorylinePublishEnabled && (
           <div className="max-w-xl rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
             Upload an image for every beat before publishing, or enable audio-only publishing in Global Settings.
           </div>
@@ -2991,7 +3059,7 @@ function StoryScreenInner({
     pricing.snapshot.canAccessUnbrandedExports
   );
   const reelPublishingEnabled = cycleSettings.reelStoryPublishEnabled;
-  const canPublishReel = Boolean(reelPublishingEnabled && !lastPublishResult && onSave && reelReadyForDistribution);
+  const canPublishReel = Boolean(reelPublishingEnabled && !lastPublishResult && onSave && reelReadyForDistribution && !isAnotherUsersAgentDraft);
   const canExportReelVideo = Boolean(videoDownloadGlobalOn && reelReadyForDistribution && canAccessVideoExport);
   const reelExportBeats = reelDistributionBeats.map((beat) => {
     const normalizedBeat = normalizeBeatMediaFields(beat);
@@ -6040,6 +6108,22 @@ function StoryScreenInner({
           </h1>
         </div>
         <div className="order-1 flex h-11 items-center justify-end gap-3 pl-32 pr-12 text-sm font-sans uppercase tracking-widest text-neutral-400 md:order-2 md:h-auto md:self-auto md:gap-4 md:p-0">
+          {/* Unit 9M: the way back out. Sits in the header's control group rather than
+              floating over the scene because the two fixed corners of this page are
+              already spoken for -- the Kissago logo top-left, UserMenu top-right (see
+              app/story/[id]/page.tsx). Indigo matches the agent-draft panel further
+              down, so the two reviewer-only affordances read as one thing. Label is
+              hidden below md for the same reason "Beat" is: that row is tight. */}
+          {showReviewQueueReturn && (
+            <Link
+              href="/review"
+              title="Back to the review queue"
+              className="flex items-center gap-2 rounded-full border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-1.5 text-xs text-indigo-200 transition-colors hover:bg-indigo-500/20 hover:text-indigo-100 md:px-3"
+            >
+              <ArrowLeft className="h-4 w-4 shrink-0" />
+              <span className="hidden md:inline">Review queue</span>
+            </Link>
+          )}
           <span className="text-xs md:text-sm">
             <span className="hidden md:inline">Beat </span>{currentBeat.beatNumber} / {session.maxBeats}
           </span>
@@ -6275,6 +6359,14 @@ function StoryScreenInner({
                   <span className="text-xs font-medium text-neutral-300">Painting this scene…</span>
                 </div>
               </div>
+            )}
+            {/* Content-safety fallback notice — the composer's detailed plan was
+                blocked, so this image was drawn from the simpler backup plan.
+                Reader-safe: no provider or model name, not dismissible. */}
+            {displayImageUrl && normalizedCurrentBeat.storyboardPlan?.fallbackReason === 'content_blocked' && (
+              <p className="mb-2 w-full text-xs text-neutral-400">
+                The picture for this scene was drawn from a simpler plan, because the detailed plan ran into content safety guidelines.
+              </p>
             )}
             {/* Card chrome toggles — minimize + prompt-tools popover */}
             <div className={`relative mb-2 w-full items-center gap-2 ${isReelStory ? 'hidden' : 'flex'} ${!isReelStory ? 'md:pl-[3.75rem]' : ''}`}>

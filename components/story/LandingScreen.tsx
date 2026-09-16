@@ -64,6 +64,7 @@ import type {
 import {
   SEED_GUIDANCE_WORD_CAP,
   SEED_SOURCE_WORD_CAP,
+  STORY_PROMPT_WORD_CAP,
   countAuthoringWords,
 } from '@/lib/story/authoring-limits';
 
@@ -177,7 +178,6 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [seedPreview, setSeedPreview] = useState<SeedPlan | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
-  const [authoringWordCap] = useState(initialLandingData.authoringWordCap);
   // Admin-enabled languages offered in the pickers (main story + reel).
   const storyLanguageOptions = initialLandingData.storyLanguageOptions;
   const [useCreatorOneKCharacterSheet, setUseCreatorOneKCharacterSheet] = useState(false);
@@ -587,7 +587,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const guidanceWordCount = countAuthoringWords(guidanceText);
   const isOverSourceWordCap = creationMode === 'seeded'
     ? sourceWordCount > SEED_SOURCE_WORD_CAP
-    : promptWordCount > authoringWordCap;
+    : promptWordCount > STORY_PROMPT_WORD_CAP;
   const isOverGuidanceWordCap = creationMode === 'seeded'
     && guidanceWordCount > SEED_GUIDANCE_WORD_CAP;
   const isOverAuthoringWordCap = isOverSourceWordCap || isOverGuidanceWordCap;
@@ -1655,8 +1655,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                   {creationMode === 'seeded'
                     ? `Source text is limited to ${SEED_SOURCE_WORD_CAP} words. Extra visual guidance has a separate ${SEED_GUIDANCE_WORD_CAP}-word limit.`
                     : isReelMode
-                      ? `Reel prompts use the ${authoringWordCap}-word authoring limit.`
-                      : `Prompt text shares the ${authoringWordCap}-word authoring limit.`}
+                      ? `Reel prompts use the ${STORY_PROMPT_WORD_CAP}-word authoring limit.`
+                      : `Prompt text shares the ${STORY_PROMPT_WORD_CAP}-word authoring limit.`}
                 </p>
                 {(pricing.controls.pricingHardEnforcementEnabled || pricing.controls.pricingCheckoutEnabled || previewSeedPlanCoinCost > 0) && (
                   <p className="text-xs font-sans text-neutral-500">

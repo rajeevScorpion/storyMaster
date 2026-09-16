@@ -5,13 +5,13 @@
 // episode, episode navigation links, and series bible read/edit. All actions
 // verify story ownership and enforce feature flags server-side.
 
-import { GoogleGenAI } from '@google/genai';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getFeatureFlag, getModelConfig } from '@/lib/ai/model-config';
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import { resolvePromptTemplate, LOCKED_PROMPT_GUARDRAILS } from '@/lib/ai/prompt-config.shared';
 import { storyBibleGenerationSchema } from '@/lib/ai/generation-schemas';
+import { generateText } from '@/lib/ai/text-gateway/router';
 import { buildEpisodeConfig, getEpisodeAuthoringDefaults } from '@/lib/episodes/continuity';
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
 import { signCharacterRosterReferenceSheetUrls } from '@/lib/media/storage-url-signing';
@@ -153,9 +153,6 @@ async function generateSeriesBibleAndSummary(input: {
   previousJournal: string;
   episodeNumber: number;
 }): Promise<GeneratedBible | null> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
-
   try {
     const [promptBody, { model, temperature }] = await Promise.all([
       getPublishedPrompt('story_bible_generation'),
@@ -184,19 +181,17 @@ async function generateSeriesBibleAndSummary(input: {
       episodeNumber: String(input.episodeNumber),
     });
 
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model,
-      contents: prompt,
-      config: {
-        systemInstruction: LOCKED_PROMPT_GUARDRAILS.story_bible_generation,
-        responseMimeType: 'application/json',
-        responseSchema: storyBibleGenerationSchema,
-        temperature: temperature ?? 0.35,
-      },
+    const { text } = await generateText({
+      taskKey: 'story_bible_generation',
+      modelKey: model,
+      prompt,
+      systemInstruction: LOCKED_PROMPT_GUARDRAILS.story_bible_generation,
+      schema: storyBibleGenerationSchema,
+      schemaName: 'story_bible_generation',
+      temperature: temperature ?? 0.35,
     });
-    if (!response.text) return null;
-    const parsed = JSON.parse(response.text) as Parameters<typeof formatBibleText>[0] & {
+    if (!text) return null;
+    const parsed = JSON.parse(text) as Parameters<typeof formatBibleText>[0] & {
       episodeSummary?: string;
     };
     const bibleText = formatBibleText(parsed);

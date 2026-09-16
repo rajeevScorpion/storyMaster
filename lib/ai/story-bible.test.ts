@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { formatNarrativeStoryBible, formatStoryBible, validateGeneratedBeat } from './story-bible';
+import {
+  assessGeneratedBeatLength,
+  formatNarrativeStoryBible,
+  formatStoryBible,
+  validateGeneratedBeat,
+} from './story-bible';
 import type { Character, StoryBeat, StorySession } from '@/lib/types/story';
 import { normalizeStoryConfig } from './story-config';
 
@@ -275,5 +280,54 @@ describe('validateGeneratedBeat - audience contracts', () => {
     });
     const issues = validateGeneratedBeat(beat, { currentBeat: 0 });
     expect(issues.some((issue) => issue.includes('preserve all storyText content'))).toBe(true);
+  });
+});
+
+describe('assessGeneratedBeatLength - word count is advisory only', () => {
+  it('validateGeneratedBeat never flags an over-length beat, but assessGeneratedBeatLength does', () => {
+    const words = Array.from({ length: 200 }, (_, index) => `word${index}`);
+    const storyText = words.join(' ');
+    const beat = makeValidBeat({
+      storyText,
+      storyTextParts: [
+        words.slice(0, 50).join(' '),
+        words.slice(50, 100).join(' '),
+        words.slice(100, 150).join(' '),
+        words.slice(150).join(' '),
+      ],
+    });
+    const sessionState: Partial<StorySession> = {
+      currentBeat: 0,
+      storyConfig: normalizeStoryConfig({ ageGroup: 'teens', beatLength: { level: 4 } }),
+    };
+
+    const issues = validateGeneratedBeat(beat, sessionState);
+    expect(issues.some((issue) => issue.includes('storyText has'))).toBe(false);
+
+    const assessment = assessGeneratedBeatLength(beat, sessionState);
+    expect(assessment).not.toBeNull();
+    expect(assessment?.withinAllowance).toBe(false);
+    expect(assessment?.note).toContain('cut about');
+  });
+
+  it('returns null for a strict canonical seeded beat', () => {
+    const source = 'These exact source words must stay unchanged.';
+    const beat = makeValidBeat({
+      storyText: source,
+      storyTextParts: ['These exact', 'source words', 'must stay', 'unchanged.'],
+      originKind: 'seeded_canonical',
+    });
+    const sessionState: Partial<StorySession> = {
+      currentBeat: 0,
+      storyConfig: normalizeStoryConfig({
+        authoring: {
+          mode: 'seeded',
+          sourceText: source,
+          sourceFidelity: 'strictly_follow',
+        },
+      }),
+    };
+
+    expect(assessGeneratedBeatLength(beat, sessionState)).toBeNull();
   });
 });

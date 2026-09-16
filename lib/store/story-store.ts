@@ -19,6 +19,7 @@ import {
   type GeneratedImageResult,
 } from '@/app/actions/story-runtime';
 import { buildFinalPortraitPrompt } from '@/lib/ai/portrait-prompt.shared';
+import { deriveOpenThreads } from '@/lib/store/open-threads.shared';
 import { selectRelevantWorld } from '@/lib/references/reference-routing';
 import {
   synthesizeDirectPortraitTasks,
@@ -57,6 +58,8 @@ import type { ImageBatchScope } from '@/lib/ai/image-batch.shared';
 import {
   authorizeCurrentUserBillableAction,
   authorizeCurrentUserImageModelBillableAction,
+  authorizeCurrentUserImageRegenerationBillableAction,
+  authorizeCurrentUserStoryContinuation,
   finalizeCurrentUserBillableAction,
   releaseCurrentUserBillableAction,
 } from '@/app/actions/pricing-enforcement';
@@ -98,13 +101,19 @@ import {
   type BeatImageRegenerationOptions,
 } from '@/lib/ai/image-regeneration.shared';
 import { resolveImagePromptCompilerRuntimeAction } from '@/app/actions/prompt-compiler';
-import { buildCanonicalImageScene } from '@/lib/ai/prompt-compiler/scene-spec.shared';
+import { buildCanonicalImageScene, resolveImageFacingNames } from '@/lib/ai/prompt-compiler/scene-spec.shared';
+import {
+  filterCharacterReferencesByPresence,
+  presentCharacterNames,
+  shouldAttachPreviousStoryboardReference,
+} from '@/lib/ai/storyboard-plan.shared';
 import {
   assembleFinalImagePrompt,
   type ImagePromptCompilerRuntime,
   type PromptCompilerBeatMetadata,
 } from '@/lib/ai/prompt-compiler/assemble.shared';
 import { DEFAULT_PROMPT_COMPILER_CAPABILITY } from '@/lib/ai/prompt-compiler/capability.shared';
+import { estimateReferenceBindingChars } from '@/lib/ai/reference-binding';
 import type { ImageModelSelection } from '@/lib/ai/image-models.shared';
 import type { StoryboardImagePromptOptions } from '@/lib/ai/beat-orchestration';
 import {
@@ -400,16 +409,6 @@ function buildCharacterRegistry(beats: StoryBeat[], fallbackCharacters: Characte
   return Array.from(registry.values());
 }
 
-function deriveOpenThreads(beats: StoryBeat[]): string[] {
-  const threads = beats
-    .filter((beat) => !beat.isEnding)
-    .flatMap((beat) => [beat.nextBeatGoal, ...(beat.continuityNotes || [])])
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-
-  return Array.from(new Set(threads)).slice(-6);
-}
-
 function sanitizeCharactersForPersistence(characters: Character[]): Character[] {
   return characters.map((character) => ({
     ...character,
@@ -578,10 +577,17 @@ function resolveBeatWorldRouting(
   return result;
 }
 
+/**
+ * `portraitReferences` MUST already be presence-filtered (see
+ * restrictReferencesToPresentCharacters) so `shouldAttachPreviousStoryboardReference`'s
+ * presentCharacterHasReference check reflects only the characters actually in
+ * this beat, not every character the story has ever introduced.
+ */
 function buildStoryboardReferenceImages(
   beat: StoryBeat,
-  previousStoryboardUrl?: string,
-  portraitReferences: ReferenceImage[] = []
+  previousStoryboardUrl: string | undefined,
+  portraitReferences: ReferenceImage[] = [],
+  storyboardPlan?: StoryboardPlan | null
 ): ReferenceImage[] {
   if (beat.beatNumber === 1) {
     return portraitReferences;
@@ -589,11 +595,30 @@ function buildStoryboardReferenceImages(
 
   const references: ReferenceImage[] = [];
   references.push(...portraitReferences);
-  const sceneReference = buildReferenceFromValue('scene', previousStoryboardUrl);
-  if (sceneReference) {
-    references.push(sceneReference);
+  // Q4 / R8 (Unit 5): a big time jump or location change skips the previous
+  // beat's storyboard as a reference -- it otherwise freezes wardrobe, pose
+  // and staging the new beat is meant to reconsider -- unless no present
+  // character has a reference image of their own to anchor identity instead.
+  const presentCharacterHasReference = portraitReferences.some((ref) => ref.type === 'character');
+  if (shouldAttachPreviousStoryboardReference(storyboardPlan, { presentCharacterHasReference })) {
+    const sceneReference = buildReferenceFromValue('scene', previousStoryboardUrl);
+    if (sceneReference) {
+      references.push(sceneReference);
+    }
   }
   return references;
+}
+
+/** Restricts a reference list to characters present somewhere in the beat
+ * (Unit 5): `presentCharacterNames` returns null (don't restrict) for a
+ * fallback plan or a plan with no presence data, matching pre-Unit-5
+ * behaviour exactly. */
+function restrictReferencesToPresentCharacters(
+  refs: ReferenceImage[],
+  storyboardPlan: StoryboardPlan | null | undefined,
+  characters: Character[]
+): ReferenceImage[] {
+  return filterCharacterReferencesByPresence(refs, presentCharacterNames(storyboardPlan, characters));
 }
 
 function referenceKey(reference: ReferenceImage): string {
@@ -612,6 +637,29 @@ function mergeReferenceImages(...groups: ReferenceImage[][]): ReferenceImage[] {
     }
   }
   return merged;
+}
+
+/**
+ * Rewrite every character reference's `name` to the image-facing name the
+ * compiled prompt uses for that character (`resolveImageFacingNames` — the
+ * same call the scene builder makes for `SceneCharacter.imageName`), so a
+ * reference-binding line never names a character in a script the English-only
+ * compiled prompt does not use (framework §7 Q1; Unit 4b). Applied once, to
+ * the final merged list, rather than to every collector that can contribute a
+ * character reference (portraits, generated portraits, direct-mode uploads) —
+ * scene/world references have no character identity and pass through as-is.
+ */
+function applyImageFacingReferenceNames(
+  refs: ReferenceImage[],
+  characters: Character[],
+  plan: StoryboardPlan | null | undefined
+): ReferenceImage[] {
+  const names = resolveImageFacingNames(characters, plan);
+  return refs.map((ref) => {
+    if (ref.type !== 'character' || !ref.name) return ref;
+    const imageName = names.get(ref.name.normalize('NFC').trim().toLowerCase());
+    return imageName && imageName !== ref.name ? { ...ref, name: imageName } : ref;
+  });
 }
 
 function imageContinuityOptions(
@@ -1175,6 +1223,14 @@ async function assembleStoryboardFinalPrompt(params: {
   worldAnchor?: string;
   regeneration?: BeatImageRegenerationOptions;
   imageModelSelection?: ImageModelSelection | null;
+  /** The reference images that will actually be sent with this image (post
+   * name-mapping). Their reference-binding lines are appended to the prompt
+   * AFTER compilation (story-runtime.ts / image-job-runner.ts), so their
+   * length must be reserved from the compiler's budget here — otherwise the
+   * bound prompt can exceed PROMPT_HARD_MAX_CHARS even though the compiled
+   * prompt alone stayed under it. Omit only when no reference images will be
+   * attached (reserves 0, unchanged from pre-4b behaviour). */
+  referenceImages?: ReferenceImage[];
 }): Promise<{
   finalPrompt: string;
   override?: NonNullable<StoryboardImagePromptOptions['finalPromptOverride']>;
@@ -1195,7 +1251,8 @@ async function assembleStoryboardFinalPrompt(params: {
       worldAnchor: params.worldAnchor,
       regeneration: params.regeneration,
     });
-    const assembled = assembleFinalImagePrompt({ runtime, scene, legacyBuild: params.legacyBuild });
+    const reservedChars = params.referenceImages ? estimateReferenceBindingChars(params.referenceImages) : undefined;
+    const assembled = assembleFinalImagePrompt({ runtime, scene, legacyBuild: params.legacyBuild, reservedChars });
     return {
       finalPrompt: assembled.finalPrompt,
       override: { finalPrompt: assembled.finalPrompt, engine: assembled.engine, compiler: assembled.compiler },
@@ -2630,6 +2687,9 @@ export const useStoryStore = create<StoryState>()(
                 });
                 return true;
               }
+              if (core.status === 'failed') {
+                throw new Error(core.message);
+              }
 
               let beat = enforceReelBeatCap(core.beat, storyConfig);
               const storyboardPlan = core.storyboardPlan;
@@ -3039,11 +3099,19 @@ export const useStoryStore = create<StoryState>()(
           }
           const beatWorldRouting = resolveBeatWorldRouting(initialSession, beat);
           const portraitRefs = initialSession.enableReferenceImages && !promptOnly
-            ? mergeReferenceImages(
-                collectBeatPortraitReferences(beat),
-                portraitGenerationResult.references,
-                directFallbackRefs,
-                beatWorldRouting.worldReference ? [beatWorldRouting.worldReference] : []
+            ? applyImageFacingReferenceNames(
+                restrictReferencesToPresentCharacters(
+                  mergeReferenceImages(
+                    collectBeatPortraitReferences(beat),
+                    portraitGenerationResult.references,
+                    directFallbackRefs,
+                    beatWorldRouting.worldReference ? [beatWorldRouting.worldReference] : []
+                  ),
+                  beat.storyboardPlan,
+                  beat.characters
+                ),
+                beat.characters,
+                beat.storyboardPlan
               )
             : [];
           if (promptOnly) {
@@ -3174,6 +3242,7 @@ export const useStoryStore = create<StoryState>()(
                 aspectRatio: storyAspectRatio,
                 worldAnchor: beatWorldRouting.worldAnchor,
                 imageModelSelection: storyConfig.imageModelSelection ?? null,
+                referenceImages: portraitRefs,
               });
               beat.finalImagePromptText = jobFinalPrompt;
               if (jobPromptCompiler) {
@@ -3390,6 +3459,7 @@ export const useStoryStore = create<StoryState>()(
             aspectRatio: storyAspectRatio,
             worldAnchor: beatWorldRouting.worldAnchor,
             imageModelSelection: storyConfig.imageModelSelection ?? null,
+            referenceImages: portraitRefs,
           };
           const [imageResult, narratorVoiceResolution] = await Promise.all([
             promptOnly
@@ -4107,6 +4177,9 @@ export const useStoryStore = create<StoryState>()(
                 });
                 return true;
               }
+              if (core.status === 'failed') {
+                throw new Error(core.message);
+              }
 
               let beat = enforceReelBeatCap(core.beat, session.storyConfig);
               const storyboardPlan = core.storyboardPlan;
@@ -4313,7 +4386,7 @@ export const useStoryStore = create<StoryState>()(
             timingSteps,
             'wallet_authorization',
             'Authorize branch continuation',
-            () => authorizeCurrentUserImageModelBillableAction({
+            () => authorizeCurrentUserStoryContinuation({
               actionKey: continueStoryActionKey,
               idempotencyKey: `continue_story:${session.savedStoryId || session.storySessionId}:${session.storyMap.currentNodeId}:${optionId}:${uuidv4()}`,
               relatedStoryId: session.savedStoryId ?? null,
@@ -4539,9 +4612,14 @@ export const useStoryStore = create<StoryState>()(
           }
 
           const worldRouting = resolveBeatWorldRouting(session, beat);
-          const referenceImages = mergeReferenceImages(
-            buildStoryboardReferenceImages(beat, currentNode.data.imageUrl, portraitRefs),
-            worldRouting.worldReference ? [worldRouting.worldReference] : []
+          const presentPortraitRefs = restrictReferencesToPresentCharacters(portraitRefs, storyboardPlan, beat.characters);
+          const referenceImages = applyImageFacingReferenceNames(
+            mergeReferenceImages(
+              buildStoryboardReferenceImages(beat, currentNode.data.imageUrl, presentPortraitRefs, storyboardPlan),
+              worldRouting.worldReference ? [worldRouting.worldReference] : []
+            ),
+            beat.characters,
+            storyboardPlan
           );
 
           // Server-pipeline routing (admin processing mode): persist the beat
@@ -4577,6 +4655,7 @@ export const useStoryStore = create<StoryState>()(
                   aspectRatio: storyAspectRatio,
                   task: getImageTaskKey(session.storyConfig),
                   ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                  ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}),
                 }
               ),
               taskKey: getImageTaskKey(session.storyConfig),
@@ -4588,6 +4667,7 @@ export const useStoryStore = create<StoryState>()(
               aspectRatio: storyAspectRatio,
               worldAnchor: worldRouting.worldAnchor,
               imageModelSelection: session.storyConfig.imageModelSelection ?? null,
+              referenceImages,
             });
             beat.finalImagePromptText = jobFinalPrompt;
             if (jobPromptCompiler) {
@@ -4795,6 +4875,7 @@ export const useStoryStore = create<StoryState>()(
             aspectRatio: storyAspectRatio,
             worldAnchor: worldRouting.worldAnchor,
             imageModelSelection: session.storyConfig.imageModelSelection ?? null,
+            referenceImages,
           };
           const imageResult = promptOnly
             ? await (async () => {
@@ -6182,7 +6263,7 @@ export const useStoryStore = create<StoryState>()(
 
         try {
           if (!promptOnly) {
-            const billingAuthorization = await authorizeCurrentUserImageModelBillableAction({
+            const billingAuthorization = await authorizeCurrentUserImageRegenerationBillableAction({
               actionKey: 'regenerate_image',
               idempotencyKey: `regenerate_image:${session.savedStoryId || session.storySessionId}:${nodeId}:${uuidv4()}`,
               relatedStoryId: session.savedStoryId ?? null,
@@ -6280,13 +6361,27 @@ export const useStoryStore = create<StoryState>()(
           }
 
           const worldRouting = resolveBeatWorldRouting(session, beatForRender);
-          const referenceImages = mergeReferenceImages(
-            buildStoryboardReferenceImages(
-              beatForRender,
-              parentNode?.data.imageUrl || (parentNode ? getBeatPersistedImageUrl(parentNode.data) ?? undefined : undefined),
-              portraitReferences
+          // Filtered only for the attach list -- the gate above (deciding
+          // whether to generate NEW portraits) intentionally keeps reading the
+          // unfiltered portraitReferences, so presence restriction never
+          // itself triggers a fresh generation call.
+          const presentPortraitReferences = restrictReferencesToPresentCharacters(
+            portraitReferences,
+            storyboardPlan,
+            beatForRender.characters
+          );
+          const referenceImages = applyImageFacingReferenceNames(
+            mergeReferenceImages(
+              buildStoryboardReferenceImages(
+                beatForRender,
+                parentNode?.data.imageUrl || (parentNode ? getBeatPersistedImageUrl(parentNode.data) ?? undefined : undefined),
+                presentPortraitReferences,
+                storyboardPlan
+              ),
+              worldRouting.worldReference ? [worldRouting.worldReference] : []
             ),
-            worldRouting.worldReference ? [worldRouting.worldReference] : []
+            beatForRender.characters,
+            storyboardPlan
           );
           // Refine mode stays visually anchored to the current image by
           // sending it as an extra scene reference; reimagine deliberately
@@ -6344,6 +6439,7 @@ export const useStoryStore = create<StoryState>()(
               worldAnchor: worldRouting.worldAnchor,
               regeneration: regenOptions,
               imageModelSelection: session.storyConfig.imageModelSelection ?? null,
+              referenceImages,
             });
             if (jobPromptCompiler) {
               beatForRender.imageGenerationMetadata = { ...(beatForRender.imageGenerationMetadata ?? {}), promptCompiler: jobPromptCompiler };
@@ -6466,6 +6562,7 @@ export const useStoryStore = create<StoryState>()(
             worldAnchor: worldRouting.worldAnchor,
             regeneration: regenOptions,
             imageModelSelection: session.storyConfig.imageModelSelection ?? null,
+            referenceImages,
           };
           const regenLegacyBuild = () => buildFinalStoryboardImagePrompt(
             storyboardPrompt,

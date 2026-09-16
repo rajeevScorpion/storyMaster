@@ -32,6 +32,18 @@ export interface ResolvedStoryBeatLength {
   targetMaxWords: number;
   hardMinWords: number;
   hardMaxWords: number;
+  allowanceMinWords: number;
+  allowanceMaxWords: number;
+}
+
+export interface StoryBeatLengthAssessment {
+  wordCount: number;
+  targetWords: number;
+  allowanceMinWords: number;
+  allowanceMaxWords: number;
+  withinAllowance: boolean;
+  /** Directional instruction for a repair note; null when within the allowance. */
+  note: string | null;
 }
 
 const STORY_AUDIENCE_PROFILES: Record<AgeGroup, StoryAudienceProfile> = {
@@ -152,15 +164,20 @@ export function resolveStoryBeatLength(ageGroup: unknown, levelValue: unknown): 
   const hardMinWords = profile.beatWordTargets[0];
   const hardMaxWords = profile.beatWordTargets[profile.beatWordTargets.length - 1];
   const tolerance = Math.max(4, Math.round(targetWords * 0.12));
+  const targetMinWords = Math.max(1, targetWords - tolerance);
+  const targetMaxWords = targetWords + tolerance;
+  const grace = Math.max(4, Math.round(targetWords * 0.15));
 
   return {
     level,
     label: STORY_BEAT_LENGTH_LABELS[level],
     targetWords,
-    targetMinWords: Math.max(hardMinWords, targetWords - tolerance),
-    targetMaxWords: Math.min(hardMaxWords, targetWords + tolerance),
+    targetMinWords,
+    targetMaxWords,
     hardMinWords,
     hardMaxWords,
+    allowanceMinWords: Math.max(1, targetMinWords - grace),
+    allowanceMaxWords: targetMaxWords + grace,
   };
 }
 
@@ -179,6 +196,27 @@ export function countStoryWords(text: string): number {
   return trimmed.split(/\s+/u).filter((token) => /[\p{L}\p{N}]/u.test(token)).length;
 }
 
+export function assessStoryBeatLength(text: string, length: ResolvedStoryBeatLength): StoryBeatLengthAssessment {
+  const wordCount = countStoryWords(text);
+  const withinAllowance = wordCount >= length.allowanceMinWords && wordCount <= length.allowanceMaxWords;
+
+  let note: string | null = null;
+  if (!withinAllowance) {
+    note = wordCount > length.targetWords
+      ? `storyText has ${wordCount} words; cut about ${wordCount - length.targetWords} words to reach about ${length.targetWords} (${length.targetMinWords}-${length.targetMaxWords}).`
+      : `storyText has ${wordCount} words; add about ${length.targetWords - wordCount} words to reach about ${length.targetWords} (${length.targetMinWords}-${length.targetMaxWords}).`;
+  }
+
+  return {
+    wordCount,
+    targetWords: length.targetWords,
+    allowanceMinWords: length.allowanceMinWords,
+    allowanceMaxWords: length.allowanceMaxWords,
+    withinAllowance,
+    note,
+  };
+}
+
 export function formatAudienceNarrativeContract(ageGroup: unknown, levelValue: unknown): string {
   const profile = getStoryAudienceProfile(ageGroup);
   const length = resolveStoryBeatLength(ageGroup, levelValue);
@@ -187,7 +225,7 @@ export function formatAudienceNarrativeContract(ageGroup: unknown, levelValue: u
     `- Audience: ${profile.label}.`,
     `- Narrative grammar: ${profile.narrativeDirection}`,
     `- Branching grammar: ${profile.branchingDirection}`,
-    `- Beat length: ${length.label}; target ${length.targetMinWords}-${length.targetMaxWords} words (about ${length.targetWords}), with an absolute audience range of ${length.hardMinWords}-${length.hardMaxWords} words.`,
+    `- Beat length: ${length.label}. storyText must be ${length.targetMinWords}-${length.targetMaxWords} words (aim for about ${length.targetWords}), about ${Math.round(length.targetWords / 4)} words for each of the four narrative movements. This range is the only length limit.`,
     '- Preserve one coherent beat with four visualizable narrative movements. More words add meaningful sensory detail, dialogue, subtext, or emotional consequence; they must not add unrelated plot turns, filler, or extra characters.',
     '- On a strictly-follow canonical seeded beat, verbatim source text overrides the beat-length target. Never shorten, expand, or rewrite that source text.',
   ].join('\n');
@@ -202,6 +240,18 @@ export function formatAudienceVisualContract(ageGroup: unknown): string {
     '- This direction governs readability, emotional framing, compositional density, and threat presentation. It must not dictate a fixed palette, genre, rendering style, camera shot, or literal interpretation.',
     '- Keep all four panels as distinct sequential moments in the single storyboard image. Quiet, relational, or contemplative beats may progress through gesture, attention, distance, expression, environment, or visual metaphor rather than forced physical action.',
   ].join('\n');
+}
+
+/**
+ * One-line audience visual direction for a sharedVisualInvariants entry. Unlike
+ * formatAudienceVisualContract (the multi-line contract appended to the composer's
+ * *input* prompt, header and meta-instructions included), this is the single
+ * invariant carried into the *output* plan and ultimately the image prompt --
+ * see beat-orchestration.ts composeStoryboardPlan and buildFallbackStoryboardPlan.
+ */
+export function formatAudienceImageDirection(ageGroup: unknown): string {
+  const profile = getStoryAudienceProfile(ageGroup);
+  return `Audience (${profile.label}): ${profile.visualDirection}`;
 }
 
 export function formatAudienceNarrationDirection(ageGroup: unknown): string {
