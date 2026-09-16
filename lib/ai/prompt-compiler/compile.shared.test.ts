@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { compileImagePrompt, COMPILER_VERSION } from './compile.shared';
 import { buildCanonicalImageScene } from './scene-spec.shared';
-import type { PromptCompilerCapability } from './capability.shared';
+import { PROMPT_HARD_MAX_CHARS, type PromptCompilerCapability } from './capability.shared';
+import { buildReferenceBindingLines, estimateReferenceBindingChars } from '../reference-binding';
 import {
   MEDIEVAL_MARKET_INPUT,
   MEDIEVAL_MARKET_PLAN,
@@ -190,6 +191,44 @@ describe('compileImagePrompt budget tiers', () => {
     expect(withReserve.budget.targetChars).toBe(withoutReserve.budget.targetChars - 502);
     expect(withReserve.budget.hardMaxChars).toBe(withoutReserve.budget.hardMaxChars - 502);
     expect(withReserve.characterCount).toBeLessThanOrEqual(withReserve.budget.hardMaxChars);
+  });
+});
+
+describe('compileImagePrompt + reference-binding lines (Unit 4b end-to-end budget)', () => {
+  it('never exceeds PROMPT_HARD_MAX_CHARS once binding lines for 4 references are appended to a pathological scene', () => {
+    // Same pathological scene as the tier-3 test above, plus 4 reference
+    // images -- the exact combination Unit 4b's reservation is meant to
+    // cover: a scene compressed all the way to the hard cap, and the text
+    // appended after compilation (story-runtime.ts / image-job-runner.ts),
+    // together, never crossing PROMPT_HARD_MAX_CHARS.
+    const LONGWORD = 'Supercalifragilisticexpialidocious';
+    const scene = buildCanonicalImageScene(MEDIEVAL_MARKET_INPUT);
+    scene.world.invariants = Array.from({ length: 12 }, (_, i) => `${LONGWORD} invariant number ${i} in the market.`);
+    for (const panel of scene.panels) {
+      panel.action = `${LONGWORD} `.repeat(40).trim();
+      panel.emotion = 'a complex layered emotional state described at unusual length for testing';
+      panel.visualFocus = Array.from({ length: 6 }, (_, i) => `unique focus descriptor number ${i} extra words`);
+    }
+    scene.continuity.notes = [`${LONGWORD} continuity note one.`, `${LONGWORD} continuity note two.`];
+    scene.negativeConstraints = [
+      ...scene.negativeConstraints,
+      ...Array.from({ length: 20 }, (_, i) => `unwanted specific element number ${i}`),
+    ];
+
+    const references = [
+      { type: 'character', name: 'Master Elrick' },
+      { type: 'character', name: 'Leo' },
+      { type: 'scene' },
+      { type: 'character', name: 'A Third Character With An Unusually Long Display Name Indeed' },
+    ];
+    const reservedChars = estimateReferenceBindingChars(references);
+    const result = compileImagePrompt(scene, NEUTRAL, { reservedChars });
+    // The estimate is computed pre-resolution (the planned list); the compact
+    // form is what a compiled engine actually sends -- exactly as
+    // assembleStoryboardFinalPrompt / processBeatVisuals do.
+    const bindingLines = buildReferenceBindingLines(references, { compact: true });
+    const boundPrompt = bindingLines ? `${result.fullPrompt}\n\n${bindingLines}` : result.fullPrompt;
+    expect(boundPrompt.length).toBeLessThanOrEqual(PROMPT_HARD_MAX_CHARS);
   });
 });
 

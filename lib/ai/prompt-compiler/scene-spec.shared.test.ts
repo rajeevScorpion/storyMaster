@@ -3,6 +3,8 @@ import {
   buildCanonicalImageScene,
   validateCanonicalImageScene,
   deriveCharactersPresent,
+  deriveImageName,
+  resolveImageFacingNames,
   findWholeName,
   sanitizeText,
   slugifyCharacterKey,
@@ -222,6 +224,56 @@ describe('deriveCharactersPresent', () => {
   it('the Hindi danda (।) negation guard excludes an absent character', () => {
     const chars = [sceneChar('anvi', ANVI.name)];
     expect(deriveCharactersPresent(`${ANVI.name} is absent।`, chars)).toEqual([]);
+  });
+});
+
+describe('resolveImageFacingNames', () => {
+  it('maps a Hindi canonical name to the plan characterVisuals englishName', () => {
+    const plan = structuredClone(HINDI_VILLAGE_PLAN);
+    plan.characterVisuals = [
+      {
+        name: RAGHAV.name,
+        englishName: 'Raghav',
+        identityAnchors: 'weathered farmer, thick moustache',
+        currentAppearance: 'white kurta',
+        modes: {},
+      },
+      {
+        name: ANVI.name,
+        englishName: 'Anvi',
+        identityAnchors: 'ten-year-old girl',
+        currentAppearance: 'yellow frock, black hair',
+        modes: {},
+      },
+    ];
+    const names = resolveImageFacingNames([RAGHAV, ANVI], plan);
+    expect(names.get(RAGHAV.name.normalize('NFC').trim().toLowerCase())).toBe('Raghav');
+    expect(names.get(ANVI.name.normalize('NFC').trim().toLowerCase())).toBe('Anvi');
+  });
+
+  it('falls back to a positional placeholder for a non-English name with no englishName', () => {
+    // HINDI_VILLAGE_PLAN carries no characterVisuals at all.
+    const names = resolveImageFacingNames([RAGHAV, ANVI], HINDI_VILLAGE_PLAN);
+    expect(names.get(RAGHAV.name.normalize('NFC').trim().toLowerCase())).toBe('Character 1');
+    expect(names.get(ANVI.name.normalize('NFC').trim().toLowerCase())).toBe('Character 2');
+  });
+
+  it('agrees with deriveImageName (the function buildSceneCharacters uses) for the same inputs', () => {
+    const plan = structuredClone(HINDI_VILLAGE_PLAN);
+    plan.characterVisuals = [
+      { name: ANVI.name, englishName: 'Anvi', identityAnchors: '', currentAppearance: '', modes: {} },
+    ];
+    const characters = [RAGHAV, ANVI];
+    const names = resolveImageFacingNames(characters, plan);
+    characters.forEach((character, index) => {
+      const expected = deriveImageName(character.name, index, plan.characterVisuals);
+      expect(names.get(character.name.normalize('NFC').trim().toLowerCase())).toBe(expected);
+    });
+  });
+
+  it('returns an empty map with no plan', () => {
+    const names = resolveImageFacingNames([RAGHAV, ANVI], null);
+    expect(names.get(RAGHAV.name.normalize('NFC').trim().toLowerCase())).toBe('Character 1');
   });
 });
 

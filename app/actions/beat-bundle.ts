@@ -21,9 +21,12 @@ import {
 } from '@/lib/ai/beat-orchestration';
 import { ReaderFacingTextError } from '@/lib/ai/text-gateway/outcome.shared';
 import { TextGatewayError, errorDetail } from '@/lib/ai/text-gateway/types.shared';
-import { buildCanonicalImageScene } from '@/lib/ai/prompt-compiler/scene-spec.shared';
+import { buildCanonicalImageScene, resolveImageFacingNames } from '@/lib/ai/prompt-compiler/scene-spec.shared';
 import { assembleFinalImagePrompt } from '@/lib/ai/prompt-compiler/assemble.shared';
+import { estimateReferenceBindingChars } from '@/lib/ai/reference-binding';
 import { resolveImagePromptCompilerRuntimeAction } from '@/app/actions/prompt-compiler';
+import { selectRelevantWorld } from '@/lib/references/reference-routing';
+import { selectDirectWorldReference } from '@/lib/references/direct-routing';
 import {
   collectCharacterPortraitReferences,
   generatePortraitsForPlanServer,
@@ -41,6 +44,7 @@ import type {
   PricingBillableActionAuthorization,
 } from '@/lib/types/pricing';
 import type {
+  Character,
   StoryAspectRatio,
   StoryBeat,
   StoryConfig,
@@ -250,6 +254,51 @@ export type ProcessBeatVisualsResult =
       savedByUserId?: string;
     };
 
+/**
+ * Reference Personalization's world-relevance selector (`resolveBeatWorldRouting`
+ * in lib/store/story-store.ts) has no server twin, so the bundle path attached
+ * no world anchor or world reference at all (Unit 4b / R9). `selectRelevantWorld`
+ * and `selectDirectWorldReference` are pure, I/O-free selectors (no client-only
+ * dependency), so this mirrors the store's logic rather than importing it --
+ * the store module is 'use client' and cannot be imported into this
+ * 'use server' file (see CLAUDE.md's client/server value-import rule).
+ */
+function resolveBundleWorldRouting(
+  storyConfig: StoryConfig,
+  beat: StoryBeat
+): { worldAnchor?: string; worldReference?: ServerReferenceImage } {
+  const worlds = storyConfig.references?.worlds;
+  if (!worlds || worlds.length === 0) return {};
+  const beatText = `${beat.title ?? ''} ${beat.sceneSummary ?? ''} ${beat.imagePrompt ?? ''}`;
+  const selected = selectRelevantWorld(worlds, beatText, null);
+  const worldReference = selectDirectWorldReference(worlds, beatText, null);
+  const result: { worldAnchor?: string; worldReference?: ServerReferenceImage } = {};
+  if (selected && selected.anchor.trim().length > 0) result.worldAnchor = selected.anchor;
+  if (worldReference) result.worldReference = worldReference;
+  return result;
+}
+
+/**
+ * Rewrite every character reference's `name` to the image-facing name the
+ * compiled prompt uses for that character (`resolveImageFacingNames` -- the
+ * same call the scene builder makes for `SceneCharacter.imageName`), so a
+ * reference-binding line never names a character in a script the English-only
+ * compiled prompt does not use (framework §7 Q1; Unit 4b). Scene/world
+ * references have no character identity and pass through unchanged.
+ */
+function applyImageFacingReferenceNames(
+  refs: ServerReferenceImage[],
+  characters: Character[],
+  plan: StoryboardPlan | null | undefined
+): ServerReferenceImage[] {
+  const names = resolveImageFacingNames(characters, plan);
+  return refs.map((ref) => {
+    if (ref.type !== 'character' || !ref.name) return ref;
+    const imageName = names.get(ref.name.normalize('NFC').trim().toLowerCase());
+    return imageName && imageName !== ref.name ? { ...ref, name: imageName } : ref;
+  });
+}
+
 export async function processBeatVisuals(input: ProcessBeatVisualsInput): Promise<ProcessBeatVisualsResult> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -302,22 +351,30 @@ export async function processBeatVisuals(input: ProcessBeatVisualsInput): Promis
     },
   });
 
+  const worldRouting = resolveBundleWorldRouting(input.storyConfig, beat);
   const portraitReferences = mergeServerReferenceImages(
     collectCharacterPortraitReferences(beat.characters),
     portraitResult.references
   );
-  const references: ServerReferenceImage[] = beat.beatNumber === 1
-    ? portraitReferences
-    : [
-        ...portraitReferences,
-        ...(input.previousImageUrl
-          ? [
-              input.previousImageUrl.startsWith('data:')
-                ? { type: 'scene' as const, dataUrl: input.previousImageUrl }
-                : { type: 'scene' as const, url: input.previousImageUrl },
-            ]
-          : []),
-      ];
+  const references: ServerReferenceImage[] = applyImageFacingReferenceNames(
+    mergeServerReferenceImages(
+      beat.beatNumber === 1
+        ? portraitReferences
+        : [
+            ...portraitReferences,
+            ...(input.previousImageUrl
+              ? [
+                  input.previousImageUrl.startsWith('data:')
+                    ? { type: 'scene' as const, dataUrl: input.previousImageUrl }
+                    : { type: 'scene' as const, url: input.previousImageUrl },
+                ]
+              : []),
+          ],
+        worldRouting.worldReference ? [worldRouting.worldReference] : []
+      ),
+    beat.characters,
+    storyboardPlan
+  );
 
   const storyboardPrompt = beat.storyboardPromptText || renderStoryboardPlan(storyboardPlan);
   const legacyBuild = () => buildFinalStoryboardImagePrompt(
@@ -329,6 +386,7 @@ export async function processBeatVisuals(input: ProcessBeatVisualsInput): Promis
     {
       aspectRatio: input.storyAspectRatio,
       task: 'image_generation',
+      ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}),
     }
   );
 
@@ -346,11 +404,18 @@ export async function processBeatVisuals(input: ProcessBeatVisualsInput): Promis
     characters: beat.characters,
     visualStyle: input.visualStyle,
     aspectRatio: input.storyAspectRatio,
+    worldAnchor: worldRouting.worldAnchor,
   });
+  const reservedChars = estimateReferenceBindingChars(references);
   let finalPrompt: string;
   let promptCompilerMeta: ReturnType<typeof assembleFinalImagePrompt>['compiler'] = undefined;
   try {
-    const assembled = assembleFinalImagePrompt({ runtime: compilerRuntime, scene: canonicalScene, legacyBuild });
+    const assembled = assembleFinalImagePrompt({
+      runtime: compilerRuntime,
+      scene: canonicalScene,
+      legacyBuild,
+      reservedChars,
+    });
     finalPrompt = assembled.finalPrompt;
     promptCompilerMeta = assembled.compiler;
   } catch (error) {

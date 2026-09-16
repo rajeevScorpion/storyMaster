@@ -17,6 +17,7 @@ import {
 } from '@/lib/media/image-versions';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
 import { buildReferenceBindingLines } from '@/lib/ai/reference-binding';
+import { PROMPT_HARD_MAX_CHARS } from '@/lib/ai/prompt-compiler/capability.shared';
 import {
   BEAT_IMAGE_MAX_VERSIONS_FLAG_KEY,
   normalizeMaxImageVersionsPerBeat,
@@ -336,10 +337,15 @@ async function processJob(admin: AdminClient, job: ImageGenerationJobRow): Promi
     // so identity attaches to the right image even after some refs dropped. When
     // the compiled prompt already carries full identity + style-lock language,
     // use the compact binding form so the two do not duplicate.
-    const bindingLines = buildReferenceBindingLines(survivors, {
-      compact: payload.promptCompiler?.engine === 'compiled',
-    });
+    const compiledEngine = payload.promptCompiler?.engine === 'compiled';
+    const bindingLines = buildReferenceBindingLines(survivors, { compact: compiledEngine });
     const boundPrompt = bindingLines ? `${payload.finalPrompt}\n\n${bindingLines}` : payload.finalPrompt;
+    // The compiler already reserved room for these binding lines (Unit 4b), so
+    // this should be unreachable. Warn instead of trimming -- trimming here
+    // could cut mid-word or through a section the compiler protects.
+    if (compiledEngine && boundPrompt.length > PROMPT_HARD_MAX_CHARS) {
+      console.warn('[image_prompt.over_hard_max]', { chars: boundPrompt.length, referenceCount: survivors.length });
+    }
     const result = await generateSelectedImage({
       task: payload.imageTask,
       prompt: boundPrompt,

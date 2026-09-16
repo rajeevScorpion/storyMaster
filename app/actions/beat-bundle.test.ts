@@ -70,6 +70,7 @@ vi.mock('@/lib/ai/beat-orchestration', () => ({
 
 vi.mock('@/lib/ai/prompt-compiler/scene-spec.shared', () => ({
   buildCanonicalImageScene: vi.fn(() => ({})),
+  resolveImageFacingNames: vi.fn(() => new Map()),
 }));
 
 vi.mock('@/lib/ai/prompt-compiler/assemble.shared', () => ({

@@ -11,6 +11,7 @@ import {
   formatStoryBible,
 } from '@/lib/ai/story-bible';
 import { buildReferenceBindingLines } from '@/lib/ai/reference-binding';
+import { PROMPT_HARD_MAX_CHARS } from '@/lib/ai/prompt-compiler/capability.shared';
 import { isR2Reference } from '@/lib/media/r2-reference';
 import { resolveReferenceImageKeys } from '@/app/actions/references';
 import {
@@ -526,6 +527,17 @@ export async function generateImage(
         // compact binding form to avoid duplicating it.
         const bindingLines = buildReferenceBindingLines(referenceSurvivors, { compact: compiledEngine });
         const boundImagePrompt = bindingLines ? `${finalImagePrompt}\n\n${bindingLines}` : finalImagePrompt;
+        // The compiler already reserved room for these binding lines (Unit 4b), so
+        // this should be unreachable -- a survivor count above what was planned for
+        // (or a reservation computed from a different reference list) is the only
+        // way to get here. Warn instead of trimming; trimming here could cut
+        // mid-word or through a section the compiler protects.
+        if (compiledEngine && boundImagePrompt.length > PROMPT_HARD_MAX_CHARS) {
+          console.warn('[image_prompt.over_hard_max]', {
+            chars: boundImagePrompt.length,
+            referenceCount: referenceSurvivors.length,
+          });
+        }
         const storyboardImageSettings = normalizeStoryboardImageQualitySettings(modelOverrides?.storyboardImageSettings);
         const imageSize = storyboardImageSettings.imageSize;
 

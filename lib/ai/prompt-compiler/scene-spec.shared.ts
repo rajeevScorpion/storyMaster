@@ -403,6 +403,28 @@ export function deriveImageName(
   return placeholder;
 }
 
+/**
+ * Map of each character's canonical name (NFC, trimmed, lowercased) to its
+ * image-facing name (`deriveImageName`, the same call `buildSceneCharacters`
+ * makes for `SceneCharacter.imageName`) — the one function both the compiled
+ * CHARACTERS section and Unit 4b's reference-binding lines call, so a
+ * reference image can never be labelled with a name the compiled prompt does
+ * not itself use. `index` follows `characters`' array order, matching how the
+ * scene builder numbers "Character N" placeholders.
+ */
+export function resolveImageFacingNames(
+  characters: Character[],
+  plan?: StoryboardPlan | null
+): Map<string, string> {
+  const map = new Map<string, string>();
+  characters.forEach((character, index) => {
+    const key = normalizeNameKey(character.name || '');
+    if (!key || map.has(key)) return;
+    map.set(key, deriveImageName(character.name, index, plan?.characterVisuals));
+  });
+  return map;
+}
+
 function buildSceneCharacters(
   characters: Character[],
   plan: StoryboardPlan | null | undefined,
