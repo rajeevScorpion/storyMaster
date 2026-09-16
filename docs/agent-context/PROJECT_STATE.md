@@ -457,6 +457,27 @@ hand-verified on 2026-08-26 and pass, but nothing automated covers them.
 
 ## Deferred / known gaps
 
+### Image composer continuity — deferred on purpose
+
+Framework phases 3–4 (`docs/visual-composer-continuity-framework.md`): prop lifecycle, physical-state and
+environment-state tracking, relationship geometry, and vision-based evaluation of a generated image with
+targeted regeneration. Also deferred: putting reels and portraits on the compiler (both still take the legacy
+path, so portrait prompts still carry a character's canonical, possibly non-Latin, name), and per-provider
+adapter tuning beyond negatives.
+
+Known limits of what shipped:
+
+- The continuity schema was live-tested on **GPT-5.6 Luna and Gemini 3.8 Flash only**; Qwen is untested.
+- **Provider-stateful image mode carries earlier images implicitly** (R10). The continuity rules cannot suppress
+  what the provider's own thread remembers.
+- Regenerating an old beat whose **stored plan predates the English rule** keeps its non-English panel action —
+  deliberately, so the image still depicts the event — and records a `non_english_prompt` warning.
+- The continue-story `promptOnly` legacy build still omits `worldAnchor`. It feeds diagnostics and the
+  shadow/error-fallback prompt only, never the compiled prompt that ships.
+- **Open decision:** real beats compile to ~3,700–4,700 characters against a 3,000 target, so `over_target`
+  fires on essentially every beat and Luna sits ~300 characters under the 5,000 hard cap. Either tighten the
+  composer's brevity limits, raise the target with a new migration, or accept the warning as noise.
+
 Deliberate decisions, not oversights. Don't "fix" them without checking why.
 
 **Agentic Creator (branch `feat/agentic-creator`)**

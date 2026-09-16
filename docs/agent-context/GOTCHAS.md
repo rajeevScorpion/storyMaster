@@ -240,6 +240,29 @@ comes from the same function that names characters inside the prompt (`deriveIma
 canonical name cannot leak in through a binding line while the prompt itself says "Anvi". Compute the estimate
 from the **final** reference list — after any filtering — or the reservation no longer matches what is sent.
 
+### Continuity is not sameness — and the composer's invariants are already current
+
+Visual continuity is attribute-specific (`docs/visual-composer-continuity-framework.md`): identity — face, skin
+tone, build, distinguishing marks — is preserved, while age, hair, wardrobe, accessories and location are
+reassessed whenever the story moves in time, place, activity or life stage. Each is marked LOCKED, EVOLVE or
+FREE per character, and `resolveContinuityContradictions` overrides a LOCKED age across a months-or-years jump
+(a live run had the model locking a character's age across twelve years).
+
+**The trap:** it is tempting to strip wardrobe and hair detail from a plan when the beat jumps years ahead. Do
+not. The composer's `sharedVisualInvariants` describe the state *after* the jump — a live run returned "adult
+Anvi … dark hair tied in an athletic ponytail" for a twelve-years-later beat — so dropping them deletes correct
+within-beat continuity. What actually drags old appearance forward is elsewhere: the story's own
+`continuityNotes` (prior-state notes, filtered on a jump by a deliberately generic word list plus overlap with
+`mustNotInherit` — a heuristic, so a plot-relevant note mentioning a room or a bag can be dropped), the
+previous beat's storyboard image, and sameness wording in the prompts.
+
+**References follow presence.** Character references are attached only for characters a panel actually declares
+present, and the previous storyboard is skipped entirely on a big time jump or location change — unless no
+present character has a reference of their own, in which case it stays as the only identity anchor. All of this
+fails open: a fallback plan, a plan predating `charactersPresent`, or an empty union attaches everything, as
+before. Decide this **before** the reference list is finalized, since the prompt budget reserves space from the
+final list.
+
 ### Reels share the storyboard output schema
 
 `visual_prompt` and `reel_visual_prompt` both map to a storyboard schema. The continuity fields (transition,
