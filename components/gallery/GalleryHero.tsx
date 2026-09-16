@@ -9,6 +9,7 @@ import { STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
 import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
 import { getStoryGenreLabel } from '@/lib/story/genres';
 import { getStoryAudienceProfile } from '@/lib/ai/story-audience';
+import { useSignInBeforeWatching } from '@/lib/hooks/useSignInBeforeWatching';
 import type { GalleryItem } from '@/lib/types/database';
 
 const ROTATE_INTERVAL_MS = 8000;
@@ -126,6 +127,7 @@ export default function GalleryHero({
   onToggleSave,
 }: GalleryHeroProps) {
   const prefersReducedMotion = useReducedMotion();
+  const gateOnSignIn = useSignInBeforeWatching();
   const [activeIndex, setActiveIndex] = useState(0);
   const [isPointerOver, setIsPointerOver] = useState(false);
   // Backdrops are full-bleed, so mounting every slide would put five large
@@ -267,7 +269,7 @@ export default function GalleryHero({
             <div className="flex flex-wrap items-center gap-3 pt-1.5">
               <Link
                 href={`/storyline/${active.id}`}
-                onClick={handleOpen}
+                onClick={(event) => { handleOpen(); gateOnSignIn(event, `/storyline/${active.id}`); }}
                 className="inline-flex items-center gap-2 rounded-2xl bg-emerald-500 px-6 py-3 text-sm font-semibold text-neutral-950 shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-400 hover:shadow-emerald-400/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950"
               >
                 <Play className="h-4 w-4 fill-current" />

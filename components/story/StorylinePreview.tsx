@@ -2,6 +2,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
+import { useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import KissagoLogo from '@/components/ui/KissagoLogo';
 import { BookOpen, LogIn } from 'lucide-react';
@@ -13,6 +14,7 @@ interface StorylinePreviewProps {
   authorName: string | null;
   coverImageUrl: string | null;
   beatCount: number;
+  shareToken?: string | null;
 }
 
 export default function StorylinePreview({
@@ -21,12 +23,43 @@ export default function StorylinePreview({
   authorName,
   coverImageUrl,
   beatCount,
+  shareToken,
 }: StorylinePreviewProps) {
-  const { openAuthDialog } = useAuth();
+  const { user, isLoading, openAuthDialog } = useAuth();
+  const hasRequestedAuthRef = useRef(false);
+  const returnTo = shareToken
+    ? `/storyline/${storylineId}?token=${encodeURIComponent(shareToken)}`
+    : `/storyline/${storylineId}`;
 
   const handleSignIn = () => {
-    openAuthDialog('sign_in', `/storyline/${storylineId}`);
+    openAuthDialog('sign_in', returnTo);
   };
+
+  // The owner decision here is that this preview must never just sit there
+  // for a signed-out visitor -- ask immediately rather than waiting on the
+  // button.
+  useEffect(() => {
+    if (isLoading || user || hasRequestedAuthRef.current) return;
+    hasRequestedAuthRef.current = true;
+    openAuthDialog('sign_in', returnTo);
+  }, [isLoading, user, openAuthDialog, returnTo]);
+
+  // A signed-in user showing up here means auth just finished on the client
+  // while this server-rendered signed-out preview was already on screen --
+  // reload so the server renders the actual player. Guarded against a loop:
+  // skip if this storyline already reloaded for that reason in the last 10s.
+  useEffect(() => {
+    if (!user) return;
+    const storageKey = `storyline-preview-reload:${storylineId}`;
+    try {
+      const lastReloadAt = Number(sessionStorage.getItem(storageKey) ?? 0);
+      if (Date.now() - lastReloadAt < 10_000) return;
+      sessionStorage.setItem(storageKey, String(Date.now()));
+    } catch {
+      // Storage unavailable -- fall through and reload once anyway.
+    }
+    window.location.reload();
+  }, [user, storylineId]);
 
   return (
     <div className="relative h-screen bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col">

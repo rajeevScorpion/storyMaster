@@ -7,6 +7,7 @@ import { BookOpen, Bookmark, BookmarkCheck, Check, Eye, Heart, Layers, Share2 } 
 import StoryboardThumbnail, { useStoryboardThumbnailPreview } from '@/components/story/StoryboardThumbnail';
 import StorylineCardPanel from '@/components/gallery/StorylineCardPanel';
 import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
+import { useSignInBeforeWatching } from '@/lib/hooks/useSignInBeforeWatching';
 import type { ExpandedPanelPlacement } from '@/lib/gallery/card-expansion';
 import type { GalleryItem, GalleryRailLayout } from '@/lib/types/database';
 
@@ -75,6 +76,7 @@ export default function StorylineCard({
   );
   const prefersReducedMotion = useReducedMotion();
   const titleId = useId();
+  const gateOnSignIn = useSignInBeforeWatching();
   // Which input opened this click decides what the click means, and viewport
   // width is the wrong proxy — a touchscreen laptop is both.
   const lastPointerTypeRef = useRef<string | null>(null);
@@ -132,6 +134,7 @@ export default function StorylineCard({
     }
 
     rememberNavMeta();
+    gateOnSignIn(event, `/storyline/${item.id}`);
   };
 
   const handlePointerDown = (event: React.PointerEvent<HTMLElement>) => {
