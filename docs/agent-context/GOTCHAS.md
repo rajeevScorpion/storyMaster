@@ -194,6 +194,59 @@ field, so it reads `false` on real grids; and a ≥1800×1000 size check misread
 
 ---
 
+### The image prompt compiler was written for English — non-Latin text needs care
+
+The relevance filter tokenizes phrases to compare them. Until 2026-09-15 it stripped everything outside
+`[a-z0-9]`, so every Hindi, Arabic or CJK phrase reduced to the **same empty key**: distinct phrases were
+dropped as "duplicates", focus items shared by three panels were hoisted and then deleted everywhere, and a
+fully non-Latin character name made every focus item look like a redundant name. One real Hindi beat lost 4 of
+its 5 world invariants, all 16 visual-focus items and 7 negative constraints before anyone noticed.
+
+Two rules when touching `lib/ai/prompt-compiler/`:
+
+- **Keep combining marks.** Devanagari vowel signs and the virama, and Arabic harakat, are marks, not letters —
+  a class of letters and digits alone shreds every Hindi word into fragments. Name boundaries need them too,
+  or a name matches inside a longer word.
+- **Scripts written without spaces (Han, kana, Thai, Lao, Khmer, Myanmar) have no word boundary.** A Japanese
+  name is followed directly by a particle, so boundary matching never fires; `findWholeName` falls back to a
+  substring match for those. `\b` is ASCII-only in JavaScript even with the Unicode flag — it never matches a
+  non-Latin name at all.
+
+`isEnglishText` is a Latin-script ratio, so a Latin-script language that is not English (Spanish, French)
+passes it. The composer's own rule is what keeps output English; the check is a backstop.
+
+### Newlines are section breaks in a compiled image prompt
+
+The compiled prompt is eight headed sections separated by blank lines, because the owner requires readable
+prompts rather than one block. The redaction pass strips control characters — and a newline **is** a control
+character, so the original version quietly collapsed every section break into a space and shipped one
+paragraph. `CONTROL_RE` in `compile.shared.ts` deliberately excludes the line feed. Carriage returns are still
+stripped so a stray CRLF cannot double a break.
+
+### Never write a Unicode escape into source through the agent tooling
+
+The tooling decodes an escape sequence into the real character before the file is written. A character class
+written with escapes therefore lands as **literal control bytes**, NUL included, and git then treats the file
+as binary: no diff, no review. This has bitten two units. Build such patterns from a string instead — copy the
+form used by `CONTROL_RE` in `compile.shared.ts` — and never put an escape sequence in a prose comment either,
+since it becomes a real newline and splits the line. Check with a byte scan before committing.
+
+### Reference-image lines are part of the prompt budget, and use the English name
+
+`buildReferenceBindingLines` appends "reference image N depicts X" lines **after** the compiler has finished,
+so they used to push a budgeted prompt over its limit. `estimateReferenceBindingChars` now measures them up
+front and the compiler subtracts that from both the target and the 5,000 hard cap. The name in those lines
+comes from the same function that names characters inside the prompt (`deriveImageName`), so a non-Latin
+canonical name cannot leak in through a binding line while the prompt itself says "Anvi". Compute the estimate
+from the **final** reference list — after any filtering — or the reservation no longer matches what is sent.
+
+### Reels share the storyboard output schema
+
+`visual_prompt` and `reel_visual_prompt` both map to a storyboard schema. The continuity fields (transition,
+setting, characterVisuals, must-not-inherit, per-panel story function) live in a **separate**
+`storyboardContinuityPlanSchema` used only by `visual_prompt`, so reels are not forced to produce them. Adding
+a field to the shared schema changes reel generation too.
+
 ## Data & performance
 
 ### Signed URLs churn defeats every image cache
