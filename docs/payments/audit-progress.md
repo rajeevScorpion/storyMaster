@@ -9,10 +9,20 @@
 - **Unit A done and reviewed** — `1ed8c6f` (tax engine, tax-rule loader, ledger writer, migration **125**),
   plus Opus review fixes `218a9b6` (a future-dated rule would have been charged immediately; the fail-closed
   error paths described themselves backwards). 1,553 tests green at that point.
-- **Unit B1 (server money path) and Unit C (account deletion) were running as agents when the session ended.**
-  Check `git log payments` first: if their commits are there, **review the diffs, not any report** — nobody has
-  reviewed them yet. If they are not there, the work was lost and both units must be re-run from
-  `phase-2-plan.md` §4.
+- **Unit C (account deletion) committed as `ca318c2`, unreviewed.** Migration **127** (its own) closes a real gap
+  the plan missed: five admin-actor columns on pricing and reel tables had no delete rule at all, so any admin who
+  had ever published a price would have blocked their own deletion. Review the diff, not the report. Its open
+  items, all needing an owner decision:
+  - `billing_profiles` was left CASCADE by 125; the agent converted it to SET NULL in 127 so the GST-required
+    name/state/GSTIN survive while contact details are cleared. Sound, but it goes beyond the plan's text.
+  - `beat_revisions`, `timeline_rewrite_events`, `episode_journal_events` still cascade, so a kept story loses its
+    edit and series history when its author goes. Today's behaviour; changing it is a product call.
+  - Google-only accounts re-authenticate by a 15-minute-old sign-in rather than a fresh OAuth round trip.
+  - The terms, help-legal and FAQ pages still say self-serve deletion does not exist and now contradict the flow.
+- **Unit B1 (server money path) was still running as an agent when the session ended.** Check `git log payments`:
+  if its commit is there, review the diff; if not, re-run it from `phase-2-plan.md` §4. Note that Unit C reported
+  two `tsc` errors in `razorpay-reconcile.ts`/`razorpay-sync.ts` as "pre-existing" — they were not. They were
+  B1's uncommitted work in flight. **Run `npx tsc --noEmit` yourself before trusting either unit's gates.**
 - **Unit B2 (wallet billing-details step, admin tax-rules panel, backfill trigger) has not been started.** It was
   deliberately held back so it could be built against B1's finished server actions. Its brief: the wallet must
   collect the customer's state before checkout (legal requirement) and show "₹X + GST" with the payable total; the
