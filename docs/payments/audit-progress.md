@@ -7,8 +7,8 @@
 
 | Phase | Status |
 |---|---|
-| 0 Discovery | **done 2026-09-17** — `phase-0-discovery-2026-09-17.md`; new streams `research/09`, `research/10`. Awaiting owner decisions below. |
-| 1 Money correctness | not started — plan to be written after decisions |
+| 0 Discovery | **done 2026-09-17** — `phase-0-discovery-2026-09-17.md`; new streams `research/09`, `research/10` |
+| 1 Money correctness | **planned** — `phase-1-plan.md`. Next: Unit A (Sonnet), owner applies migration 124 on dev, Unit B, Opus review, sandbox runbook |
 | 2–8 | not started |
 
 **Delegation:** Opus plans/reviews, Sonnet executes; **at most 2 agents at once**; ask the owner for session usage at each phase boundary.
@@ -18,12 +18,16 @@
 - Signed-out visitors browse the whole catalogue and must sign in to watch anything (already built). The daily quota only concerns signed-in users.
 - Phase 0 kept light: the audit is same-day and no billing code changed since.
 
-**Open owner decisions (from Phase 0)** — see the session summary; record answers here.
-1. Coins and images for Free/Audience (today only Plus/Studio can generate images, regardless of coins).
-2. When a daily story slot is used.
-3. Daily reset time (IST midnight vs UTC).
-4. GSTIN placeholder vs the value already in `lib/legal/business-config.ts`.
-5. Pre-approve audit recommendations D3–D7 (refunds, rollover, email provider, minors, blocked/deleted users)?
+**Owner decisions from Phase 0 (2026-09-17)**
+1. **Images on coins:** Free (trial coins) and Audience (top-ups) may generate images. Must be an admin setting so it can be switched off later. Today only Plus/Studio can. → Phase 3.
+2. **Daily slot:** used when a story opens and its content loads. Failed loads don't count. Show "N of 3 left today"; confirm only before the last slot. → Phase 3.
+3. **Replays are free all day:** the same story watched any number of times that day counts once (kids loop content; never block that). → Phase 3.
+4. **Reset:** midnight in **each user's own timezone**. No timezone is stored today; capture it from the browser. Guard against timezone switching being used to reset early. → Phase 3.
+5. **GSTIN:** invoices use the value in `lib/legal/business-config.ts` (supersedes the placeholder instruction). → Phase 6.
+6. **Audit D3–D7 approved as recommended:** refund within 7 days if < ~20% of that purchase's coins used, unused coins clawed back; no subscription-coin rollover; Resend or Postmark for email, with Razorpay `customer_notify` on as a stopgap; adult attestation and no checkout from kids mode; block → cancel at cycle end and stop grants, delete → cancel immediately, anonymise, keep billing records 8 years.
+7. **Defaults accepted without objection:** kids and adult mode on one login share one daily limit; admins can grant unlimited watching; republishing doesn't give readers a new slot; Audience → Plus upgrade rules decided at Phase 5.
+
+**Deliberate deviation from the pack:** the checkout kill switch blocks new checkouts only. Verify, webhook and reconcile still honour payments already started (see `phase-1-plan.md` decision 8).
 
 ---
 
