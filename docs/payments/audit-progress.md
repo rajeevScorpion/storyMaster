@@ -20,12 +20,27 @@ its preview is live; the Razorpay test webhook points at it.
    or redeploy after), register the test webhook at that address + `/api/billing/razorpay/webhook` (events listed
    in `research/06`, including `refund.*` and `payment.dispute.*`), and turn on `pricing_checkout_enabled` and
    `billing_reconcile_enabled` on dev. The reconcile cron doesn't run on previews; runbook step 9 calls the route by
-   hand. **Done 2026-09-17** apart from the flags (unconfirmed at the time of writing). Add a second test webhook
+   hand. **Done 2026-09-17**, flags included. Add a second test webhook
    for the `dev` branch preview only **after** `payments` merges into `dev`: until then `dev` runs the old webhook
    code against the same database, and two handlers racing on each event would spoil the sandbox results.
 5. Walk the sandbox runbook, `phase-1-plan.md` §6, steps 3–9. Record results here. The UPI Autopay step answers the
    long-open question in `research/06` Q1: write the finding there.
 6. When §6 passes, mark Phase 1 **done** in the table below and commit.
+
+**Found during the sandbox run (2026-09-17):**
+- **Checkout could not open anywhere, production included.** The site-wide COOP/COEP headers (for video export)
+  made Chrome block Razorpay's checkout frame. Fixed in `cd5cd0c`: `/wallet` is exempt, with a reload at the
+  boundary and new-tab wallet links on story surfaces. See GOTCHAS "Cross-origin isolation blocks Razorpay
+  Checkout". **Production needs this fix before any real checkout.**
+- **The owner moved Kissago to a new Razorpay account** the same day (new keys and webhook, dev and prod). Data
+  from the old account breaks the new one: saved plan IDs on `pricing_plan_versions` (reused because the mode
+  still matches) and old subscriptions still `active` (they block that user's new subscription and fail every
+  reconcile run). Dev had 2 plan IDs and 1 active subscription (the test user's); the owner cleared both by
+  SQL. **Prod needs the same check before its first checkout on the new account.**
+- **Starting a subscription is refused if the user has any open Razorpay subscription, in either mode** (the
+  `subscription_exists` check in 124's checkout RPC ignores `provider_mode`). At go-live, a tester's test-mode
+  subscription on prod would block their live purchase. Fix in a later migration, or close test subscriptions
+  at cutover.
 
 **Step 2 — plan Phase 2** (durable payment/refund/document records, billing profile, retention-safe deletion) from
 `prompt-packs/…/04_PHASE_2_DURABLE_BILLING_LEDGER.md`. Write `docs/payments/phase-2-plan.md` to the same
@@ -46,7 +61,7 @@ session at natural checkpoints.
 | Phase | Status |
 |---|---|
 | 0 Discovery | **done 2026-09-17** — `phase-0-discovery-2026-09-17.md`; new streams `research/09`, `research/10` |
-| 1 Money correctness | **code complete, not yet sandbox-verified** — `phase-1-plan.md`. Unit A `1392121`, Unit B `fabea84`, Opus review fixes `6685db5`. 124 applied on dev 2026-09-17. Next: push `payments`, then sandbox runbook (plan §6). Phase 1 closes only after §6 passes |
+| 1 Money correctness | **code complete, not yet sandbox-verified** — `phase-1-plan.md`. Unit A `1392121`, Unit B `fabea84`, Opus review fixes `6685db5`. 124 applied on dev 2026-09-17. Checkout-frame fix `cd5cd0c`. Next: sandbox runbook (plan §6), in progress. Phase 1 closes only after §6 passes |
 | 2–8 | not started |
 
 **Delegation:** Opus plans/reviews, Sonnet executes; **at most 2 agents at once**; ask the owner for session usage at each phase boundary.
