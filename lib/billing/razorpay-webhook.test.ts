@@ -1,9 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
 vi.mock('@/lib/billing/razorpay', () => ({
   fetchRazorpayPayment: vi.fn(),
+  getRazorpayMode: vi.fn(() => 'test'),
 }));
 
 vi.mock('@/lib/billing/razorpay-sync', () => ({
@@ -13,13 +14,22 @@ vi.mock('@/lib/billing/razorpay-sync', () => ({
     ['refunded', 'partially_refunded', 'disputed'].includes(current) ? current : provider,
 }));
 
-import { fetchRazorpayPayment } from '@/lib/billing/razorpay';
+vi.mock('@/lib/billing/ledger', () => ({
+  recordRefund: vi.fn(),
+  recordDispute: vi.fn(),
+}));
+
+import { fetchRazorpayPayment, getRazorpayMode } from '@/lib/billing/razorpay';
 import { settleTopupOrder, syncSubscriptionFromProvider } from '@/lib/billing/razorpay-sync';
+import { recordDispute, recordRefund } from '@/lib/billing/ledger';
 import { processRazorpayWebhookEvent, type RazorpayWebhookPayload } from './razorpay-webhook';
 
 const fetchRazorpayPaymentMock = vi.mocked(fetchRazorpayPayment);
+const getRazorpayModeMock = vi.mocked(getRazorpayMode);
 const settleTopupOrderMock = vi.mocked(settleTopupOrder);
 const syncSubscriptionFromProviderMock = vi.mocked(syncSubscriptionFromProvider);
+const recordRefundMock = vi.mocked(recordRefund);
+const recordDisputeMock = vi.mocked(recordDispute);
 
 interface QueryResult {
   data?: unknown;
@@ -252,9 +262,27 @@ describe('processRazorpayWebhookEvent — payment.failed', () => {
   });
 });
 
+function fakeLedgerPayment(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'payment-1',
+    subject_ref: 'user-1',
+    user_id: 'user-1',
+    provider: 'razorpay',
+    provider_mode: 'test',
+    provider_payment_id: 'pay_1',
+    net_minor: 1000,
+    tax_minor: 180,
+    gross_minor: 1180,
+    currency_code: 'INR',
+    status: 'captured',
+    ...overrides,
+  };
+}
+
 describe('processRazorpayWebhookEvent — refunds', () => {
-  it('marks the order refunded when the full amount was refunded', async () => {
+  it('marks the order refunded when the full amount was refunded (no ledger payment matched)', async () => {
     const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'select', { data: null, error: null });
     enqueue('billing_orders', 'select', { data: fakeOrder({ status: 'paid', provider_payment_id: 'pay_1' }), error: null });
     enqueue('billing_orders', 'update', { data: null, error: null });
     fetchRazorpayPaymentMock.mockResolvedValueOnce({
@@ -268,10 +296,12 @@ describe('processRazorpayWebhookEvent — refunds', () => {
     expect(result.outcome).toBe('refund_recorded');
     const update = calls.find((call) => call.table === 'billing_orders' && call.op === 'update');
     expect(update?.payload).toMatchObject({ status: 'refunded' });
+    expect(recordRefundMock).not.toHaveBeenCalled();
   });
 
   it('marks the order partially_refunded for a partial refund', async () => {
     const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'select', { data: null, error: null });
     enqueue('billing_orders', 'select', { data: fakeOrder({ status: 'paid', provider_payment_id: 'pay_1' }), error: null });
     enqueue('billing_orders', 'update', { data: null, error: null });
     fetchRazorpayPaymentMock.mockResolvedValueOnce({
@@ -289,6 +319,7 @@ describe('processRazorpayWebhookEvent — refunds', () => {
 
   it('skips the status update for refund.failed but still records the outcome', async () => {
     const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'select', { data: null, error: null });
     enqueue('billing_orders', 'select', { data: fakeOrder({ status: 'paid', provider_payment_id: 'pay_1' }), error: null });
 
     const payload: RazorpayWebhookPayload = { event: 'refund.failed', payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1' } } } };
@@ -299,8 +330,9 @@ describe('processRazorpayWebhookEvent — refunds', () => {
     expect(fetchRazorpayPaymentMock).not.toHaveBeenCalled();
   });
 
-  it('reports refund_unmatched when no order carries that payment id', async () => {
+  it('reports refund_unmatched when neither an order nor a ledger payment carries that payment id', async () => {
     const { supabase, enqueue } = createFakeSupabase();
+    enqueue('billing_payments', 'select', { data: null, error: null });
     enqueue('billing_orders', 'select', { data: null, error: null });
 
     const payload: RazorpayWebhookPayload = { event: 'refund.created', payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_unknown' } } } };
@@ -308,11 +340,66 @@ describe('processRazorpayWebhookEvent — refunds', () => {
 
     expect(result).toEqual({ status: 'processed', outcome: 'refund_unmatched', relatedUserId: null, relatedSubscriptionId: null });
   });
+
+  describe('matched through billing_payments (Payments Phase 2, Unit B — a renewal refund)', () => {
+    it('writes a refund row split proportionally off the original payment, even with no billing_orders row at all', async () => {
+      const { supabase, enqueue } = createFakeSupabase();
+      enqueue('billing_payments', 'select', { data: fakeLedgerPayment(), error: null });
+      enqueue('billing_orders', 'select', { data: null, error: null }); // a renewal never had an order row
+      enqueue('billing_payments', 'update', { data: null, error: null }); // status sync to refunded
+      fetchRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'pay_1', order_id: null, status: 'captured', amount: 1180, currency: 'INR',
+        amount_refunded: 1180, refund_status: 'full', invoice_id: null, captured: true,
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-1' });
+
+      const payload: RazorpayWebhookPayload = {
+        event: 'refund.created',
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180 } } },
+      };
+      const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+      expect(result.outcome).toBe('refund_recorded');
+      expect(recordRefundMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          subjectRef: 'user-1',
+          paymentId: 'payment-1',
+          providerRefundId: 'rfnd_1',
+          amountMinor: 1180,
+          netMinor: 1000,
+          taxMinor: 180,
+          status: 'processed',
+          initiatedBy: 'provider',
+        })
+      );
+    });
+
+    it('falls back to the provider payment total_refunded when the webhook payload carries no amount', async () => {
+      const { supabase, enqueue } = createFakeSupabase();
+      enqueue('billing_payments', 'select', { data: fakeLedgerPayment(), error: null });
+      enqueue('billing_orders', 'select', { data: null, error: null });
+      enqueue('billing_payments', 'update', { data: null, error: null });
+      fetchRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'pay_1', order_id: null, status: 'captured', amount: 1180, currency: 'INR',
+        amount_refunded: 590, refund_status: 'partial', invoice_id: null, captured: true,
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-1' });
+
+      const payload: RazorpayWebhookPayload = {
+        event: 'refund.created',
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1' } } },
+      };
+      await processRazorpayWebhookEvent({ supabase, payload });
+
+      expect(recordRefundMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 590 }));
+    });
+  });
 });
 
 describe('processRazorpayWebhookEvent — disputes', () => {
-  it('marks the matched order disputed', async () => {
+  it('marks the matched order disputed (no ledger payment matched)', async () => {
     const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'select', { data: null, error: null });
     enqueue('billing_orders', 'select', { data: fakeOrder({ status: 'paid', provider_payment_id: 'pay_1' }), error: null });
     enqueue('billing_orders', 'update', { data: null, error: null });
 
@@ -322,16 +409,37 @@ describe('processRazorpayWebhookEvent — disputes', () => {
     expect(result.outcome).toBe('dispute_recorded');
     const update = calls.find((call) => call.table === 'billing_orders' && call.op === 'update');
     expect(update?.payload).toMatchObject({ status: 'disputed' });
+    expect(recordDisputeMock).not.toHaveBeenCalled();
   });
 
-  it('reports dispute_unmatched when no order carries that payment id', async () => {
+  it('reports dispute_unmatched when neither an order nor a ledger payment carries that payment id', async () => {
     const { supabase, enqueue } = createFakeSupabase();
+    enqueue('billing_payments', 'select', { data: null, error: null });
     enqueue('billing_orders', 'select', { data: null, error: null });
 
     const payload: RazorpayWebhookPayload = { event: 'payment.dispute.created', payload: { dispute: { entity: { id: 'disp_1', payment_id: 'pay_unknown' } } } };
     const result = await processRazorpayWebhookEvent({ supabase, payload });
 
     expect(result.outcome).toBe('dispute_unmatched');
+  });
+
+  it('records a dispute matched through billing_payments and marks the payment disputed', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    enqueue('billing_payments', 'select', { data: fakeLedgerPayment(), error: null });
+    enqueue('billing_orders', 'select', { data: null, error: null });
+    enqueue('billing_payments', 'update', { data: null, error: null });
+    recordDisputeMock.mockResolvedValueOnce({ state: 'inserted', id: 'dispute-1' });
+
+    const payload: RazorpayWebhookPayload = {
+      event: 'payment.dispute.created',
+      payload: { dispute: { entity: { id: 'disp_1', payment_id: 'pay_1', amount: 1180 } } },
+    };
+    const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+    expect(result.outcome).toBe('dispute_recorded');
+    expect(recordDisputeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ paymentId: 'payment-1', providerRefundId: 'disp_1', amountMinor: 1180, netMinor: 1000, taxMinor: 180, status: 'pending' })
+    );
   });
 });
 

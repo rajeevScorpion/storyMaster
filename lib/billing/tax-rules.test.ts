@@ -104,6 +104,7 @@ describe('getPublishedTaxRule', () => {
         taxRegime: 'in_gst',
         ratePercent: 18,
         sacCode: '998439',
+        supplierStateCode: '24',
       },
     });
   });

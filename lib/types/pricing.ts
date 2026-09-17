@@ -648,3 +648,51 @@ export interface PreparedRazorpayTopupCheckout extends PreparedRazorpayCheckoutB
 export type PreparedRazorpayCheckout =
   | PreparedRazorpaySubscriptionCheckout
   | PreparedRazorpayTopupCheckout;
+
+// Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit B): the billing profile a customer fills
+// in once -- required before checkout so tax has a place of supply, and reused later for issued
+// documents (Phase 6). Defined here, not in lib/billing/billing-profile.ts (server-only) or the
+// 'use server' action, so Unit B2's client-side form can import the same shapes.
+export interface BillingProfileInput {
+  legalName: string;
+  billingEmail?: string | null;
+  phone?: string | null;
+  companyName?: string | null;
+  /** Validated against lib/billing/india-states.shared.ts's GSTIN_REGEX before it ever reaches the DB. */
+  gstin?: string | null;
+  /** A code from lib/billing/india-states.shared.ts's INDIA_GST_STATE_CODES -- the checkout place of supply. */
+  stateCode: string;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
+}
+
+export interface BillingProfileDTO {
+  id: string;
+  legalName: string;
+  billingEmail: string | null;
+  phone: string | null;
+  companyName: string | null;
+  gstin: string | null;
+  stateCode: string;
+  countryCode: string;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  postalCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 'unavailable' means migration 125 hasn't run on this database yet (plan §4/§7) -- the caller
+ * should treat this the same as "no profile filled in yet" for display purposes, but must not offer
+ * to save one until 125 is applied. */
+export type GetBillingProfileResult =
+  | { status: 'ok'; profile: BillingProfileDTO | null }
+  | { status: 'unavailable' };
+
+export type SaveBillingProfileResult =
+  | { status: 'ok'; profile: BillingProfileDTO }
+  | { status: 'unavailable' }
+  | { status: 'invalid'; message: string };

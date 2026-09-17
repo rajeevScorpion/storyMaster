@@ -2,13 +2,16 @@ import 'server-only';
 
 import type { PostgrestError } from '@supabase/supabase-js';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { fetchRazorpayPayment } from '@/lib/billing/razorpay';
+import { fetchRazorpayPayment, getRazorpayMode } from '@/lib/billing/razorpay';
 import {
   nextSubscriptionCheckoutOrderStatus,
   settleTopupOrder,
   syncSubscriptionFromProvider,
 } from '@/lib/billing/razorpay-sync';
-import type { DbBillingOrder, DbBillingSubscription, DbPricingPlanVersion } from '@/lib/types/database';
+import { recordDispute, recordRefund } from '@/lib/billing/ledger';
+import { splitRefundProportionally } from '@/lib/billing/tax.shared';
+import type { DbBillingOrder, DbBillingPayment, DbBillingSubscription, DbPricingPlanVersion } from '@/lib/types/database';
+import type { BillingPaymentStatus, BillingRefundStatus } from '@/lib/types/pricing';
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
@@ -19,8 +22,14 @@ export interface RazorpayWebhookPayload {
     subscription?: { entity?: { id?: string } };
     order?: { entity?: { id?: string } };
     payment?: { entity?: { id?: string; order_id?: string | null } };
-    refund?: { entity?: { id?: string; payment_id?: string } };
-    dispute?: { entity?: { id?: string; payment_id?: string } };
+    /** `amount` is Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit B): the amount of THIS
+     * refund event, in minor units -- Razorpay always sends it on refund.* webhooks. Used to split
+     * the refund proportionally into net/tax; falls back to the payment's total refunded-to-date
+     * when absent (an old/malformed payload), which is only accurate for a single full refund. */
+    refund?: { entity?: { id?: string; payment_id?: string; amount?: number } };
+    /** Same `amount` note as refund above -- a dispute normally covers the full payment amount, but
+     * Razorpay's own figure is preferred when present. */
+    dispute?: { entity?: { id?: string; payment_id?: string; amount?: number } };
   };
 }
 
@@ -156,6 +165,7 @@ async function processTopupSuccessEvent(
     settleResult.state === 'already_granted' ? 'topup_already_granted' :
     settleResult.state === 'refunded' ? 'refund_recorded' :
     settleResult.state === 'failed' ? 'topup_payment_failed' :
+    settleResult.state === 'skipped_no_owner' ? 'topup_skipped_no_owner' :
     'topup_pending';
 
   return { status: 'processed', outcome, relatedUserId: order.user_id, relatedSubscriptionId: null };
@@ -189,51 +199,216 @@ async function processTopupFailureEvent(
   return { status: 'processed', outcome: 'payment_failed_recorded', relatedUserId: order.user_id, relatedSubscriptionId: null };
 }
 
+/**
+ * Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit B): matches through
+ * billing_payments.provider_payment_id first -- this is what finally lets a renewal refund match
+ * (Phase 1 could only match billing_orders, which never had a row for a renewal). Still updates the
+ * legacy billing_orders.status when an order is linked, and writes a billing_refunds row (split
+ * proportionally into net/tax off the ORIGINAL payment's own ratio) whenever a payment was matched.
+ */
 async function processRefundEvent(
   supabase: AdminClient,
   payload: RazorpayWebhookPayload
 ): Promise<ProcessRazorpayWebhookEventResult> {
-  const paymentId = payload.payload?.refund?.entity?.payment_id ?? null;
-  const order = paymentId ? await loadOrderByProviderPaymentId(supabase, paymentId) : null;
-
-  if (!paymentId || !order) {
-    return { status: 'processed', outcome: 'refund_unmatched', relatedUserId: null, relatedSubscriptionId: null };
+  const providerPaymentId = payload.payload?.refund?.entity?.payment_id ?? null;
+  if (!providerPaymentId) {
+    return processedUnmatched('refund_unmatched');
   }
 
+  const [payment, order] = await Promise.all([
+    loadLedgerPaymentByProviderPaymentId(supabase, providerPaymentId),
+    loadOrderByProviderPaymentId(supabase, providerPaymentId),
+  ]);
+
+  if (!payment && !order) {
+    return processedUnmatched('refund_unmatched');
+  }
+
+  let refundedTotalMinor: number | null = null;
   if (payload.event !== 'refund.failed') {
-    const payment = await fetchRazorpayPayment(paymentId);
-    const nextStatus = payment.amount_refunded >= payment.amount ? 'refunded' : 'partially_refunded';
+    const providerPayment = await fetchRazorpayPayment(providerPaymentId);
+    refundedTotalMinor = providerPayment.amount_refunded;
+    const nextOrderStatus = providerPayment.amount_refunded >= providerPayment.amount ? 'refunded' : 'partially_refunded';
 
-    const updateResult = await supabase
-      .from('billing_orders')
-      .update({ status: nextStatus, updated_at: new Date().toISOString() })
-      .eq('id', order.id);
+    if (order) {
+      const updateResult = await supabase
+        .from('billing_orders')
+        .update({ status: nextOrderStatus, updated_at: new Date().toISOString() })
+        .eq('id', order.id);
 
-    throwIfQueryFailed(updateResult.error, 'Failed to update order for refund webhook');
+      throwIfQueryFailed(updateResult.error, 'Failed to update order for refund webhook');
+    }
   }
 
-  return { status: 'processed', outcome: 'refund_recorded', relatedUserId: order.user_id, relatedSubscriptionId: null };
+  let outcome = 'refund_recorded';
+  const refundProviderId = payload.payload?.refund?.entity?.id ?? null;
+  const refundAmountMinor = payload.payload?.refund?.entity?.amount ?? refundedTotalMinor ?? 0;
+
+  if (payment && refundProviderId && refundAmountMinor > 0) {
+    const split = splitRefundProportionally(refundAmountMinor, payment.net_minor, payment.gross_minor);
+    const status: BillingRefundStatus = payload.event === 'refund.failed' ? 'failed' : 'processed';
+
+    const recordResult = await recordRefund({
+      supabase,
+      subjectRef: payment.subject_ref,
+      paymentId: payment.id,
+      providerMode: payment.provider_mode,
+      providerRefundId: refundProviderId,
+      providerPaymentId,
+      amountMinor: refundAmountMinor,
+      netMinor: split.netMinor,
+      taxMinor: split.taxMinor,
+      currencyCode: payment.currency_code,
+      status,
+      initiatedBy: 'provider',
+      rawPayload: payload as unknown as Record<string, unknown>,
+      processedAt: status === 'processed' ? new Date().toISOString() : null,
+    });
+
+    if (recordResult.state === 'unavailable') {
+      outcome = 'refund_recorded_ledger_unavailable';
+    } else if (status === 'processed') {
+      const nextPaymentStatus: BillingPaymentStatus = refundAmountMinor >= payment.gross_minor ? 'refunded' : 'partially_refunded';
+      await markLedgerPaymentStatus(supabase, payment.id, nextPaymentStatus);
+    }
+  }
+
+  return {
+    status: 'processed',
+    outcome,
+    relatedUserId: order?.user_id ?? payment?.user_id ?? null,
+    relatedSubscriptionId: null,
+  };
 }
 
+/**
+ * Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit B): same billing_payments-first matching
+ * as processRefundEvent, using recordDispute (a billing_refunds row with initiated_by='dispute').
+ */
 async function processDisputeEvent(
   supabase: AdminClient,
   payload: RazorpayWebhookPayload
 ): Promise<ProcessRazorpayWebhookEventResult> {
-  const paymentId = payload.payload?.dispute?.entity?.payment_id ?? null;
-  const order = paymentId ? await loadOrderByProviderPaymentId(supabase, paymentId) : null;
-
-  if (!order) {
-    return { status: 'processed', outcome: 'dispute_unmatched', relatedUserId: null, relatedSubscriptionId: null };
+  const providerPaymentId = payload.payload?.dispute?.entity?.payment_id ?? null;
+  if (!providerPaymentId) {
+    return processedUnmatched('dispute_unmatched');
   }
 
+  const [payment, order] = await Promise.all([
+    loadLedgerPaymentByProviderPaymentId(supabase, providerPaymentId),
+    loadOrderByProviderPaymentId(supabase, providerPaymentId),
+  ]);
+
+  if (!payment && !order) {
+    return processedUnmatched('dispute_unmatched');
+  }
+
+  if (order) {
+    const updateResult = await supabase
+      .from('billing_orders')
+      .update({ status: 'disputed', updated_at: new Date().toISOString() })
+      .eq('id', order.id);
+
+    throwIfQueryFailed(updateResult.error, 'Failed to update order for dispute webhook');
+  }
+
+  let outcome = 'dispute_recorded';
+  const disputeProviderId = payload.payload?.dispute?.entity?.id ?? null;
+
+  if (payment && disputeProviderId) {
+    const disputeAmountMinor = payload.payload?.dispute?.entity?.amount ?? payment.gross_minor;
+    const split = splitRefundProportionally(disputeAmountMinor, payment.net_minor, payment.gross_minor);
+
+    const recordResult = await recordDispute({
+      supabase,
+      subjectRef: payment.subject_ref,
+      paymentId: payment.id,
+      providerMode: payment.provider_mode,
+      providerRefundId: disputeProviderId,
+      providerPaymentId,
+      amountMinor: disputeAmountMinor,
+      netMinor: split.netMinor,
+      taxMinor: split.taxMinor,
+      currencyCode: payment.currency_code,
+      status: 'pending',
+      actorUserRef: payment.user_id,
+      rawPayload: payload as unknown as Record<string, unknown>,
+    });
+
+    if (recordResult.state === 'unavailable') {
+      outcome = 'dispute_recorded_ledger_unavailable';
+    } else {
+      await markLedgerPaymentStatus(supabase, payment.id, 'disputed');
+    }
+  }
+
+  return {
+    status: 'processed',
+    outcome,
+    relatedUserId: order?.user_id ?? payment?.user_id ?? null,
+    relatedSubscriptionId: null,
+  };
+}
+
+/** Best-effort status sync on the payment row itself -- the refund/dispute row just written is the
+ * authoritative record either way, so a failure here is logged, never thrown. */
+async function markLedgerPaymentStatus(supabase: AdminClient, paymentId: string, status: BillingPaymentStatus): Promise<void> {
   const updateResult = await supabase
-    .from('billing_orders')
-    .update({ status: 'disputed', updated_at: new Date().toISOString() })
-    .eq('id', order.id);
+    .from('billing_payments')
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq('id', paymentId);
 
-  throwIfQueryFailed(updateResult.error, 'Failed to update order for dispute webhook');
+  if (updateResult.error) {
+    console.error('[razorpay-webhook] failed to update billing_payments status', {
+      paymentId,
+      status,
+      message: updateResult.error.message,
+    });
+  }
+}
 
-  return { status: 'processed', outcome: 'dispute_recorded', relatedUserId: order.user_id, relatedSubscriptionId: null };
+async function loadLedgerPaymentByProviderPaymentId(
+  supabase: AdminClient,
+  providerPaymentId: string
+): Promise<DbBillingPayment | null> {
+  let mode: 'test' | 'live';
+  try {
+    mode = getRazorpayMode();
+  } catch {
+    return null;
+  }
+
+  const result = await supabase
+    .from('billing_payments')
+    .select('*')
+    .eq('provider', 'razorpay')
+    .eq('provider_mode', mode)
+    .eq('provider_payment_id', providerPaymentId)
+    .maybeSingle();
+
+  if (result.error) {
+    if (isMissingLedgerColumnError(result.error)) return null;
+    throwIfQueryFailed(result.error, 'Failed to load billing payment for webhook');
+  }
+
+  return (result.data ?? null) as DbBillingPayment | null;
+}
+
+function isMissingLedgerColumnError(error: { code?: string } | null | undefined): boolean {
+  return (
+    error?.code === '42P01' ||
+    error?.code === 'PGRST205' ||
+    error?.code === '42703' ||
+    error?.code === 'PGRST200' ||
+    error?.code === 'PGRST204'
+  );
+}
+
+/** Refunds/disputes that can't be matched to anything are still "processed" (there is nothing to
+ * retry), just with an outcome that says so -- distinct from the generic `ignored()` below, which
+ * is for event types this module doesn't handle at all. */
+function processedUnmatched(outcome: string): ProcessRazorpayWebhookEventResult {
+  return { status: 'processed', outcome, relatedUserId: null, relatedSubscriptionId: null };
 }
 
 async function loadTopupOrderByProviderOrderId(

@@ -130,6 +130,13 @@ async function reconcileSubscriptionCheckouts(
         continue;
       }
 
+      if (!order.user_id) {
+        // Deleted-customer safety (payments Phase 2, plan §4 Unit B): see the identical guard in
+        // reconcileSubscriptions below.
+        console.warn('[razorpay.reconcile] skipping subscription checkout order with no owner', { orderId: order.id });
+        continue;
+      }
+
       const planVersion = await loadPlanVersion(supabase, order.plan_version_id);
       await syncSubscriptionFromProvider({
         supabase,
@@ -187,6 +194,14 @@ async function reconcileSubscriptions(
 
   for (const subscription of subscriptions) {
     if (Date.now() >= deadline) break;
+
+    // Deleted-customer safety (payments Phase 2, plan §4 Unit B): a subscription surviving
+    // migration 125's SET NULL has no one left to grant coins to -- and should already have been
+    // cancelled at Razorpay before deletion (plan §2 decision 12), so there is nothing to reconcile.
+    if (!subscription.user_id) {
+      console.warn('[razorpay.reconcile] skipping subscription with no owner', { subscriptionId: subscription.id });
+      continue;
+    }
 
     try {
       const planVersion = await loadPlanVersion(supabase, subscription.plan_version_id);

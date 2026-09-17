@@ -12,6 +12,9 @@ import {
 } from '@/lib/billing/razorpay';
 import { redactRazorpayPayload } from '@/lib/billing/razorpay-redact.shared';
 import { getFeatureFlag } from '@/lib/ai/model-config';
+import { getPublishedTaxRule } from '@/lib/billing/tax-rules';
+import { computeTax, type TaxBreakdown } from '@/lib/billing/tax.shared';
+import { loadBillingProfile } from '@/lib/billing/billing-profile';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import type {
@@ -35,6 +38,103 @@ interface BillingBeginSubscriptionCheckoutRow {
   provider_checkout_session_id: string | null;
   superseded_session_ids: string[] | null;
   blocked_reason: string | null;
+}
+
+/**
+ * Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit B): checkout charges tax, on top of the
+ * GST-exclusive catalogue price. `schemaAvailable` is false exactly when migration 125 is absent --
+ * callers use it to decide whether it's safe to write `subject_ref` on a new billing_orders /
+ * billing_subscriptions row (that column doesn't exist without 125 either, same migration file).
+ */
+interface CheckoutTaxContext {
+  netMinor: number;
+  taxMinor: number;
+  grossMinor: number;
+  taxBreakdown: TaxBreakdown | null;
+  ruleId: string | null;
+  supplierStateCode: string | null;
+  placeOfSupplyStateCode: string | null;
+  schemaAvailable: boolean;
+}
+
+/**
+ * Resolves what to actually charge for `netMinor` (plan §4 Unit B):
+ *  - migration 125 absent ("unavailable"): charge the net, exactly as before Phase 2.
+ *  - 125 present but no published rule ("not_found"): refuse rather than under-charge.
+ *  - 125 present with a published rule: require a declared billing-profile state (place of supply
+ *    is a legal requirement, not a preference) and compute tax on top.
+ */
+async function resolveCheckoutTax(input: {
+  supabase: ReturnType<typeof createAdminClient>;
+  userId: string;
+  appliesTo: 'subscription' | 'topup';
+  netMinor: number;
+}): Promise<CheckoutTaxContext> {
+  const ruleResult = await getPublishedTaxRule('IN', input.appliesTo);
+
+  if (ruleResult.status === 'unavailable') {
+    return {
+      netMinor: input.netMinor,
+      taxMinor: 0,
+      grossMinor: input.netMinor,
+      taxBreakdown: null,
+      ruleId: null,
+      supplierStateCode: null,
+      placeOfSupplyStateCode: null,
+      schemaAvailable: false,
+    };
+  }
+
+  if (ruleResult.status === 'not_found') {
+    throw new Error('Checkout is temporarily unavailable while tax rules are being configured. Please try again shortly.');
+  }
+
+  const profileResult = await loadBillingProfile(input.supabase, input.userId);
+
+  // The tax-rule table and billing_profiles come from the same migration (125), so this should be
+  // unreachable in practice -- but a partially-applied migration must still refuse, not under-charge.
+  if (profileResult.status === 'unavailable') {
+    throw new Error('Checkout is temporarily unavailable. Please try again shortly.');
+  }
+
+  const profile = profileResult.profile;
+  if (!profile || !profile.state_code) {
+    throw new Error('Please add your billing details (state) before checkout.');
+  }
+
+  const result = computeTax({
+    netMinor: input.netMinor,
+    rule: ruleResult.rule,
+    supplierStateCode: ruleResult.rule.supplierStateCode,
+    placeOfSupplyStateCode: profile.state_code,
+  });
+
+  return {
+    netMinor: result.netMinor,
+    taxMinor: result.taxMinor,
+    grossMinor: result.grossMinor,
+    taxBreakdown: result.breakdown,
+    ruleId: ruleResult.rule.id,
+    supplierStateCode: ruleResult.rule.supplierStateCode,
+    placeOfSupplyStateCode: profile.state_code,
+    schemaAvailable: true,
+  };
+}
+
+function taxSnapshotFields(tax: CheckoutTaxContext) {
+  return {
+    netMinor: tax.netMinor,
+    taxMinor: tax.taxMinor,
+    grossMinor: tax.grossMinor,
+    tax: tax.taxBreakdown
+      ? {
+          ruleId: tax.ruleId,
+          supplierStateCode: tax.supplierStateCode,
+          placeOfSupplyStateCode: tax.placeOfSupplyStateCode,
+          breakdown: tax.taxBreakdown,
+        }
+      : null,
+  };
 }
 
 export async function prepareRazorpayCheckout(
@@ -69,17 +169,25 @@ export async function prepareRazorpayCheckoutInternal(
     }
 
     const providerMode = getRazorpayMode();
+    const tax = await resolveCheckoutTax({
+      supabase,
+      userId: auth.userId,
+      appliesTo: 'subscription',
+      netMinor: version.price_minor,
+    });
+
     const snapshot = {
       kind: 'subscription',
       planVersionId: version.id,
       planKey: plan.plan_key,
       planName: plan.name,
       interval: version.billing_interval,
-      amountMinor: version.price_minor,
+      amountMinor: tax.grossMinor,
       currencyCode: version.currency_code,
       includedBeats: version.monthly_included_beats,
       pricingMarketKey: version.pricing_market_key,
       providerMode,
+      ...taxSnapshotFields(tax),
     };
 
     const beginResult = await supabase.rpc('billing_begin_subscription_checkout', {
@@ -139,9 +247,16 @@ export async function prepareRazorpayCheckoutInternal(
 
     let subscription: RazorpaySubscription;
     try {
-      const razorpayPlanId = await ensureRazorpayPlanRef(supabase, version, plan, providerMode);
+      const planRef = await ensureRazorpayPlanRef(supabase, version, plan, providerMode, tax.grossMinor);
+
+      if (planRef.grossMinor !== null && planRef.grossMinor !== tax.grossMinor) {
+        // A concurrent request created/reused a plan at a different gross (e.g. a rate change mid-flight).
+        // Refuse rather than charge a subscription at an amount that doesn't match what we just quoted.
+        throw new Error('Pricing changed while preparing checkout. Please try again.');
+      }
+
       subscription = await createRazorpaySubscription({
-        planId: razorpayPlanId,
+        planId: planRef.razorpayPlanId,
         interval: version.billing_interval,
         expireByUnix: Math.floor(Date.now() / 1000) + 30 * 60,
         notes: {
@@ -165,6 +280,10 @@ export async function prepareRazorpayCheckoutInternal(
       .update({
         provider_checkout_session_id: subscription.id,
         status: subscription.status,
+        // billing_begin_subscription_checkout (migration 124) always inserts amount_minor as the
+        // catalogue net price -- fix it up to the gross we actually quoted and are about to charge.
+        amount_minor: tax.grossMinor,
+        ...(tax.schemaAvailable ? { subject_ref: auth.userId } : {}),
         raw_provider_payload_json: redactRazorpayPayload({
           kind: 'subscription',
           subscription,
@@ -194,9 +313,16 @@ export async function prepareRazorpayCheckoutInternal(
   }
 
   const providerMode = getRazorpayMode();
+  const tax = await resolveCheckoutTax({
+    supabase,
+    userId: auth.userId,
+    appliesTo: 'topup',
+    netMinor: topup.price_minor,
+  });
+
   const receipt = `kissago_${topup.pack_key}_${Date.now()}`;
   const order = await createRazorpayOrder({
-    amountMinor: topup.price_minor,
+    amountMinor: tax.grossMinor,
     currencyCode: topup.currency_code,
     receipt,
     notes: {
@@ -210,12 +336,13 @@ export async function prepareRazorpayCheckoutInternal(
     .from('billing_orders')
     .insert({
       user_id: auth.userId,
+      ...(tax.schemaAvailable ? { subject_ref: auth.userId } : {}),
       provider: 'razorpay',
       provider_mode: providerMode,
       order_type: 'topup_checkout',
       provider_order_id: order.id,
       currency_code: topup.currency_code,
-      amount_minor: topup.price_minor,
+      amount_minor: tax.grossMinor,
       status: order.status,
       topup_pack_id: topup.id,
       purchase_snapshot_json: {
@@ -224,10 +351,11 @@ export async function prepareRazorpayCheckoutInternal(
         packKey: topup.pack_key,
         packName: topup.name,
         beatAmount: topup.beat_amount,
-        amountMinor: topup.price_minor,
+        amountMinor: tax.grossMinor,
         currencyCode: topup.currency_code,
         pricingMarketKey: topup.pricing_market_key,
         providerMode,
+        ...taxSnapshotFields(tax),
       },
       raw_provider_payload_json: redactRazorpayPayload({
         kind: 'topup',
@@ -244,7 +372,7 @@ export async function prepareRazorpayCheckoutInternal(
     keyId: getRazorpayKeyId(),
     internalOrderId: orderInsertResult.data!.id,
     razorpayOrderId: order.id,
-    amountMinor: topup.price_minor,
+    amountMinor: tax.grossMinor,
     currencyCode: topup.currency_code,
     displayName: 'Kissago',
     description: topup.name,
@@ -361,24 +489,44 @@ async function loadTopupPackForCheckout(
   return topup;
 }
 
+interface EnsureRazorpayPlanRefResult {
+  razorpayPlanId: string;
+  /** null when the database has no provider_price_ref_gross_minor column (migration 126 absent) --
+   * the caller can't verify the gross matched and must not compare against it. */
+  grossMinor: number | null;
+}
+
 /**
- * A stored ref is reused only when it was created in the same mode. Otherwise a new Razorpay plan is
- * created and the winning update also stamps the mode; a losing concurrent request just leaves one
- * orphan Razorpay plan (harmless), and the re-select below returns whatever actually persisted.
+ * A stored ref is reused only when it was created in the same mode AND (migration 126 present) at
+ * the same gross amount -- plan §2 decision 7, "one Razorpay plan per gross amount". Without 126
+ * (the `provider_price_ref_gross_minor` column structurally absent from the row -- see
+ * DbPricingPlanVersion), this falls back to today's mode-only reuse. Otherwise a new Razorpay plan
+ * is created and the winning update also stamps the mode and gross; a losing concurrent request
+ * just leaves one orphan Razorpay plan (harmless), and the re-select below returns whatever
+ * actually persisted.
  */
 async function ensureRazorpayPlanRef(
   supabase: ReturnType<typeof createAdminClient>,
   version: DbPricingPlanVersion,
   plan: DbPricingPlan,
-  mode: RazorpayMode
-): Promise<string> {
-  if (version.provider_price_ref && version.provider_price_ref_mode === mode) {
-    return version.provider_price_ref;
+  mode: RazorpayMode,
+  grossMinor: number
+): Promise<EnsureRazorpayPlanRefResult> {
+  const hasGrossColumn = Object.prototype.hasOwnProperty.call(version, 'provider_price_ref_gross_minor');
+  const storedGross = hasGrossColumn ? version.provider_price_ref_gross_minor ?? null : null;
+
+  const canReuse =
+    Boolean(version.provider_price_ref) &&
+    version.provider_price_ref_mode === mode &&
+    (!hasGrossColumn || storedGross === grossMinor);
+
+  if (canReuse) {
+    return { razorpayPlanId: version.provider_price_ref as string, grossMinor: hasGrossColumn ? storedGross : null };
   }
 
   const createdPlan = await createRazorpayPlan({
     interval: version.billing_interval,
-    amountMinor: version.price_minor,
+    amountMinor: grossMinor,
     currencyCode: version.currency_code,
     name: `${plan.name} ${labelInterval(version.billing_interval)}`,
     description: plan.description,
@@ -389,33 +537,48 @@ async function ensureRazorpayPlanRef(
     },
   });
 
+  const updatePayload: Record<string, unknown> = {
+    provider_product_ref: createdPlan.item.id,
+    provider_price_ref: createdPlan.id,
+    provider_price_ref_mode: mode,
+    updated_at: new Date().toISOString(),
+  };
+  if (hasGrossColumn) {
+    updatePayload.provider_price_ref_gross_minor = grossMinor;
+  }
+
+  const orFilter = hasGrossColumn
+    ? `provider_price_ref_mode.is.null,provider_price_ref_mode.neq.${mode},provider_price_ref_gross_minor.is.null,provider_price_ref_gross_minor.neq.${grossMinor}`
+    : `provider_price_ref_mode.is.null,provider_price_ref_mode.neq.${mode}`;
+
   const updateResult = await supabase
     .from('pricing_plan_versions')
-    .update({
-      provider_product_ref: createdPlan.item.id,
-      provider_price_ref: createdPlan.id,
-      provider_price_ref_mode: mode,
-      updated_at: new Date().toISOString(),
-    })
+    .update(updatePayload)
     .eq('id', version.id)
-    .or(`provider_price_ref_mode.is.null,provider_price_ref_mode.neq.${mode}`);
+    .or(orFilter);
 
   throwIfQueryFailed(updateResult.error, 'Failed to persist Razorpay plan reference');
 
   const reselectResult = await supabase
     .from('pricing_plan_versions')
-    .select('provider_price_ref')
+    .select(hasGrossColumn ? 'provider_price_ref, provider_price_ref_gross_minor' : 'provider_price_ref')
     .eq('id', version.id)
     .maybeSingle();
 
   throwIfQueryFailed(reselectResult.error, 'Failed to load Razorpay plan reference');
 
-  const providerPriceRef = (reselectResult.data as { provider_price_ref: string | null } | null)?.provider_price_ref;
+  const reselected = reselectResult.data as
+    | { provider_price_ref: string | null; provider_price_ref_gross_minor?: number | null }
+    | null;
+  const providerPriceRef = reselected?.provider_price_ref;
   if (!providerPriceRef) {
     throw new Error('Failed to resolve Razorpay plan reference');
   }
 
-  return providerPriceRef;
+  return {
+    razorpayPlanId: providerPriceRef,
+    grossMinor: hasGrossColumn ? (reselected?.provider_price_ref_gross_minor ?? null) : null,
+  };
 }
 
 function throwIfQueryFailed(error: { message: string } | null, context: string): void {

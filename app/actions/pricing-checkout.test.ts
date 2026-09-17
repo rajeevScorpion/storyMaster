@@ -27,6 +27,14 @@ vi.mock('@/lib/billing/razorpay', async (importOriginal) => {
   };
 });
 
+vi.mock('@/lib/billing/tax-rules', () => ({
+  getPublishedTaxRule: vi.fn(),
+}));
+
+vi.mock('@/lib/billing/billing-profile', () => ({
+  loadBillingProfile: vi.fn(),
+}));
+
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -38,6 +46,8 @@ import {
   type RazorpayPlan,
   type RazorpaySubscription,
 } from '@/lib/billing/razorpay';
+import { getPublishedTaxRule } from '@/lib/billing/tax-rules';
+import { loadBillingProfile } from '@/lib/billing/billing-profile';
 import { prepareRazorpayCheckoutInternal } from './pricing-checkout';
 import type { DbPricingPlan, DbPricingPlanVersion } from '@/lib/types/database';
 
@@ -48,6 +58,8 @@ const createRazorpayPlanMock = vi.mocked(createRazorpayPlan);
 const createRazorpaySubscriptionMock = vi.mocked(createRazorpaySubscription);
 const createRazorpayOrderMock = vi.mocked(createRazorpayOrder);
 const cancelRazorpaySubscriptionMock = vi.mocked(cancelRazorpaySubscription);
+const getPublishedTaxRuleMock = vi.mocked(getPublishedTaxRule);
+const loadBillingProfileMock = vi.mocked(loadBillingProfile);
 
 interface QueryResult {
   data?: unknown;
@@ -198,6 +210,68 @@ function fakeRazorpayPlan(overrides: Partial<RazorpayPlan> = {}): RazorpayPlan {
   };
 }
 
+function fakeTopupPackRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'pack-1',
+    pack_key: 'pack_small',
+    status: 'published',
+    provider: 'razorpay',
+    name: 'Small pack',
+    currency_code: 'INR',
+    pricing_market_key: 'IN',
+    price_minor: 500,
+    beat_amount: 50,
+    provider_product_ref: null,
+    provider_price_ref: null,
+    extensions_json: {},
+    published_at: null,
+    published_by: null,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function fakeTaxRule(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'rule-1',
+    marketKey: 'IN',
+    appliesTo: 'all',
+    taxRegime: 'in_gst',
+    ratePercent: 18,
+    sacCode: '998439',
+    supplierStateCode: '24',
+    ...overrides,
+  };
+}
+
+function taxAvailable(rule: Record<string, unknown> = fakeTaxRule()) {
+  getPublishedTaxRuleMock.mockResolvedValueOnce({ status: 'ok', rule } as any);
+}
+
+function billingProfileWithState(stateCode = '24') {
+  loadBillingProfileMock.mockResolvedValueOnce({
+    status: 'ok',
+    profile: {
+      id: 'bp-1',
+      user_id: 'user-1',
+      legal_name: 'Jane Doe',
+      billing_email: null,
+      phone: null,
+      company_name: null,
+      gstin: null,
+      state_code: stateCode,
+      country_code: 'IN',
+      address_line_1: null,
+      address_line_2: null,
+      city: null,
+      postal_code: null,
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    },
+  } as any);
+}
+
 function signedIn() {
   createClientMock.mockResolvedValue({
     auth: {
@@ -210,6 +284,9 @@ function signedIn() {
 beforeEach(() => {
   vi.clearAllMocks();
   signedIn();
+  // Default: migration 125 absent -- checkout charges the net, exactly as before Phase 2. Tests
+  // that exercise tax charging override this with mockResolvedValueOnce.
+  getPublishedTaxRuleMock.mockResolvedValue({ status: 'unavailable' });
 });
 
 describe('prepareRazorpayCheckoutInternal — kill switch', () => {
@@ -408,5 +485,194 @@ describe('prepareRazorpayCheckoutInternal — top-up checkout', () => {
       provider_mode: 'test',
       purchase_snapshot_json: expect.objectContaining({ kind: 'topup', beatAmount: 50, providerMode: 'test' }),
     });
+  });
+});
+
+describe('prepareRazorpayCheckoutInternal — top-up checkout charges tax', () => {
+  it('charges the gross to Razorpay and records net/tax/gross plus subject_ref in the snapshot', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_topup_packs', 'select', { data: fakeTopupPackRow(), error: null });
+    taxAvailable();
+    billingProfileWithState('24'); // same state as the rule's supplier -> intra-state
+    createRazorpayOrderMock.mockResolvedValueOnce({ id: 'order_rzp_1', amount: 590, currency: 'INR', receipt: null, status: 'created', notes: {} });
+    enqueue('billing_orders', 'insert', { data: { id: 'order-1' }, error: null });
+
+    const result = await prepareRazorpayCheckoutInternal({ kind: 'topup', topupPackId: 'pack-1' });
+
+    expect(createRazorpayOrderMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 590 }));
+    expect(result).toMatchObject({ kind: 'topup', amountMinor: 590 });
+    const insertCall = calls.find((call) => call.table === 'billing_orders' && call.op === 'insert');
+    expect(insertCall?.payload).toMatchObject({
+      amount_minor: 590,
+      subject_ref: 'user-1',
+      purchase_snapshot_json: expect.objectContaining({
+        netMinor: 500,
+        taxMinor: 90,
+        grossMinor: 590,
+        tax: expect.objectContaining({ ruleId: 'rule-1', placeOfSupplyStateCode: '24' }),
+      }),
+    });
+  });
+
+  it('refuses checkout when a tax rule is published but no billing-profile state is declared', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_topup_packs', 'select', { data: fakeTopupPackRow(), error: null });
+    taxAvailable();
+    loadBillingProfileMock.mockResolvedValueOnce({ status: 'ok', profile: null });
+
+    await expect(
+      prepareRazorpayCheckoutInternal({ kind: 'topup', topupPackId: 'pack-1' })
+    ).rejects.toThrow('billing details');
+
+    expect(createRazorpayOrderMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses checkout when migration 125 is present but no tax rule is published', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_topup_packs', 'select', { data: fakeTopupPackRow(), error: null });
+    getPublishedTaxRuleMock.mockResolvedValueOnce({ status: 'not_found' });
+
+    await expect(
+      prepareRazorpayCheckoutInternal({ kind: 'topup', topupPackId: 'pack-1' })
+    ).rejects.toThrow('temporarily unavailable');
+
+    expect(loadBillingProfileMock).not.toHaveBeenCalled();
+    expect(createRazorpayOrderMock).not.toHaveBeenCalled();
+  });
+
+  it('charges only the net, with no subject_ref, when migration 125 is absent', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_topup_packs', 'select', { data: fakeTopupPackRow(), error: null });
+    // beforeEach already defaults getPublishedTaxRuleMock to 'unavailable'.
+    createRazorpayOrderMock.mockResolvedValueOnce({ id: 'order_rzp_1', amount: 500, currency: 'INR', receipt: null, status: 'created', notes: {} });
+    enqueue('billing_orders', 'insert', { data: { id: 'order-1' }, error: null });
+
+    await prepareRazorpayCheckoutInternal({ kind: 'topup', topupPackId: 'pack-1' });
+
+    expect(createRazorpayOrderMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 500 }));
+    const insertCall = calls.find((call) => call.table === 'billing_orders' && call.op === 'insert');
+    expect(insertCall?.payload).not.toHaveProperty('subject_ref');
+    expect(loadBillingProfileMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax', () => {
+  it('creates the Razorpay plan at the gross amount and fixes up the order amount_minor', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue, enqueueRpc, calls } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_plan_versions', 'select', { data: fakePlanVersion({ provider_price_ref: null, provider_price_ref_mode: null }), error: null });
+    enqueue('pricing_plans', 'select', { data: fakePlan(), error: null });
+    taxAvailable();
+    billingProfileWithState('24');
+    enqueueRpc({ data: [{ order_id: 'order-new', reused: false, provider_checkout_session_id: null, superseded_session_ids: [], blocked_reason: null }], error: null });
+    createRazorpayPlanMock.mockResolvedValueOnce(fakeRazorpayPlan({ id: 'plan_rzp_gross' }));
+    enqueue('pricing_plan_versions', 'update', { data: null, error: null });
+    enqueue('pricing_plan_versions', 'select', { data: { provider_price_ref: 'plan_rzp_gross' }, error: null });
+    createRazorpaySubscriptionMock.mockResolvedValueOnce(fakeRazorpaySubscription());
+    enqueue('billing_orders', 'update', { data: null, error: null });
+
+    await prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' });
+
+    // 19900 * 18% = 3582 exactly -> gross 23482.
+    expect(createRazorpayPlanMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 23482 }));
+    const orderUpdate = calls.find((call) => call.table === 'billing_orders' && call.op === 'update');
+    expect(orderUpdate?.payload).toMatchObject({ amount_minor: 23482, subject_ref: 'user-1' });
+  });
+
+  it('reuses the plan ref when the recorded mode and gross both match (migration 126 present)', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue, enqueueRpc } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_plan_versions', 'select', {
+      data: fakePlanVersion({ provider_price_ref: 'plan_cached', provider_price_ref_mode: 'test', provider_price_ref_gross_minor: 23482 }),
+      error: null,
+    });
+    enqueue('pricing_plans', 'select', { data: fakePlan(), error: null });
+    taxAvailable();
+    billingProfileWithState('24');
+    enqueueRpc({ data: [{ order_id: 'order-new', reused: false, provider_checkout_session_id: null, superseded_session_ids: [], blocked_reason: null }], error: null });
+    createRazorpaySubscriptionMock.mockResolvedValueOnce(fakeRazorpaySubscription());
+    enqueue('billing_orders', 'update', { data: null, error: null });
+
+    await prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' });
+
+    expect(createRazorpayPlanMock).not.toHaveBeenCalled();
+    expect(createRazorpaySubscriptionMock).toHaveBeenCalledWith(expect.objectContaining({ planId: 'plan_cached' }));
+  });
+
+  it('creates a new plan when the mode matches but the recorded gross differs (a rate changed)', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue, enqueueRpc } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_plan_versions', 'select', {
+      data: fakePlanVersion({ provider_price_ref: 'plan_stale', provider_price_ref_mode: 'test', provider_price_ref_gross_minor: 10000 }),
+      error: null,
+    });
+    enqueue('pricing_plans', 'select', { data: fakePlan(), error: null });
+    taxAvailable();
+    billingProfileWithState('24');
+    enqueueRpc({ data: [{ order_id: 'order-new', reused: false, provider_checkout_session_id: null, superseded_session_ids: [], blocked_reason: null }], error: null });
+    createRazorpayPlanMock.mockResolvedValueOnce(fakeRazorpayPlan({ id: 'plan_rzp_new_rate' }));
+    enqueue('pricing_plan_versions', 'update', { data: null, error: null });
+    enqueue('pricing_plan_versions', 'select', { data: { provider_price_ref: 'plan_rzp_new_rate', provider_price_ref_gross_minor: 23482 }, error: null });
+    createRazorpaySubscriptionMock.mockResolvedValueOnce(fakeRazorpaySubscription());
+    enqueue('billing_orders', 'update', { data: null, error: null });
+
+    await prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' });
+
+    expect(createRazorpayPlanMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 23482 }));
+    expect(createRazorpaySubscriptionMock).toHaveBeenCalledWith(expect.objectContaining({ planId: 'plan_rzp_new_rate' }));
+  });
+
+  it('refuses and marks the order failed when the re-selected plan gross does not match what was quoted', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue, enqueueRpc, calls } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_plan_versions', 'select', {
+      data: fakePlanVersion({ provider_price_ref: null, provider_price_ref_mode: null, provider_price_ref_gross_minor: null }),
+      error: null,
+    });
+    enqueue('pricing_plans', 'select', { data: fakePlan(), error: null });
+    taxAvailable();
+    billingProfileWithState('24');
+    enqueueRpc({ data: [{ order_id: 'order-new', reused: false, provider_checkout_session_id: null, superseded_session_ids: [], blocked_reason: null }], error: null });
+    createRazorpayPlanMock.mockResolvedValueOnce(fakeRazorpayPlan({ id: 'plan_rzp_race' }));
+    enqueue('pricing_plan_versions', 'update', { data: null, error: null });
+    // A concurrent request's write won the race: the re-select comes back with a different gross.
+    enqueue('pricing_plan_versions', 'select', { data: { provider_price_ref: 'plan_rzp_other', provider_price_ref_gross_minor: 99999 }, error: null });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+
+    await expect(
+      prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' })
+    ).rejects.toThrow('Pricing changed while preparing checkout');
+
+    expect(createRazorpaySubscriptionMock).not.toHaveBeenCalled();
+    const failUpdate = calls.find((call) => call.table === 'billing_orders' && call.op === 'update');
+    expect(failUpdate?.payload).toMatchObject({ status: 'failed' });
+  });
+
+  it('refuses subscription checkout without a declared billing-profile state', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_plan_versions', 'select', { data: fakePlanVersion(), error: null });
+    enqueue('pricing_plans', 'select', { data: fakePlan(), error: null });
+    taxAvailable();
+    loadBillingProfileMock.mockResolvedValueOnce({ status: 'ok', profile: null });
+
+    await expect(
+      prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' })
+    ).rejects.toThrow('billing details');
+
+    expect(createRazorpaySubscriptionMock).not.toHaveBeenCalled();
   });
 });

@@ -110,5 +110,6 @@ function mapTaxRuleRow(row: DbBillingTaxRule): TaxRuleInput {
     taxRegime: row.tax_regime,
     ratePercent: Number(row.rate_percent),
     sacCode: row.sac_code,
+    supplierStateCode: row.supplier_state_code,
   };
 }

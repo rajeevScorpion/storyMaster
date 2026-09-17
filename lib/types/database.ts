@@ -628,6 +628,11 @@ export interface DbPricingPlanVersion {
   provider_price_ref: string | null;
   /** Mode `provider_price_ref` was created under; a cached ref from the other mode must not be reused. */
   provider_price_ref_mode: 'test' | 'live' | null;
+  /** Migration 126 (payments Phase 2, Unit B): the gross amount `provider_price_ref` was created at.
+   * Absent (not just null) on a database without 126 -- callers must structurally probe for the key
+   * (`'provider_price_ref_gross_minor' in version`) rather than assume it exists, so the plan-ref
+   * cache falls back to reuse-on-mode-alone exactly as before 126. */
+  provider_price_ref_gross_minor?: number | null;
   extensions_json: Record<string, unknown>;
   published_at: string | null;
   published_by: string | null;
@@ -727,7 +732,11 @@ export interface DbBillingCustomer {
 
 export interface DbBillingSubscription {
   id: string;
-  user_id: string;
+  /** Nullable since migration 125 (payments Phase 2): SET NULL on account deletion, matched to the
+   * anonymised subject via `subject_ref`. Always non-null for a live, un-deleted customer. */
+  user_id: string | null;
+  /** Migration 125: absent (not just null) on a database without 125 -- see billing_orders.subject_ref. */
+  subject_ref?: string | null;
   plan_version_id: string;
   provider: BillingProvider;
   provider_subscription_id: string;
@@ -751,7 +760,14 @@ export interface DbBillingSubscription {
 
 export interface DbBillingOrder {
   id: string;
-  user_id: string;
+  /** Nullable since migration 125 (payments Phase 2): SET NULL on account deletion, matched to the
+   * anonymised subject via `subject_ref`. Always non-null for a live, un-deleted customer. */
+  user_id: string | null;
+  /** Migration 125: a stable id (copied from user_id at migration time, and set explicitly by
+   * checkout going forward) that survives account deletion. Absent (not just null) on a database
+   * without 125 -- `select('*')` simply omits an unknown column rather than erroring, so callers
+   * that need to know whether 125 is applied structurally probe for the key. */
+  subject_ref?: string | null;
   provider: BillingProvider;
   order_type: BillingOrderType;
   provider_checkout_session_id: string | null;

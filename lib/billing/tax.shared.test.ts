@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeTax, type TaxRuleInput } from './tax.shared';
+import { computeTax, computeTaxFromGross, splitRefundProportionally, type TaxRuleInput } from './tax.shared';
 
 const GUJARAT = '24';
 const MAHARASHTRA = '27';
@@ -12,6 +12,7 @@ function fakeRule(overrides: Partial<TaxRuleInput> = {}): TaxRuleInput {
     taxRegime: 'in_gst',
     ratePercent: 18,
     sacCode: '998439',
+    supplierStateCode: GUJARAT,
     ...overrides,
   };
 }
@@ -172,5 +173,104 @@ describe('computeTax', () => {
     });
 
     expect(result).toMatchObject({ netMinor: 0, taxMinor: 0, grossMinor: 0 });
+  });
+});
+
+describe('computeTaxFromGross', () => {
+  it('reverses computeTax exactly for a gross that came from computeTax', () => {
+    const forward = computeTax({
+      netMinor: 19900,
+      rule: fakeRule(),
+      supplierStateCode: GUJARAT,
+      placeOfSupplyStateCode: GUJARAT,
+    });
+
+    const reversed = computeTaxFromGross({
+      grossMinor: forward.grossMinor,
+      rule: fakeRule(),
+      supplierStateCode: GUJARAT,
+      placeOfSupplyStateCode: GUJARAT,
+    });
+
+    expect(reversed.netMinor).toBe(forward.netMinor);
+    expect(reversed.taxMinor).toBe(forward.taxMinor);
+    expect(reversed.grossMinor).toBe(forward.grossMinor);
+  });
+
+  it('always adds net + tax back up to exactly the given gross, even off a rate that does not divide evenly', () => {
+    const result = computeTaxFromGross({
+      grossMinor: 1000,
+      rule: fakeRule({ ratePercent: 18 }),
+      supplierStateCode: GUJARAT,
+      placeOfSupplyStateCode: GUJARAT,
+    });
+
+    expect(result.netMinor + result.taxMinor).toBe(1000);
+    expect(result.grossMinor).toBe(1000);
+  });
+
+  it('classifies inter-state supply and splits IGST, matching computeTax', () => {
+    const result = computeTaxFromGross({
+      grossMinor: 1180,
+      rule: fakeRule(),
+      supplierStateCode: GUJARAT,
+      placeOfSupplyStateCode: MAHARASHTRA,
+    });
+
+    expect(result.breakdown.supplyType).toBe('inter_state');
+    expect(result.breakdown.cgstMinor).toBe(0);
+    expect(result.breakdown.sgstMinor).toBe(0);
+    expect(result.breakdown.igstMinor).toBe(result.taxMinor);
+  });
+
+  it('treats the whole gross as net under the none regime or a zero rate', () => {
+    const none = computeTaxFromGross({
+      grossMinor: 1000,
+      rule: fakeRule({ taxRegime: 'none' }),
+      supplierStateCode: GUJARAT,
+      placeOfSupplyStateCode: GUJARAT,
+    });
+    expect(none).toMatchObject({ netMinor: 1000, taxMinor: 0, grossMinor: 1000 });
+
+    const zeroRate = computeTaxFromGross({
+      grossMinor: 1000,
+      rule: fakeRule({ ratePercent: 0 }),
+      supplierStateCode: GUJARAT,
+      placeOfSupplyStateCode: GUJARAT,
+    });
+    expect(zeroRate).toMatchObject({ netMinor: 1000, taxMinor: 0, grossMinor: 1000 });
+  });
+
+  it('rejects a non-integer or negative gross amount', () => {
+    expect(() =>
+      computeTaxFromGross({ grossMinor: 10.5, rule: fakeRule(), supplierStateCode: GUJARAT, placeOfSupplyStateCode: GUJARAT })
+    ).toThrow();
+    expect(() =>
+      computeTaxFromGross({ grossMinor: -100, rule: fakeRule(), supplierStateCode: GUJARAT, placeOfSupplyStateCode: GUJARAT })
+    ).toThrow();
+  });
+});
+
+describe('splitRefundProportionally', () => {
+  it('splits a full refund back into exactly the original net and tax', () => {
+    const result = splitRefundProportionally(1180, 1000, 1180);
+    expect(result).toEqual({ netMinor: 1000, taxMinor: 180 });
+  });
+
+  it('splits a partial refund proportionally, remainder to tax', () => {
+    // Original: net 1000, tax 180, gross 1180. Refunding 590 (half): net share = floor(590*1000/1180) = 500.
+    const result = splitRefundProportionally(590, 1000, 1180);
+    expect(result.netMinor + result.taxMinor).toBe(590);
+    expect(result.netMinor).toBe(500);
+    expect(result.taxMinor).toBe(90);
+  });
+
+  it('treats the whole refund as net when the original gross is zero or invalid', () => {
+    expect(splitRefundProportionally(500, 0, 0)).toEqual({ netMinor: 500, taxMinor: 0 });
+  });
+
+  it('rejects a non-integer or negative refund amount', () => {
+    expect(() => splitRefundProportionally(10.5, 1000, 1180)).toThrow();
+    expect(() => splitRefundProportionally(-100, 1000, 1180)).toThrow();
   });
 });

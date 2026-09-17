@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
@@ -15,6 +15,18 @@ vi.mock('@/lib/billing/razorpay', async (importOriginal) => {
   };
 });
 
+vi.mock('@/lib/billing/ledger', () => ({
+  recordPayment: vi.fn(),
+}));
+
+vi.mock('@/lib/billing/tax-rules', () => ({
+  getPublishedTaxRule: vi.fn(),
+}));
+
+vi.mock('@/lib/billing/billing-profile', () => ({
+  loadBillingProfile: vi.fn(),
+}));
+
 import {
   fetchRazorpayPayment,
   captureRazorpayPayment,
@@ -25,6 +37,9 @@ import {
   type RazorpaySubscription,
   type RazorpayInvoice,
 } from '@/lib/billing/razorpay';
+import { recordPayment } from '@/lib/billing/ledger';
+import { getPublishedTaxRule } from '@/lib/billing/tax-rules';
+import { loadBillingProfile } from '@/lib/billing/billing-profile';
 import {
   isUniqueViolation,
   nextSubscriptionCheckoutOrderStatus,
@@ -38,6 +53,9 @@ const captureRazorpayPaymentMock = vi.mocked(captureRazorpayPayment);
 const fetchRazorpayOrderPaymentsMock = vi.mocked(fetchRazorpayOrderPayments);
 const fetchRazorpaySubscriptionMock = vi.mocked(fetchRazorpaySubscription);
 const fetchRazorpaySubscriptionInvoicesMock = vi.mocked(fetchRazorpaySubscriptionInvoices);
+const recordPaymentMock = vi.mocked(recordPayment);
+const getPublishedTaxRuleMock = vi.mocked(getPublishedTaxRule);
+const loadBillingProfileMock = vi.mocked(loadBillingProfile);
 
 // --- A minimal, generic stand-in for the supabase-js query builder: every chain method is a
 // no-op passthrough, and the builder is directly awaitable (like the real one) so callers that
@@ -227,6 +245,15 @@ function fakeInvoice(overrides: Partial<RazorpayInvoice> = {}): RazorpayInvoice 
     ...overrides,
   };
 }
+
+beforeEach(() => {
+  // Payments Phase 2 defaults: no ledger schema / no tax rule / no profile, so every existing test
+  // (written before Unit B) keeps exercising the exact same grant behaviour it always has. Tests
+  // that exercise ledger recording or tax splitting override these with mockResolvedValueOnce.
+  recordPaymentMock.mockResolvedValue({ state: 'inserted', id: 'payment-1' });
+  getPublishedTaxRuleMock.mockResolvedValue({ status: 'unavailable' });
+  loadBillingProfileMock.mockResolvedValue({ status: 'ok', profile: null });
+});
 
 describe('isUniqueViolation', () => {
   it('is true only for Postgres 23505', () => {
@@ -626,5 +653,185 @@ describe('syncSubscriptionFromProvider', () => {
     ).rejects.toThrow('subscription_owner_mismatch');
 
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('settleTopupOrder — ledger recording (Payments Phase 2, Unit B)', () => {
+  it('records the payment even when the grant races into already_granted', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    enqueue('billing_orders', 'select', { data: fakeOrder(), error: null });
+    enqueue('beat_grants', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+    fetchRazorpayPaymentMock.mockResolvedValueOnce(fakePayment());
+
+    await settleTopupOrder({ supabase, billingOrderId: 'order-1', paymentIdHint: 'pay_1', source: 'webhook' });
+
+    expect(recordPaymentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ subjectRef: 'user-1', userId: 'user-1', providerPaymentId: 'pay_1', kind: 'topup', status: 'captured' })
+    );
+  });
+
+  it('records net/tax/gross from a tax-aware purchase snapshot instead of the legacy net=gross fallback', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    enqueue('billing_orders', 'select', {
+      data: fakeOrder({
+        amount_minor: 590,
+        purchase_snapshot_json: { kind: 'topup', beatAmount: 50, netMinor: 500, taxMinor: 90, grossMinor: 590 },
+      }),
+      error: null,
+    });
+    enqueue('beat_grants', 'insert', { data: null, error: null });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+    fetchRazorpayPaymentMock.mockResolvedValueOnce(fakePayment({ amount: 590 }));
+
+    await settleTopupOrder({ supabase, billingOrderId: 'order-1', paymentIdHint: 'pay_1', source: 'verify' });
+
+    expect(recordPaymentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ netMinor: 500, taxMinor: 90, grossMinor: 590 })
+    );
+  });
+
+  it('skips the coin grant but still records the payment when the order has no owner (deleted customer)', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_orders', 'select', { data: fakeOrder({ user_id: null, subject_ref: 'subject-1' } as any), error: null });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+    fetchRazorpayPaymentMock.mockResolvedValueOnce(fakePayment());
+
+    const result = await settleTopupOrder({ supabase, billingOrderId: 'order-1', paymentIdHint: 'pay_1', source: 'reconcile' });
+
+    expect(result).toEqual({ state: 'skipped_no_owner', grantedCoins: 0, paymentId: 'pay_1' });
+    expect(calls.some((call) => call.table === 'beat_grants')).toBe(false);
+    expect(recordPaymentMock).toHaveBeenCalledWith(expect.objectContaining({ subjectRef: 'subject-1', userId: null }));
+    const orderUpdate = calls.find((call) => call.table === 'billing_orders' && call.op === 'update');
+    expect(orderUpdate?.payload).toMatchObject({ status: 'paid' });
+  });
+});
+
+describe('syncSubscriptionFromProvider — ledger recording (Payments Phase 2, Unit B)', () => {
+  it('records the first charge with kind subscription_first, using the checkout order snapshot', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    fetchRazorpaySubscriptionMock.mockResolvedValueOnce(
+      fakeSubscription({ status: 'active', current_start: 1_700_000_000, current_end: 1_702_592_000 })
+    );
+    enqueue('billing_subscriptions', 'select', { data: null, error: null });
+    enqueue('billing_subscriptions', 'insert', { data: { id: 'billing-sub-1', first_charge_confirmed_at: null }, error: null });
+    fetchRazorpaySubscriptionInvoicesMock.mockResolvedValueOnce({
+      items: [fakeInvoice({ billing_start: 1_700_000_000, billing_end: 1_702_592_000, amount_paid: 23482 })],
+    });
+    enqueue('billing_subscriptions', 'update', { data: null, error: null }); // confirm first charge
+    enqueue('beat_grants', 'insert', { data: null, error: null });
+
+    const checkoutOrder = {
+      purchase_snapshot_json: { netMinor: 19900, taxMinor: 3582, grossMinor: 23482, tax: { ruleId: 'rule-1' } },
+    } as any;
+
+    await syncSubscriptionFromProvider({
+      supabase,
+      userId: 'user-1',
+      planVersion: fakePlanVersion(),
+      providerSubscriptionId: 'sub_1',
+      checkoutOrder,
+      source: 'webhook',
+      rawPayload: {},
+    });
+
+    expect(recordPaymentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'subscription_first',
+        netMinor: 19900,
+        taxMinor: 3582,
+        grossMinor: 23482,
+        providerInvoiceId: 'inv_1',
+      })
+    );
+    expect(getPublishedTaxRuleMock).not.toHaveBeenCalled();
+  });
+
+  it('records a renewal with kind subscription_renewal, deriving the split from the current rule and profile state', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    fetchRazorpaySubscriptionMock.mockResolvedValueOnce(
+      fakeSubscription({ status: 'active', current_start: 1_702_592_000, current_end: 1_705_270_400 })
+    );
+    enqueue('billing_subscriptions', 'select', {
+      data: { id: 'billing-sub-1', user_id: 'user-1', first_charge_confirmed_at: '2026-08-01T00:00:00.000Z' },
+      error: null,
+    });
+    enqueue('billing_subscriptions', 'update', { data: null, error: null });
+    fetchRazorpaySubscriptionInvoicesMock.mockResolvedValueOnce({
+      items: [fakeInvoice({ id: 'inv_2', billing_start: 1_702_592_000, billing_end: 1_705_270_400, amount_paid: 23482 })],
+    });
+    enqueue('beat_grants', 'insert', { data: null, error: null });
+
+    getPublishedTaxRuleMock.mockResolvedValueOnce({
+      status: 'ok',
+      rule: { id: 'rule-1', marketKey: 'IN', appliesTo: 'subscription', taxRegime: 'in_gst', ratePercent: 18, sacCode: '998439', supplierStateCode: '24' },
+    } as any);
+    loadBillingProfileMock.mockResolvedValueOnce({ status: 'ok', profile: { state_code: '24' } } as any);
+
+    await syncSubscriptionFromProvider({
+      supabase,
+      userId: 'user-1',
+      planVersion: fakePlanVersion(),
+      providerSubscriptionId: 'sub_1',
+      checkoutOrder: null,
+      source: 'reconcile',
+      rawPayload: {},
+    });
+
+    // 23482 gross at 18% reverses to net 19900 / tax 3582 exactly.
+    expect(recordPaymentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'subscription_renewal', netMinor: 19900, taxMinor: 3582, grossMinor: 23482, providerInvoiceId: 'inv_2' })
+    );
+  });
+
+  it('records the whole gross as net when no tax rule is available for a renewal, without failing the sync', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    fetchRazorpaySubscriptionMock.mockResolvedValueOnce(
+      fakeSubscription({ status: 'active', current_start: 1_700_000_000, current_end: 1_702_592_000 })
+    );
+    enqueue('billing_subscriptions', 'select', {
+      data: { id: 'billing-sub-1', user_id: 'user-1', first_charge_confirmed_at: '2026-08-01T00:00:00.000Z' },
+      error: null,
+    });
+    enqueue('billing_subscriptions', 'update', { data: null, error: null });
+    fetchRazorpaySubscriptionInvoicesMock.mockResolvedValueOnce({ items: [fakeInvoice({ amount_paid: 19900 })] });
+    enqueue('beat_grants', 'insert', { data: null, error: null });
+    // beforeEach default: getPublishedTaxRuleMock resolves 'unavailable'.
+
+    const result = await syncSubscriptionFromProvider({
+      supabase,
+      userId: 'user-1',
+      planVersion: fakePlanVersion(),
+      providerSubscriptionId: 'sub_1',
+      checkoutOrder: null,
+      source: 'reconcile',
+      rawPayload: {},
+    });
+
+    expect(result.grantedCoins).toBe(1000);
+    expect(recordPaymentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ netMinor: 19900, taxMinor: 0, grossMinor: 19900, taxBreakdown: null })
+    );
+  });
+
+  it('stamps subject_ref on a newly-inserted subscription row', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    fetchRazorpaySubscriptionMock.mockResolvedValueOnce(fakeSubscription({ status: 'authenticated' }));
+    enqueue('billing_subscriptions', 'select', { data: null, error: null });
+    enqueue('billing_subscriptions', 'insert', { data: { id: 'billing-sub-1', first_charge_confirmed_at: null }, error: null });
+    fetchRazorpaySubscriptionInvoicesMock.mockResolvedValueOnce({ items: [] });
+
+    await syncSubscriptionFromProvider({
+      supabase,
+      userId: 'user-1',
+      planVersion: fakePlanVersion(),
+      providerSubscriptionId: 'sub_1',
+      checkoutOrder: null,
+      source: 'verify',
+      rawPayload: {},
+    });
+
+    const insertCall = calls.find((call) => call.table === 'billing_subscriptions' && call.op === 'insert');
+    expect(insertCall?.payload).toMatchObject({ subject_ref: 'user-1' });
   });
 });

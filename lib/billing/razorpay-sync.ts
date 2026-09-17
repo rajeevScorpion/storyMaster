@@ -14,19 +14,30 @@ import {
   type RazorpayPayment,
 } from '@/lib/billing/razorpay';
 import { redactRazorpayPayload } from '@/lib/billing/razorpay-redact.shared';
+import { recordPayment } from '@/lib/billing/ledger';
+import { getPublishedTaxRule } from '@/lib/billing/tax-rules';
+import { loadBillingProfile } from '@/lib/billing/billing-profile';
+import { computeTaxFromGross, type TaxBreakdown } from '@/lib/billing/tax.shared';
 import type {
   DbBillingOrder,
   DbBillingSubscription,
   DbPricingPlanVersion,
   DbPricingTopupPack,
 } from '@/lib/types/database';
-import { COINS_PER_BEAT } from '@/lib/types/pricing';
+import { COINS_PER_BEAT, type BillingPaymentStatus } from '@/lib/types/pricing';
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 type BillingSource = 'verify' | 'webhook' | 'reconcile';
 
 export function isUniqueViolation(error: { code?: string } | null | undefined): boolean {
   return error?.code === '23505';
+}
+
+/** Same shape as lib/billing/ledger.ts's isMissingLedgerSchemaError -- used only to decide whether
+ * an insert can carry `subject_ref` (migration 125), so a database without it doesn't 400 on an
+ * unknown column. */
+function isMissingColumnError(error: { code?: string } | null | undefined): boolean {
+  return error?.code === '42703' || error?.code === 'PGRST204' || error?.code === 'PGRST200';
 }
 
 const SETTLEMENT_EXCEPTION_ORDER_STATUSES = new Set(['refunded', 'partially_refunded', 'disputed']);
@@ -37,15 +48,50 @@ export function nextSubscriptionCheckoutOrderStatus(currentStatus: string, provi
 }
 
 export interface SettleTopupOrderResult {
-  state: 'granted' | 'already_granted' | 'pending' | 'failed' | 'refunded';
+  state: 'granted' | 'already_granted' | 'pending' | 'failed' | 'refunded' | 'skipped_no_owner';
   grantedCoins: number;
   paymentId: string | null;
+}
+
+/** Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit B): the net/tax/gross a top-up payment
+ * should be recorded at. A tax-aware checkout (this Unit) leaves net/tax/gross on the order's own
+ * purchase_snapshot_json, computed once at checkout time -- a top-up is a one-shot charge, so unlike
+ * a subscription renewal there is never a later cycle to re-derive from. An order predating Phase 2
+ * tax (no such snapshot fields) charged no GST at all, so net = gross = what was actually charged. */
+function deriveTopupPaymentMoney(
+  order: DbBillingOrder,
+  payment: RazorpayPayment
+): { netMinor: number; taxMinor: number; grossMinor: number; taxBreakdown: TaxBreakdown | null } {
+  const snapshot = order.purchase_snapshot_json as
+    | { netMinor?: number; taxMinor?: number; grossMinor?: number; tax?: { breakdown?: TaxBreakdown } | null }
+    | null;
+
+  if (
+    snapshot &&
+    typeof snapshot.netMinor === 'number' &&
+    typeof snapshot.taxMinor === 'number' &&
+    typeof snapshot.grossMinor === 'number'
+  ) {
+    return {
+      netMinor: snapshot.netMinor,
+      taxMinor: snapshot.taxMinor,
+      grossMinor: snapshot.grossMinor,
+      taxBreakdown: snapshot.tax?.breakdown ?? null,
+    };
+  }
+
+  return { netMinor: payment.amount, taxMinor: 0, grossMinor: payment.amount, taxBreakdown: null };
 }
 
 /**
  * Confirmed-money core for top-ups: fetches (and, if needed, captures) the payment at Razorpay, grants only
  * once it is actually captured and matches the order, and is safe to call from verify, the webhook and
  * reconcile for the same order without double-granting.
+ *
+ * Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit B): also records the payment in the
+ * durable ledger (billing_payments) whenever it observes a captured payment, independent of the
+ * grant outcome -- "every charge recorded" -- and skips the coin grant (never the ledger record)
+ * when the order's owner has been deleted, so a deleted customer's data never receives a new grant.
  */
 export async function settleTopupOrder(input: {
   supabase: AdminClient;
@@ -121,7 +167,39 @@ export async function settleTopupOrder(input: {
     throw new Error('payment_amount_mismatch');
   }
 
-  if (payment.amount_refunded >= payment.amount) {
+  const isFullyRefunded = payment.amount_refunded >= payment.amount;
+  const isPartiallyRefunded = !isFullyRefunded && payment.amount_refunded > 0;
+  const paymentStatus: BillingPaymentStatus = isFullyRefunded ? 'refunded' : isPartiallyRefunded ? 'partially_refunded' : 'captured';
+
+  const subjectRef = order.subject_ref ?? order.user_id ?? null;
+  if (subjectRef) {
+    const money = deriveTopupPaymentMoney(order, payment);
+    await recordPayment({
+      supabase: input.supabase,
+      subjectRef,
+      userId: order.user_id,
+      provider: 'razorpay',
+      providerMode: getRazorpayMode(),
+      providerPaymentId: payment.id,
+      providerOrderId: order.provider_order_id,
+      billingOrderId: order.id,
+      topupPackId: order.topup_pack_id,
+      kind: 'topup',
+      status: paymentStatus,
+      currencyCode: order.currency_code,
+      netMinor: money.netMinor,
+      taxMinor: money.taxMinor,
+      grossMinor: money.grossMinor,
+      taxBreakdown: money.taxBreakdown,
+      rawMethod: payment.method ?? null,
+      providerFeeMinor: payment.fee ?? null,
+      providerTaxMinor: payment.tax ?? null,
+      purchaseSnapshot: order.purchase_snapshot_json,
+      capturedAt: new Date().toISOString(),
+    });
+  }
+
+  if (isFullyRefunded) {
     const refundedUpdate = await input.supabase
       .from('billing_orders')
       .update({
@@ -132,9 +210,31 @@ export async function settleTopupOrder(input: {
       .eq('id', order.id);
 
     throwIfQueryFailed(refundedUpdate.error, 'Failed to mark top-up order refunded');
-    invalidatePricingRuntimeCacheForUser(order.user_id);
+    if (order.user_id) invalidatePricingRuntimeCacheForUser(order.user_id);
 
     return { state: 'refunded', grantedCoins: 0, paymentId: payment.id };
+  }
+
+  if (!order.user_id) {
+    // Deleted-customer safety (plan §4 Unit B): the payment above is already recorded, but there is
+    // no one left to grant coins to -- never grant to nobody.
+    console.warn('[razorpay-sync] skipping top-up coin grant: order has no owner', {
+      orderId: order.id,
+      paymentId: payment.id,
+    });
+
+    const ownerlessOrderUpdate = await input.supabase
+      .from('billing_orders')
+      .update({
+        status: order.status === 'partially_refunded' ? order.status : 'paid',
+        provider_payment_id: payment.id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', order.id);
+
+    throwIfQueryFailed(ownerlessOrderUpdate.error, 'Failed to update ownerless top-up order');
+
+    return { state: 'skipped_no_owner', grantedCoins: 0, paymentId: payment.id };
   }
 
   let beatAmount: number;
@@ -227,10 +327,99 @@ export interface SyncSubscriptionFromProviderResult {
   status: string;
 }
 
+interface SubscriptionPaymentMoney {
+  netMinor: number;
+  taxMinor: number;
+  grossMinor: number;
+  taxBreakdown: TaxBreakdown | null;
+}
+
+/**
+ * Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit B): the net/tax/gross a subscription
+ * charge should be recorded at. The first charge normally has a checkout order with a snapshot
+ * computed at checkout time -- reuse it rather than re-deriving. A renewal has no such order at
+ * all (Razorpay charges the fixed plan amount on its own schedule), so its split is derived from
+ * the gross Razorpay actually charged, using the rule and the customer's billing-profile state in
+ * force *now* -- the total is the plan's gross; tax is never added on top of it a second time. Any
+ * failure to resolve a rule/state falls back to recording the whole gross as net (no invented tax),
+ * because a bookkeeping gap must never block coins the customer already paid for.
+ */
+async function resolveSubscriptionPaymentMoney(input: {
+  supabase: AdminClient;
+  isFirstCharge: boolean;
+  checkoutOrder: DbBillingOrder | null;
+  grossMinor: number;
+  userId: string;
+}): Promise<SubscriptionPaymentMoney> {
+  if (input.isFirstCharge) {
+    const snapshot = input.checkoutOrder?.purchase_snapshot_json as
+      | { netMinor?: number; taxMinor?: number; grossMinor?: number; tax?: { breakdown?: TaxBreakdown } | null }
+      | null
+      | undefined;
+
+    if (
+      snapshot &&
+      typeof snapshot.netMinor === 'number' &&
+      typeof snapshot.taxMinor === 'number' &&
+      typeof snapshot.grossMinor === 'number'
+    ) {
+      return {
+        netMinor: snapshot.netMinor,
+        taxMinor: snapshot.taxMinor,
+        grossMinor: snapshot.grossMinor,
+        taxBreakdown: snapshot.tax?.breakdown ?? null,
+      };
+    }
+  }
+
+  try {
+    const ruleResult = await getPublishedTaxRule('IN', 'subscription');
+    if (ruleResult.status === 'ok') {
+      const profileResult = await loadBillingProfile(input.supabase, input.userId);
+      const stateCode = profileResult.status === 'ok' ? (profileResult.profile?.state_code ?? null) : null;
+
+      if (stateCode) {
+        const result = computeTaxFromGross({
+          grossMinor: input.grossMinor,
+          rule: ruleResult.rule,
+          supplierStateCode: ruleResult.rule.supplierStateCode,
+          placeOfSupplyStateCode: stateCode,
+        });
+        return { netMinor: result.netMinor, taxMinor: result.taxMinor, grossMinor: result.grossMinor, taxBreakdown: result.breakdown };
+      }
+    }
+  } catch (err) {
+    console.error('[razorpay-sync] failed to derive a subscription charge tax split; recording gross as net', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  return { netMinor: input.grossMinor, taxMinor: 0, grossMinor: input.grossMinor, taxBreakdown: null };
+}
+
+/** Inserts a new billing_subscriptions row, dropping `subject_ref` and retrying once if the column
+ * doesn't exist yet (migration 125 absent) -- the same "fail closed, don't break checkout" contract
+ * as everywhere else in this file. */
+async function insertBillingSubscriptionRow(supabase: AdminClient, row: Record<string, unknown>) {
+  const attempt = await supabase.from('billing_subscriptions').insert(row).select('*').single();
+  if (!attempt.error) return attempt;
+
+  if (isMissingColumnError(attempt.error) && 'subject_ref' in row) {
+    const { subject_ref: _omit, ...withoutSubjectRef } = row;
+    return supabase.from('billing_subscriptions').insert(withoutSubjectRef).select('*').single();
+  }
+
+  return attempt;
+}
+
 /**
  * Confirmed-money core for subscriptions: upserts the mirrored row from Razorpay's own state, then grants a
  * cycle's beats only once Razorpay lists a paid invoice covering it. Safe to call repeatedly for the same
  * cycle from verify, the webhook and reconcile.
+ *
+ * Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit B): also records each paid invoice in
+ * the durable ledger, keyed `subscription_first` or `subscription_renewal`, independent of whether
+ * the coin grant itself is new -- "every charge recorded".
  */
 export async function syncSubscriptionFromProvider(input: {
   supabase: AdminClient;
@@ -272,6 +461,7 @@ export async function syncSubscriptionFromProvider(input: {
 
   let billingSubscriptionId: string | null = existing?.id ?? null;
   let firstChargeConfirmedAt = existing?.first_charge_confirmed_at ?? null;
+  const subjectRef = existing?.subject_ref ?? input.userId;
 
   if (existing) {
     const { error } = await input.supabase
@@ -294,27 +484,24 @@ export async function syncSubscriptionFromProvider(input: {
 
     throwIfQueryFailed(error, 'Failed to update Razorpay subscription');
   } else {
-    const insertResult = await input.supabase
-      .from('billing_subscriptions')
-      .insert({
-        user_id: input.userId,
-        plan_version_id: input.planVersion.id,
-        provider: 'razorpay',
-        provider_subscription_id: subscription.id,
-        provider_customer_id: providerCustomerId,
-        provider_mode: getRazorpayMode(),
-        status: subscription.status,
-        billing_interval: input.planVersion.billing_interval,
-        currency_code: input.planVersion.currency_code,
-        current_period_start: currentPeriodStart,
-        current_period_end: currentPeriodEnd,
-        cancel_at_period_end: subscription.status === 'cancelled',
-        grace_period_ends_at: gracePeriodEndsAt,
-        last_webhook_at: new Date().toISOString(),
-        raw_provider_state_json: redactedPayload,
-      })
-      .select('*')
-      .single();
+    const insertResult = await insertBillingSubscriptionRow(input.supabase, {
+      user_id: input.userId,
+      subject_ref: subjectRef,
+      plan_version_id: input.planVersion.id,
+      provider: 'razorpay',
+      provider_subscription_id: subscription.id,
+      provider_customer_id: providerCustomerId,
+      provider_mode: getRazorpayMode(),
+      status: subscription.status,
+      billing_interval: input.planVersion.billing_interval,
+      currency_code: input.planVersion.currency_code,
+      current_period_start: currentPeriodStart,
+      current_period_end: currentPeriodEnd,
+      cancel_at_period_end: subscription.status === 'cancelled',
+      grace_period_ends_at: gracePeriodEndsAt,
+      last_webhook_at: new Date().toISOString(),
+      raw_provider_state_json: redactedPayload,
+    });
 
     throwIfQueryFailed(insertResult.error, 'Failed to insert Razorpay subscription');
     billingSubscriptionId = insertResult.data?.id ?? null;
@@ -341,6 +528,8 @@ export async function syncSubscriptionFromProvider(input: {
     ) ?? null;
 
     if (paidInvoice) {
+      const isFirstCharge = !firstChargeConfirmedAt;
+
       if (!firstChargeConfirmedAt && billingSubscriptionId) {
         const confirmResult = await input.supabase
           .from('billing_subscriptions')
@@ -352,12 +541,46 @@ export async function syncSubscriptionFromProvider(input: {
       }
       firstChargeConfirmed = true;
 
-      let includedBeats = input.planVersion.monthly_included_beats;
-      let snapshotMissing = false;
       const checkoutOrder =
         input.checkoutOrder !== undefined
           ? input.checkoutOrder
           : await loadCheckoutOrderBySessionId(input.supabase, subscription.id);
+
+      if (paidInvoice.payment_id) {
+        const money = await resolveSubscriptionPaymentMoney({
+          supabase: input.supabase,
+          isFirstCharge,
+          checkoutOrder,
+          grossMinor: paidInvoice.amount_paid,
+          userId: input.userId,
+        });
+
+        await recordPayment({
+          supabase: input.supabase,
+          subjectRef,
+          userId: input.userId,
+          provider: 'razorpay',
+          providerMode: getRazorpayMode(),
+          providerPaymentId: paidInvoice.payment_id,
+          providerSubscriptionId: subscription.id,
+          providerInvoiceId: paidInvoice.id,
+          billingSubscriptionId,
+          planVersionId: input.planVersion.id,
+          kind: isFirstCharge ? 'subscription_first' : 'subscription_renewal',
+          status: 'captured',
+          currencyCode: input.planVersion.currency_code,
+          netMinor: money.netMinor,
+          taxMinor: money.taxMinor,
+          grossMinor: money.grossMinor,
+          taxBreakdown: money.taxBreakdown,
+          cycleStart: razorpayUnixToIso(paidInvoice.billing_start),
+          cycleEnd: razorpayUnixToIso(paidInvoice.billing_end),
+          capturedAt: paidInvoice.paid_at ? razorpayUnixToIso(paidInvoice.paid_at) : new Date().toISOString(),
+        });
+      }
+
+      let includedBeats = input.planVersion.monthly_included_beats;
+      let snapshotMissing = false;
       const snapshot = checkoutOrder?.purchase_snapshot_json as { includedBeats?: number } | null;
 
       if (snapshot && typeof snapshot.includedBeats === 'number') {
