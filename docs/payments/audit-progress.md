@@ -9,9 +9,13 @@
 preview runs `cd5cd0c`. Phase 1 code is complete and reviewed, plus the checkout-frame fix (1,517 unit tests,
 e2e smoke green). **Migration 124 is applied and verified on dev**, not on prod. Nothing is merged to `dev`/`main`.
 The `payments` preview is live on the dev database, the Razorpay test webhook points at it, both flags are on, and
-old-account data on dev is cleared. A headless run confirmed **checkout opens** on the preview (Test Mode, ₹450
-top-up). **No payment has been completed yet:** the owner will run the runbook payments later ("I trust that it
-works"), so Phase 1 is not closed.
+old-account data on dev is cleared. A headless run confirmed **checkout opens** on the preview, and the owner
+then **paid a test top-up there and reports it worked** (the §6 step 3 check query was not run). Steps 4–9 are
+still to do, so Phase 1 is not closed. Phase 2 planning started in the same session (owner at 10% usage).
+
+**Release decision (owner, 2026-09-17):** nothing from this work goes to production until the whole feature is
+built and tested. Iterate on the `payments` preview, merge to `dev`, and promote to `main` once, at the end. That
+includes the checkout-frame fix.
 
 **Step 1 — close Phase 1 with the owner (Opus, no agents needed):**
 1. Ask the owner for session usage.
