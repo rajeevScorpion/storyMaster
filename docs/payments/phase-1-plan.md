@@ -492,9 +492,11 @@ Gates: `npx tsc --noEmit`, `npm run lint`, `npm test` (full suite).
 4. `select provider_mode, count(*) from billing_orders group by 1` → all `test`.
 
 **Razorpay sandbox runbook** (owner, test keys, dev deployment URL — manual steps)
-1. Register the test webhook at `<dev URL>/api/billing/razorpay/webhook` with the events listed in
-   `research/06` §webhooks, including `refund.*` and `payment.dispute.*`. Set `RAZORPAY_WEBHOOK_SECRET` on the dev
-   deployment.
+1. Register the test webhook at
+   `https://kissago-git-payments-rajeevscorpions-projects.vercel.app/api/billing/razorpay/webhook` (the `payments`
+   branch's Vercel Preview, which uses the dev database) with the events listed in `research/06` §webhooks,
+   including `refund.*` and `payment.dispute.*`. Set `RAZORPAY_WEBHOOK_SECRET` in the Vercel **Preview** env scope
+   before pushing, or redeploy after.
 2. Turn on `pricing_checkout_enabled` and `billing_reconcile_enabled` on dev.
 3. **Top-up:** pay by test card. Expect one grant, order `paid`, a webhook event `processed/topup_already_granted`
    or `topup_granted`, and no second grant.

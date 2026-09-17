@@ -21,7 +21,7 @@ Keep this file current. When you finish a pack, move it out of "pending"; when y
 
 | | Supabase project | Notes |
 |---|---|---|
-| Development | `dxbwzcpbfacrwrauhdbk` | Named **kissagoStage**, ap-southeast-1. Where migrations get applied first. |
+| Development | `dxbwzcpbfacrwrauhdbk` | Named **kissagoStage**, ap-southeast-1. Where migrations get applied first. Used by local dev and every Vercel Preview deployment. |
 | Production | `pddjsopcemsfiwyvhlkr` | Named **kissago**, ap-northeast-1. `www.kissago.cc` / `kissago.cc` |
 
 An agent working here has **read-only** database visibility on both, via two separately named Supabase MCP
@@ -37,7 +37,17 @@ caused one production incident (batch narration 500ing because `069_narration_ac
 to prod).
 
 Media: Cloudflare R2, staging bucket `kissago-media-staging` behind `media-stage.kissago.cc`, with Supabase
-Storage as fallback. Deployment: Vercel (Hobby — which is why the reconcile cron can only run daily).
+Storage as fallback.
+
+**Deployment** (confirmed 2026-09-17): one Vercel project, `kissago` under `rajeevscorpions-projects`, on Hobby —
+which is why the reconcile cron can only run daily.
+- `main` deploys to **Production** (`kissago.cc`), with Production-scoped env vars and the prod database.
+- Every other pushed branch gets a **Preview** deployment, with Preview-scoped env vars and the dev database. Each
+  branch has a stable address, `https://kissago-git-<branch>-rajeevscorpions-projects.vercel.app`; `dev` is at
+  `kissago-git-dev-…`. Preview addresses are public, with no Vercel login in front, so webhooks reach them directly.
+- Vercel crons run only on Production. On a preview, call `/api/batch/reconcile` by hand with `CRON_SECRET`.
+- A changed env var reaches only new builds: set it before pushing, or redeploy.
+- The old separate staging project, `kissagostage.vercel.app`, no longer exists.
 
 ---
 

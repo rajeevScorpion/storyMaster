@@ -25,8 +25,9 @@ Goal: fully test the India-only Razorpay pricing flow end to end without affecti
    - `RAZORPAY_KEY_SECRET`
    - `RAZORPAY_WEBHOOK_SECRET`
 2. Restart the dev server after env changes.
-3. In Razorpay test mode, configure a webhook to your public stage URL or local tunnel:
-   - `/api/billing/razorpay/webhook`
+3. In Razorpay test mode, configure a webhook to the branch's Vercel Preview address or a local tunnel:
+   - `https://kissago-git-<branch>-rajeevscorpions-projects.vercel.app/api/billing/razorpay/webhook`
+   - Set `RAZORPAY_WEBHOOK_SECRET` in the Vercel **Preview** scope before the build, or redeploy after.
 4. Run this migration manually on `kissagoStage`:
    - `supabase/migrations/021_pricing_enforcement_primitives.sql`
 

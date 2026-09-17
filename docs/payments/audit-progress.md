@@ -6,19 +6,22 @@
 ## Next session starts here (written 2026-09-17, owner at 70% usage, away from desk)
 
 **State:** branch `payments`, last commit is the handoff commit after `6685db5`, working tree clean. Phase 1 code is
-complete and reviewed (tsc, eslint, 1,510 tests green) but **not verified against Razorpay** and **migration 124 is not
-applied anywhere**. Nothing is merged to `dev`/`main`, nothing deployed.
+complete and reviewed (tsc, eslint, 1,510 tests green) but **not verified against Razorpay**. **Migration 124 is
+applied on dev** (owner, 2026-09-17; not yet verified by query), not on prod. Nothing is merged to `dev`/`main`.
+`payments` is not pushed yet, so it has no deployment.
 
 **Step 1 — close Phase 1 with the owner (Opus, no agents needed):**
 1. Ask the owner for session usage.
-2. Owner applies `supabase/migrations/124_billing_money_correctness.sql` on **dev** (run the precheck in its header
-   first; dev had 0 duplicate grants on 2026-09-17). Then verify read-only on dev (plan §6 "Database" 2 and 4) and
-   update the 124 row in PROJECT_STATE's ledger.
-3. **Open question to ask first:** where does the `payments` branch run against the dev database with a public
-   URL (Vercel preview? other)? Razorpay test webhooks need it. Don't guess.
-4. Owner does the dashboard steps: register the test webhook (events listed in `research/06`, including
-   `refund.*` and `payment.dispute.*`), set `RAZORPAY_WEBHOOK_SECRET` on that deployment, and turn on
-   `pricing_checkout_enabled` and `billing_reconcile_enabled` on dev.
+2. ~~Owner applies 124 on dev~~ — **done 2026-09-17.** Still to do: verify read-only on dev (plan §6 "Database" 2
+   and 4) and update the 124 row in PROJECT_STATE's ledger.
+3. **Answered:** `payments` runs against the dev database as a Vercel Preview deployment, at
+   `https://kissago-git-payments-rajeevscorpions-projects.vercel.app` once pushed. Previews are public, so Razorpay
+   needs no bypass. See PROJECT_STATE "Deployment".
+4. Owner does the dashboard steps: set `RAZORPAY_WEBHOOK_SECRET` in the Vercel **Preview** scope (before the push,
+   or redeploy after), register the test webhook at that address + `/api/billing/razorpay/webhook` (events listed
+   in `research/06`, including `refund.*` and `payment.dispute.*`), and turn on `pricing_checkout_enabled` and
+   `billing_reconcile_enabled` on dev. The reconcile cron doesn't run on previews; runbook step 9 calls the route by
+   hand.
 5. Walk the sandbox runbook, `phase-1-plan.md` §6, steps 3–9. Record results here. The UPI Autopay step answers the
    long-open question in `research/06` Q1: write the finding there.
 6. When §6 passes, mark Phase 1 **done** in the table below and commit.
@@ -42,7 +45,7 @@ session at natural checkpoints.
 | Phase | Status |
 |---|---|
 | 0 Discovery | **done 2026-09-17** — `phase-0-discovery-2026-09-17.md`; new streams `research/09`, `research/10` |
-| 1 Money correctness | **code complete, not yet sandbox-verified** — `phase-1-plan.md`. Unit A `1392121`, Unit B `fabea84`, Opus review fixes `6685db5`. Next: owner applies 124 on dev, then sandbox runbook (plan §6). Phase 1 closes only after §6 passes |
+| 1 Money correctness | **code complete, not yet sandbox-verified** — `phase-1-plan.md`. Unit A `1392121`, Unit B `fabea84`, Opus review fixes `6685db5`. 124 applied on dev 2026-09-17. Next: push `payments`, then sandbox runbook (plan §6). Phase 1 closes only after §6 passes |
 | 2–8 | not started |
 
 **Delegation:** Opus plans/reviews, Sonnet executes; **at most 2 agents at once**; ask the owner for session usage at each phase boundary.
