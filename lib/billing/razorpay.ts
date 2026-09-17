@@ -228,9 +228,10 @@ export async function fetchRazorpayOrderPayments(orderId: string): Promise<{ ite
 }
 
 export async function fetchRazorpaySubscriptionInvoices(subscriptionId: string): Promise<{ items: RazorpayInvoice[] }> {
-  return razorpayRequest<{ items: RazorpayInvoice[] }>(`/invoices?subscription_id=${subscriptionId}`, {
-    method: 'GET',
-  });
+  return razorpayRequest<{ items: RazorpayInvoice[] }>(
+    `/invoices?subscription_id=${encodeURIComponent(subscriptionId)}&count=100`,
+    { method: 'GET' }
+  );
 }
 
 export function verifyRazorpayOrderSignature(input: {

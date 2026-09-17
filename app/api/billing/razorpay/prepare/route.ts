@@ -26,8 +26,9 @@ export async function POST(request: Request) {
     const lower = String(message).toLowerCase();
     const status =
       lower.includes('please sign in') ? 401 :
+      lower.includes('currently unavailable') ? 503 :
       lower.includes('not available yet') || lower.includes('not purchasable') || lower.includes('does not belong') ? 400 :
-      lower.includes('already have a razorpay subscription') ? 409 :
+      lower.includes('already have a razorpay subscription') || lower.includes('already opening') ? 409 :
       500;
 
     console.error('[razorpay.prepare]', {

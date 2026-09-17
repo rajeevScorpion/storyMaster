@@ -1,7 +1,6 @@
 import 'server-only';
 
-import { fetchRazorpaySubscription } from '@/lib/billing/razorpay';
-import { grantTopupIfMissing, syncRazorpaySubscriptionState } from '@/lib/billing/razorpay-sync';
+import { settleTopupOrder, syncSubscriptionFromProvider } from '@/lib/billing/razorpay-sync';
 import { buildPricingRuntimeContextData } from '@/lib/pricing/snapshot';
 import { normalizeEntitlementPlanKey } from '@/lib/pricing/entitlement-tier.shared';
 import {
@@ -21,7 +20,6 @@ import type {
   DbPricingActionCost,
   DbPricingPlan,
   DbPricingPlanVersion,
-  DbPricingTopupPack,
 } from '@/lib/types/database';
 import {
   COINS_PER_BEAT,
@@ -508,19 +506,16 @@ export async function reconcileRazorpaySubscription(
   }
 
   const planVersion = await loadPlanVersion(supabase, planVersionId);
-  const subscription = await fetchRazorpaySubscription(subscriptionId);
-  const syncResult = await syncRazorpaySubscriptionState({
+  const syncResult = await syncSubscriptionFromProvider({
     supabase,
     userId,
-    pricingMarketKey: planVersion.pricing_market_key,
-    countryCode: planVersion.pricing_market_key === 'IN' ? 'IN' : null,
     planVersion,
-    subscription,
+    providerSubscriptionId: subscriptionId,
+    checkoutOrder: billingOrder,
+    source: 'reconcile',
     rawPayload: {
       kind: 'admin_manual_reconcile',
       billingOrderId: billingOrder?.id ?? input.billingOrderId ?? null,
-      providerSubscriptionId: subscriptionId,
-      subscription,
     },
   });
 
@@ -528,12 +523,7 @@ export async function reconcileRazorpaySubscription(
     const { error } = await supabase
       .from('billing_orders')
       .update({
-        status: subscription.status,
-        raw_provider_payload_json: {
-          ...(billingOrder.raw_provider_payload_json ?? {}),
-          manualReconcileAt: new Date().toISOString(),
-          latestSubscription: subscription,
-        },
+        status: syncResult.status,
         updated_at: new Date().toISOString(),
       })
       .eq('id', billingOrder.id);
@@ -543,8 +533,8 @@ export async function reconcileRazorpaySubscription(
 
   return {
     billingSubscriptionId: syncResult.billingSubscriptionId,
-    providerSubscriptionId: subscription.id,
-    subscriptionStatus: subscription.status,
+    providerSubscriptionId: subscriptionId,
+    subscriptionStatus: syncResult.status,
     grantedCoins: syncResult.grantedCoins,
   };
 }
@@ -555,52 +545,30 @@ export async function reconcileRazorpayTopup(
   const supabase = createAdminClient();
   const billingOrder = await loadBillingOrderById(supabase, input.billingOrderId);
 
-  if (billingOrder.order_type !== 'topup_checkout' || !billingOrder.topup_pack_id) {
+  if (billingOrder.order_type !== 'topup_checkout' || !billingOrder.provider_order_id) {
     throw new Error('This billing order is not a top-up checkout.');
   }
 
-  const paymentId =
+  const paymentIdHint =
     normalizeText(input.razorpayPaymentId) ??
     normalizeText(billingOrder.provider_payment_id) ??
     extractPaymentIdFromBillingOrder(billingOrder);
 
-  if (!paymentId) {
+  const settleResult = await settleTopupOrder({
+    supabase,
+    billingOrderId: billingOrder.id,
+    paymentIdHint,
+    source: 'reconcile',
+  });
+
+  if (!settleResult.paymentId) {
     throw new Error('Provide the Razorpay payment id to reconcile this top-up.');
   }
 
-  const topupPack = await loadTopupPack(supabase, billingOrder.topup_pack_id);
-  const grantedCoins = await grantTopupIfMissing({
-    supabase,
-    billingOrder,
-    topupPack,
-    paymentId,
-    rawPayload: {
-      kind: 'admin_manual_reconcile',
-      billingOrderId: billingOrder.id,
-      providerPaymentId: paymentId,
-    },
-  });
-
-  const { error } = await supabase
-    .from('billing_orders')
-    .update({
-      provider_payment_id: paymentId,
-      status: 'paid',
-      raw_provider_payload_json: {
-        ...(billingOrder.raw_provider_payload_json ?? {}),
-        manualReconcileAt: new Date().toISOString(),
-        manualPaymentId: paymentId,
-      },
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', billingOrder.id);
-
-  throwIfQueryFailed(error, 'Failed to update billing order during top-up reconcile');
-
   return {
     billingOrderId: billingOrder.id,
-    grantedCoins,
-    paymentId,
+    grantedCoins: settleResult.grantedCoins,
+    paymentId: settleResult.paymentId,
   };
 }
 
@@ -1004,23 +972,6 @@ async function loadPlanVersion(supabase: AdminClient, planVersionId: string): Pr
   }
 
   return version;
-}
-
-async function loadTopupPack(supabase: AdminClient, topupPackId: string): Promise<DbPricingTopupPack> {
-  const result = await supabase
-    .from('pricing_topup_packs')
-    .select('*')
-    .eq('id', topupPackId)
-    .maybeSingle();
-
-  throwIfQueryFailed(result.error, 'Failed to load top-up pack');
-
-  const pack = (result.data ?? null) as DbPricingTopupPack | null;
-  if (!pack) {
-    throw new Error('Top-up pack not found');
-  }
-
-  return pack;
 }
 
 function extractPaymentIdFromBillingOrder(order: DbBillingOrder): string | null {

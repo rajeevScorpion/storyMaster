@@ -7,6 +7,7 @@ import { cleanupExpiredOriginals } from '@/lib/media/cleanup';
 import { cleanupAbandonedReferenceSetups } from '@/lib/references/reference-cleanup';
 import { drainAgentRuns } from '@/lib/agentic/orchestrator';
 import { getAgenticFlags } from '@/lib/agentic/flags';
+import { reconcileRazorpayBilling } from '@/lib/billing/razorpay-reconcile';
 
 // Reconciliation downloads + compresses images; give it room but stay bounded.
 export const maxDuration = 300;
@@ -60,7 +61,7 @@ async function handle(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   try {
-    const [images, narration, imageJobs, adoptionJobs, agenticRuns] = await Promise.all([
+    const [images, narration, imageJobs, adoptionJobs, agenticRuns, billingReconcile] = await Promise.all([
       reconcileActiveImageBatches(),
       reconcileActiveNarrationJobs().catch((error) => {
         console.error('Narration reconcile failed:', error instanceof Error ? error.message : error);
@@ -86,6 +87,12 @@ async function handle(request: Request): Promise<Response> {
         console.error('Agentic scheduler drain rejected unexpectedly (reconcile continues regardless):', error instanceof Error ? error.message : error);
         return { processed: 0 };
       }),
+      // Razorpay money backstop: gated behind billing_reconcile_enabled inside the function itself, so
+      // this is a zero-result no-op until the owner turns it on. Never allowed to reach this Promise.all.
+      reconcileRazorpayBilling().catch((error) => {
+        console.error('Razorpay billing reconcile failed:', error instanceof Error ? error.message : error);
+        return { checkouts: 0, subscriptions: 0, topups: 0, webhooks: 0 };
+      }),
     ]);
     // Retention cleanup after the reconcile work (no-ops when disabled).
     const cleanup = await cleanupExpiredOriginals().catch((error) => {
@@ -108,6 +115,7 @@ async function handle(request: Request): Promise<Response> {
       agenticRunsProcessed: agenticRuns.processed,
       originalsDeleted: cleanup.deleted,
       referenceSourcesDeleted: referenceCleanup.sourcesDeleted,
+      billingReconcile,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Reconcile failed.';

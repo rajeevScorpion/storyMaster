@@ -29,8 +29,6 @@ import {
   isUniqueViolation,
   settleTopupOrder,
   syncSubscriptionFromProvider,
-  grantTopupIfMissing,
-  syncRazorpaySubscriptionState,
 } from './razorpay-sync';
 import type { DbBillingOrder, DbPricingPlanVersion, DbPricingTopupPack } from '@/lib/types/database';
 
@@ -615,43 +613,5 @@ describe('syncSubscriptionFromProvider', () => {
     ).rejects.toThrow('subscription_owner_mismatch');
 
     expect(calls).toHaveLength(0);
-  });
-});
-
-describe('deprecated grant helpers treat 23505 as already-granted (adjustment for Unit A)', () => {
-  it('grantTopupIfMissing returns 0 without throwing when the insert races into a duplicate', async () => {
-    const { supabase, enqueue } = createFakeSupabase();
-    enqueue('beat_grants', 'select', { data: null, error: null }); // no existing row seen yet
-    enqueue('beat_grants', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
-
-    const grantedCoins = await grantTopupIfMissing({
-      supabase,
-      billingOrder: fakeOrder(),
-      topupPack: fakeTopupPack({ beat_amount: 50 }),
-      paymentId: 'pay_1',
-      rawPayload: {},
-    });
-
-    expect(grantedCoins).toBe(0);
-  });
-
-  it('syncRazorpaySubscriptionState (deprecated) treats a racing grant insert as already-granted', async () => {
-    const { supabase, enqueue } = createFakeSupabase();
-    enqueue('billing_subscriptions', 'select', { data: null, error: null });
-    enqueue('billing_subscriptions', 'insert', { data: { id: 'billing-sub-1' }, error: null });
-    enqueue('beat_grants', 'select', { data: null, error: null });
-    enqueue('beat_grants', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
-
-    const result = await syncRazorpaySubscriptionState({
-      supabase,
-      userId: 'user-1',
-      pricingMarketKey: 'IN',
-      countryCode: 'IN',
-      planVersion: fakePlanVersion(),
-      subscription: fakeSubscription({ status: 'active', customer_id: null }),
-      rawPayload: {},
-    });
-
-    expect(result.grantedCoins).toBe(0);
   });
 });
