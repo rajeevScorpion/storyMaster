@@ -3,12 +3,15 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (written 2026-09-17, owner at 70% usage, away from desk)
+## Next session starts here (updated 2026-09-17, end of the sandbox-setup session)
 
-**State:** branch `payments`, last commit is the handoff commit after `6685db5`, working tree clean. Phase 1 code is
-complete and reviewed (tsc, eslint, 1,510 tests green) but **not verified against Razorpay**. **Migration 124 is
-applied and verified on dev** (2026-09-17), not on prod. Nothing is merged to `dev`/`main`. `payments` is pushed and
-its preview is live; the Razorpay test webhook points at it.
+**State:** branch `payments`, working tree clean. Local commits after `cd5cd0c` are docs only and not pushed; the
+preview runs `cd5cd0c`. Phase 1 code is complete and reviewed, plus the checkout-frame fix (1,517 unit tests,
+e2e smoke green). **Migration 124 is applied and verified on dev**, not on prod. Nothing is merged to `dev`/`main`.
+The `payments` preview is live on the dev database, the Razorpay test webhook points at it, both flags are on, and
+old-account data on dev is cleared. A headless run confirmed **checkout opens** on the preview (Test Mode, ₹450
+top-up). **No payment has been completed yet:** the owner will run the runbook payments later ("I trust that it
+works"), so Phase 1 is not closed.
 
 **Step 1 — close Phase 1 with the owner (Opus, no agents needed):**
 1. Ask the owner for session usage.
@@ -24,7 +27,9 @@ its preview is live; the Razorpay test webhook points at it.
    for the `dev` branch preview only **after** `payments` merges into `dev`: until then `dev` runs the old webhook
    code against the same database, and two handlers racing on each event would spoil the sandbox results.
 5. Walk the sandbox runbook, `phase-1-plan.md` §6, steps 3–9. Record results here. The UPI Autopay step answers the
-   long-open question in `research/06` Q1: write the finding there.
+   long-open question in `research/06` Q1: write the finding there. **Owner-pending** (deferred 2026-09-17). Step 3
+   now carries the check query. The Supabase MCP didn't connect that session; with it back, the agent can run the
+   checks itself.
 6. When §6 passes, mark Phase 1 **done** in the table below and commit.
 
 **Found during the sandbox run (2026-09-17):**
@@ -32,7 +37,7 @@ its preview is live; the Razorpay test webhook points at it.
   made Chrome block Razorpay's checkout frame. Fixed in `cd5cd0c`: `/wallet` is exempt, with a reload at the
   boundary and new-tab wallet links on story surfaces. See GOTCHAS "Cross-origin isolation blocks Razorpay
   Checkout". **Production needs this fix before any real checkout.**
-- **The owner moved Kissago to a new Razorpay account** the same day (new keys and webhook, dev and prod). Data
+- **The owner moved Kissago to a new Razorpay account** the same day (new keys and webhook; whether prod's Vercel keys changed too is unconfirmed). Data
   from the old account breaks the new one: saved plan IDs on `pricing_plan_versions` (reused because the mode
   still matches) and old subscriptions still `active` (they block that user's new subscription and fail every
   reconcile run). Dev had 2 plan IDs and 1 active subscription (the test user's); the owner cleared both by

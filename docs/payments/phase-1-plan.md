@@ -499,7 +499,25 @@ Gates: `npx tsc --noEmit`, `npm run lint`, `npm test` (full suite).
    before pushing, or redeploy after.
 2. Turn on `pricing_checkout_enabled` and `billing_reconcile_enabled` on dev.
 3. **Top-up:** pay by test card. Expect one grant, order `paid`, a webhook event `processed/topup_already_granted`
-   or `topup_granted`, and no second grant.
+   or `topup_granted`, and no second grant. Check about 30 s after paying (newest top-up order, its grants, and the
+   webhook events that mention it):
+   ```sql
+   with o as (
+     select id, status, provider_mode, provider_order_id, created_at from billing_orders
+     where order_type = 'topup_checkout' order by created_at desc limit 1
+   )
+   select 'order' as what, o.status::text as status, o.provider_mode as detail, o.created_at as at from o
+   union all
+   select 'grant', g.source_type::text, g.beats_total || ' beats', g.granted_at
+   from beat_grants g join o on g.source_ref_id = o.id::text
+   union all
+   select 'webhook ' || e.event_type, e.status::text,
+          coalesce(e.outcome, '-') || ', attempts ' || e.attempt_count, e.received_at
+   from billing_webhook_events e join o on e.payload_json::text like '%' || o.provider_order_id || '%'
+   order by at;
+   ```
+   No webhook rows at all means the webhook is missing, in the wrong Razorpay mode, or its secret doesn't match
+   Vercel's.
 4. **Subscription (card):** expect coins only once the invoice is paid, `first_charge_confirmed_at` set, and one
    grant after both verify and webhook.
 5. **Subscription (UPI Autopay test flow):** record what Razorpay does at authentication (amount, invoice status).
