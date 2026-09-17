@@ -38,6 +38,7 @@ export interface ManagedPageSeedDefinition {
 export const RESERVED_ROOT_SLUGS = [
   '',
   '_next',
+  'account',
   'account-restricted',
   'admin',
   'api',
@@ -119,12 +120,13 @@ Private story assets are stored in Cloudflare R2 or Supabase Storage. Published 
 
 - **High-resolution originals of generated media** are retained on a plan-based schedule: 24 hours on the Free plan, 10 days on Plus, and 30 days on Studio, after which the original is removed while display, thumbnail, and share-ready copies are kept.
 - **Display, thumbnail, and share-ready media**, story data, and account data are otherwise kept for as long as your account or the associated content exists, or as needed for the purposes described in this notice.
-- **Billing, security, and operational records** (including cost, billing-webhook, and narration-generation logs) currently have no fixed deletion schedule and may be retained for accounting, fraud-prevention, dispute-resolution, or legal-compliance purposes.
+- **Billing records** (orders, subscriptions, payments, and the tax details on them) are kept for 8 years after they are created, as Indian tax and accounting law requires, even after the account that made them is deleted. Deletion removes the name, email, and other contact details from these records; it does not remove the transaction itself.
+- **Other security and operational records** (including cost and narration-generation logs) currently have no fixed deletion schedule beyond what account deletion does to them, and may be retained for fraud-prevention, dispute-resolution, or legal-compliance purposes.
 - Kissago is reviewing shorter fixed retention periods for records that do not need indefinite retention; this notice will be updated when that review concludes.
 
 ## Your Choices and Rights
 
-You can delete or archive individual stories, and unsave or unpublish storylines you control, directly in the product. **A self-serve full account-deletion flow does not exist yet.** To request deletion of your account and associated data, correction of inaccurate data, or a copy of the data Kissago holds about you, contact {{SUPPORT_EMAIL}} or ${PRIVACY_EMAIL}. Kissago will confirm what can be deleted, what must be retained (for example, billing records required by law), and when the request is complete. Deleting a story removes it from the product; copies of its media may take longer to clear from storage and any provider-side retention described above.
+You can delete or archive individual stories, and unsave or unpublish storylines you control, directly in the product. **You can also delete your account yourself**, from the account menu or at /account/delete: this ends your access immediately and frees your login for reuse, and deletes your profile and private activity (drafts, saved and liked storylines, viewing history, presets). **Stories you already published stay visible in the gallery under the same author name** — deleting your account removes your access, not the work you shared with readers. Billing records survive, with contact details removed, for the 8-year period described above. To request correction of inaccurate data, or a copy of the data Kissago holds about you, contact {{SUPPORT_EMAIL}} or ${PRIVACY_EMAIL}.
 
 ## International Processing
 
@@ -606,31 +608,36 @@ Published storylines can be public, shown in the gallery, saved by users, liked,
     accessLevel: 'public',
     pageType: 'legal',
     seedVersion: SEED_VERSION,
-    excerpt: 'Current account deletion and retention limitations.',
+    excerpt: 'What deleting your Kissago account does, what stays visible, and what the law requires Kissago to keep.',
     metadata: { requiresLegalReview: true, requiresSupportEmail: true },
     content: seed(`
-## Starter Draft - Review Before Rollout
+## Deleting your account is self-serve
 
-Kissago does not currently include a self-serve full account deletion flow. Account deletion and data requests should be sent to {{SUPPORT_EMAIL}}.
+Signed-in users can delete their own account from the account menu, or directly at /account/delete. Deletion requires re-entering your password (or, for a Google-only account, a recent sign-in) and typing a confirmation phrase, because it cannot be undone once it runs.
 
-## What Users Can Currently Manage
+Deleting an account removes that person's **access** to Kissago, not the work they published. Deletion cannot be requested on someone else's behalf except by Kissago itself for legal or safety reasons; contact {{SUPPORT_EMAIL}} for anything deletion does not cover, such as a data-access or correction request.
 
-- Users can delete their own stories in current app flows.
-- Users can archive and unarchive stories.
-- Users can save or unsave public storylines.
-- Admins can unpublish or delete storylines from admin content tools.
+## What deletion removes
 
-## Data That May Exist
+- Your login is deactivated immediately, ending every active session, and your email address is freed for a fresh sign-up.
+- Your profile (display name, avatar) is deleted.
+- Private activity is deleted: stories and reels still in progress that you never published, saved and liked storylines, viewing history, character presets, narration presets and reel settings, and any admin or reviewer access on the account.
+- Any pending background job (batch image or narration generation) is stopped before it is deleted.
+- A live paid subscription is cancelled with the payment provider before anything else happens, so deletion never leaves a subscription charging with no one able to manage it.
 
-Kissago may store account profile data, stories, beats, generated images, narration audio, story maps, public storylines, saved storylines, likes, views, wallet records, billing records, webhook events, and admin/configuration records.
+## What stays visible
 
-## Retention
+**Stories you already published stay in the gallery, credited to the same author name they were published with.** The author name on a published storyline is captured at publish time, so it does not depend on your account existing. Kissago does not delete or unpublish your published work when you delete your account; if you want a specific story taken down, unpublish or delete it before deleting your account, or contact {{SUPPORT_EMAIL}}.
 
-Specific retention windows are not fully defined in the current product. Some records may be retained for security, legal, billing, payment reconciliation, abuse prevention, or operational reasons.
+No stored media (images, narration audio, exported video) is deleted by account deletion, whether it belongs to a published story or not — see the **Privacy & Data Notice** for how media retention otherwise works.
 
-## Deletion Requests
+## What Kissago is required to keep
 
-When requesting deletion, include the account email and any relevant story or billing details. Kissago support should confirm what can be deleted, what may be retained, and when the request is complete.
+Billing records — orders, subscriptions, payments, and the tax details on them — are kept for **8 years** after they are created, as Indian tax and accounting law requires. Deletion removes your name, email, and other contact details from these records; it keeps the amount, date, tax breakdown, and whatever the applicable GST rules require to identify the recipient. Some other records that legally cannot be deleted before a resolution, such as an active support or moderation matter, are kept until that resolution is reached.
+
+## Deletion requests you cannot complete yourself
+
+To request correction of inaccurate data, a copy of the data Kissago holds about you, or deletion of a published story's underlying media, contact {{SUPPORT_EMAIL}}. Kissago will confirm what can be done and when.
 `),
   },
 ];

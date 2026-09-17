@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
-import { User, LogOut, LogIn, BookMarked, Loader2, Coins, Wallet, LifeBuoy, ClipboardCheck } from 'lucide-react';
+import { User, LogOut, LogIn, BookMarked, Loader2, Coins, Wallet, LifeBuoy, ClipboardCheck, Trash2 } from 'lucide-react';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import Link from 'next/link';
@@ -252,6 +252,14 @@ export default function UserMenu({ onMyStories, openWalletInNewTab = false }: Us
                 <LogOut className="w-4 h-4" />
                 Sign out
               </button>
+              <Link
+                href="/account/delete"
+                onClick={() => setIsOpen(false)}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-500 hover:bg-white/5 hover:text-rose-300 transition-colors"
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete account
+              </Link>
             </div>
           </motion.div>
         )}
