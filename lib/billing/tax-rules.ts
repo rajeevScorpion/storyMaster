@@ -75,14 +75,17 @@ export async function getPublishedTaxRule(marketKey: string, appliesTo: 'subscri
       .eq('market_key', marketKey)
       .in('applies_to', [appliesTo, 'all'])
       .eq('status', 'published')
-      .is('effective_to', null);
+      .is('effective_to', null)
+      .lte('effective_from', new Date().toISOString());
 
     if (error) {
       if (isMissingBillingTaxSchemaError(error)) {
         schemaUnavailable = true;
         return { status: 'unavailable' };
       }
-      console.error('tax-rules: getPublishedTaxRule failed, treating as unavailable for this call:', error);
+      // Deliberately the fail-closed answer, not 'unavailable': a database error must stop checkout
+      // rather than quietly charge the net and lose the tax.
+      console.error('tax-rules: getPublishedTaxRule failed; refusing checkout for this call:', error);
       return { status: 'not_found' };
     }
 
@@ -94,7 +97,7 @@ export async function getPublishedTaxRule(marketKey: string, appliesTo: 'subscri
     cache.set(cacheKey(marketKey, appliesTo), { rule, ts: Date.now() });
     return { status: 'ok', rule };
   } catch (err) {
-    console.error('tax-rules: getPublishedTaxRule threw, treating as unavailable for this call:', err);
+    console.error('tax-rules: getPublishedTaxRule threw; refusing checkout for this call:', err);
     return { status: 'not_found' };
   }
 }

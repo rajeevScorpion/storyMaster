@@ -26,11 +26,14 @@ interface QueryResult {
 // FakeQueryBuilder: every chain method is a no-op passthrough and the builder itself is directly
 // awaitable.
 class FakeQueryBuilder implements PromiseLike<QueryResult> {
+  /** Filters the last lookup applied, so a money-relevant one can't be dropped unnoticed. */
+  static filters: Array<{ method: string; args: unknown[] }> = [];
   constructor(private readonly result: QueryResult) {}
   select() { return this; }
-  eq() { return this; }
-  in() { return this; }
-  is() { return this; }
+  eq(...args: unknown[]) { FakeQueryBuilder.filters.push({ method: 'eq', args }); return this; }
+  in(...args: unknown[]) { FakeQueryBuilder.filters.push({ method: 'in', args }); return this; }
+  is(...args: unknown[]) { FakeQueryBuilder.filters.push({ method: 'is', args }); return this; }
+  lte(...args: unknown[]) { FakeQueryBuilder.filters.push({ method: 'lte', args }); return this; }
   then<TResult1 = QueryResult, TResult2 = never>(
     onFulfilled?: ((value: QueryResult) => TResult1 | PromiseLike<TResult1>) | null,
     onRejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
@@ -164,5 +167,18 @@ describe('getPublishedTaxRule', () => {
 
     expect(result.status).toBe('ok');
     expect(createAdminClientMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks only for rules already in force, so a future-dated rate cannot be charged early', async () => {
+    FakeQueryBuilder.filters = [];
+    mockSupabaseResult({ data: [fakeRuleRow()], error: null });
+
+    await getPublishedTaxRule('IN', 'topup');
+
+    const effectiveFrom = FakeQueryBuilder.filters.find(
+      (filter) => filter.method === 'lte' && filter.args[0] === 'effective_from'
+    );
+    expect(effectiveFrom, 'the lookup must filter on effective_from').toBeDefined();
+    expect(new Date(String(effectiveFrom?.args[1])).getTime()).toBeLessThanOrEqual(Date.now());
   });
 });
