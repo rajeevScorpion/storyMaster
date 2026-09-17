@@ -56,15 +56,65 @@ export interface RazorpayOrder {
   notes?: Record<string, string>;
 }
 
+export interface RazorpayPayment {
+  id: string;
+  order_id: string | null;
+  status: string;
+  amount: number;
+  currency: string;
+  amount_refunded: number;
+  refund_status: string | null;
+  invoice_id: string | null;
+  captured: boolean;
+}
+
+export interface RazorpayInvoice {
+  id: string;
+  status: string;
+  payment_id: string | null;
+  billing_start: number | null;
+  billing_end: number | null;
+  paid_at: number | null;
+  amount_paid: number;
+}
+
+export type RazorpayMode = 'test' | 'live';
+
+/** Thrown for config problems the caller should classify by `reason`, never by parsing `message`. */
+export class RazorpayConfigError extends Error {
+  reason: string;
+
+  constructor(reason: string, message?: string) {
+    super(message ?? reason);
+    this.name = 'RazorpayConfigError';
+    this.reason = reason;
+  }
+}
+
 export function getRazorpayKeyId(): string {
   return getRazorpayConfig().keyId;
+}
+
+/** Derives test/live from the key ID prefix so orders, subscriptions and plan refs never mix providers' sandboxes. */
+export function getRazorpayMode(): RazorpayMode {
+  const keyId = getRazorpayConfig().keyId;
+
+  if (keyId.startsWith('rzp_test_')) {
+    return 'test';
+  }
+
+  if (keyId.startsWith('rzp_live_')) {
+    return 'live';
+  }
+
+  throw new RazorpayConfigError('unknown_key_prefix');
 }
 
 export function ensureRazorpayWebhookSecret(): string {
   const secret = getRazorpayConfig().webhookSecret;
 
   if (!secret) {
-    throw new Error('Missing RAZORPAY_WEBHOOK_SECRET');
+    throw new RazorpayConfigError('missing_webhook_secret', 'Missing RAZORPAY_WEBHOOK_SECRET');
   }
 
   return secret;
@@ -99,6 +149,8 @@ export async function createRazorpayPlan(input: {
 export async function createRazorpaySubscription(input: {
   planId: string;
   interval: BillingInterval;
+  /** Unix seconds. Owner-approved D5: an unpaid checkout can't be resumed and paid after the modal is abandoned. */
+  expireByUnix?: number;
   notes?: Record<string, string>;
 }): Promise<RazorpaySubscription> {
   return razorpayRequest<RazorpaySubscription>('/subscriptions', {
@@ -107,7 +159,8 @@ export async function createRazorpaySubscription(input: {
       plan_id: input.planId,
       total_count: input.interval === 'annual' ? 100 : 1200,
       quantity: 1,
-      customer_notify: 0,
+      customer_notify: 1,
+      ...(input.expireByUnix ? { expire_by: input.expireByUnix } : {}),
       notes: input.notes ?? {},
     }),
   });
@@ -116,6 +169,18 @@ export async function createRazorpaySubscription(input: {
 export async function fetchRazorpaySubscription(subscriptionId: string): Promise<RazorpaySubscription> {
   return razorpayRequest<RazorpaySubscription>(`/subscriptions/${subscriptionId}`, {
     method: 'GET',
+  });
+}
+
+export async function cancelRazorpaySubscription(input: {
+  subscriptionId: string;
+  atCycleEnd: boolean;
+}): Promise<RazorpaySubscription> {
+  return razorpayRequest<RazorpaySubscription>(`/subscriptions/${input.subscriptionId}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({
+      cancel_at_cycle_end: input.atCycleEnd ? 1 : 0,
+    }),
   });
 }
 
@@ -133,6 +198,38 @@ export async function createRazorpayOrder(input: {
       receipt: input.receipt,
       notes: input.notes ?? {},
     }),
+  });
+}
+
+export async function fetchRazorpayPayment(paymentId: string): Promise<RazorpayPayment> {
+  return razorpayRequest<RazorpayPayment>(`/payments/${paymentId}`, {
+    method: 'GET',
+  });
+}
+
+export async function captureRazorpayPayment(input: {
+  paymentId: string;
+  amountMinor: number;
+  currencyCode: string;
+}): Promise<RazorpayPayment> {
+  return razorpayRequest<RazorpayPayment>(`/payments/${input.paymentId}/capture`, {
+    method: 'POST',
+    body: JSON.stringify({
+      amount: input.amountMinor,
+      currency: input.currencyCode,
+    }),
+  });
+}
+
+export async function fetchRazorpayOrderPayments(orderId: string): Promise<{ items: RazorpayPayment[] }> {
+  return razorpayRequest<{ items: RazorpayPayment[] }>(`/orders/${orderId}/payments`, {
+    method: 'GET',
+  });
+}
+
+export async function fetchRazorpaySubscriptionInvoices(subscriptionId: string): Promise<{ items: RazorpayInvoice[] }> {
+  return razorpayRequest<{ items: RazorpayInvoice[] }>(`/invoices?subscription_id=${subscriptionId}`, {
+    method: 'GET',
   });
 }
 
@@ -218,7 +315,6 @@ async function razorpayRequest<T>(path: string, init: RequestInit): Promise<T> {
       path,
       status: response.status,
       message,
-      body: rawBody,
     });
 
     throw new Error(message);
@@ -233,7 +329,7 @@ function getRazorpayConfig(): RazorpayConfig {
   const webhookSecret = normalizeEnvValue(process.env.RAZORPAY_WEBHOOK_SECRET);
 
   if (!keyId || !keySecret) {
-    throw new Error('Missing RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET');
+    throw new RazorpayConfigError('missing_keys', 'Missing RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET');
   }
 
   return {

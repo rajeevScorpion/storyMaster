@@ -615,6 +615,8 @@ export interface DbPricingPlanVersion {
   grace_period_days: number;
   provider_product_ref: string | null;
   provider_price_ref: string | null;
+  /** Mode `provider_price_ref` was created under; a cached ref from the other mode must not be reused. */
+  provider_price_ref_mode: 'test' | 'live' | null;
   extensions_json: Record<string, unknown>;
   published_at: string | null;
   published_by: string | null;
@@ -728,6 +730,10 @@ export interface DbBillingSubscription {
   grace_period_ends_at: string | null;
   last_webhook_at: string | null;
   raw_provider_state_json: Record<string, unknown>;
+  /** Test/live the subscription was created under; reconcile and grants must not mix modes. */
+  provider_mode: 'test' | 'live';
+  /** Set once a paid invoice has ever been seen for this subscription; gates `authenticated`/grace entitlement. */
+  first_charge_confirmed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -746,6 +752,10 @@ export interface DbBillingOrder {
   plan_version_id: string | null;
   topup_pack_id: string | null;
   raw_provider_payload_json: Record<string, unknown>;
+  /** Test/live this order was created under. */
+  provider_mode: 'test' | 'live';
+  /** What was actually sold at checkout time, read by grants instead of the (possibly since-changed) catalog. */
+  purchase_snapshot_json: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }
@@ -763,6 +773,9 @@ export interface DbBillingWebhookEvent {
   received_at: string;
   processed_at: string | null;
   error_message: string | null;
+  attempt_count: number;
+  last_attempt_at: string | null;
+  outcome: string | null;
 }
 
 export interface DbBeatGrant {
