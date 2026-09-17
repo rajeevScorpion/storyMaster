@@ -15,10 +15,10 @@ Notes live in `research/`. Each paused stream has a `## Resume here` section lis
 | # | Stream | Status |
 |---|---|---|
 | 01 | Checkout and payment capture | done — reviewed; 2 false "safe" claims corrected (F-R1, F-R2) |
-| 02 | Entitlements, grants, coin↔money value | running |
+| 02 | Entitlements, grants, coin↔money value | done — reviewed; per-coin pricing table corrected, Plus-vs-top-up value inversion added |
 | 03 | Data model and live DB state, dev vs prod | resumed (running) |
-| 04 | Admin tools and operations | paused (notes on disk) — queued next |
-| 05 | Docs vs code, compliance surfaces | paused (notes on disk) — queued |
+| 04 | Admin tools and operations | resumed (running) |
+| 05 | Docs vs code, compliance surfaces | paused (notes on disk) — queued next |
 | 06 | Razorpay capabilities (web) | paused (notes on disk) — queued |
 | 07 | India tax and consumer law (web) | paused (notes on disk) — queued |
 | 08 | Billing UX benchmarks, Stripe readiness (web) | paused (notes on disk) — queued |
@@ -37,3 +37,5 @@ These were confirmed by reading the code, independent of agent reports.
 8. **Test-mode plan IDs are cached in the catalog.** `ensureRazorpayPlanRef` (`app/actions/pricing-checkout.ts:272-306`) stores the Razorpay plan ID on the plan version and reuses it forever. Switching to live keys fails on every subscription until those refs are cleared. Two first-time checkouts at the same moment can also create duplicate Razorpay plans.
 9. **A halted or pending subscription locks the user out.** The guard at `pricing-checkout.ts:59-65` blocks new checkout for `created/authenticated/active/pending/halted`, and there is no self-serve cancel. A user whose renewal failed cannot fix it themselves.
 10. **The checkout kill switch is UI-only.** `pricing_checkout_enabled` is read by `components/pricing/WalletPage.tsx` only; `prepareRazorpayCheckoutInternal` (`app/actions/pricing-checkout.ts:30-162`) never checks it, so the prepare route and server action create real orders and subscriptions with the flag off. Confirms stream 01's F3.
+11. **In India, Plus is worse value than a top-up pack** (dev catalog, published rows). Plus costs ₹850 for 120 coins/month, which expire at cycle end. The ₹850 top-up gives 240 coins with no expiry (`razorpay-sync.ts:151-168` sets no `expires_at`). India per-coin prices are also ≈ 3–4.5× ROW top-ups. This is an owner pricing decision, not a bug. Stream 03 to confirm prod matches.
+12. **The displayed continuation price and the actual charge come from different sources** (stream 02, display side verified). `lib/pricing/story-continuation.shared.ts:24-33` shows the flat `continue_story_new_beat` catalog row. Stream 02 reports that runtime authorization composes prompt-only cost plus the live image-model coin cost, so the two drift apart when an image model's price is tuned.
