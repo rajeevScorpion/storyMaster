@@ -89,6 +89,13 @@ session at natural checkpoints.
 6. **Audit D3–D7 approved as recommended:** refund within 7 days if < ~20% of that purchase's coins used, unused coins clawed back; no subscription-coin rollover; Resend or Postmark for email, with Razorpay `customer_notify` on as a stopgap; adult attestation and no checkout from kids mode; block → cancel at cycle end and stop grants, delete → cancel immediately, anonymise, keep billing records 8 years.
 7. **Defaults accepted without objection:** kids and adult mode on one login share one daily limit; admins can grant unlimited watching; republishing doesn't give readers a new slot; Audience → Plus upgrade rules decided at Phase 5.
 
+**Owner decisions for Phase 2 (2026-09-17)**
+8. **GST tax invoices from day one.** Prices are **GST-exclusive, now and always**; tax is calculated as applicable
+   and added on top, so the amount charged changes, not just the paperwork. Tax settings must be configurable from
+   admin. This moves tax calculation at checkout into Phase 2; Phase 6 still renders and sends the documents.
+9. **Self-serve account deletion is built in Phase 2** (a must for the mobile app). Billing records stay after
+   deletion, anonymised, for 8 years (decision 6).
+
 **Deliberate deviation from the pack:** the checkout kill switch blocks new checkouts only. Verify, webhook and reconcile still honour payments already started (see `phase-1-plan.md` decision 8).
 
 ---
