@@ -1,6 +1,35 @@
-# Payments & billing audit — progress
+# Payments & billing — progress and handoff
 
-_Started 2026-09-17 on branch `payments`. Audit only: no code, schema, flag or config changes._
+**This is the living handoff for all payments work.** A fresh session reads this section first, then
+`prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
+
+## Implementation status
+
+| Phase | Status |
+|---|---|
+| 0 Discovery | **done 2026-09-17** — `phase-0-discovery-2026-09-17.md`; new streams `research/09`, `research/10`. Awaiting owner decisions below. |
+| 1 Money correctness | not started — plan to be written after decisions |
+| 2–8 | not started |
+
+**Delegation:** Opus plans/reviews, Sonnet executes; **at most 2 agents at once**; ask the owner for session usage at each phase boundary.
+
+**Owner answers so far (2026-09-17)**
+- Billing entity is **Aavriti Design Studio** (GST-registered parent). Use a **placeholder GSTIN** on billing documents; owner supplies the real one at the end.
+- Signed-out visitors browse the whole catalogue and must sign in to watch anything (already built). The daily quota only concerns signed-in users.
+- Phase 0 kept light: the audit is same-day and no billing code changed since.
+
+**Open owner decisions (from Phase 0)** — see the session summary; record answers here.
+1. Coins and images for Free/Audience (today only Plus/Studio can generate images, regardless of coins).
+2. When a daily story slot is used.
+3. Daily reset time (IST midnight vs UTC).
+4. GSTIN placeholder vs the value already in `lib/legal/business-config.ts`.
+5. Pre-approve audit recommendations D3–D7 (refunds, rollover, email provider, minors, blocked/deleted users)?
+
+---
+
+# Audit (2026-09-17)
+
+_Audit only: no code, schema, flag or config changes._
 
 **Deliverables:** audit and plan written; `billing-audit-2026-09-17.md` (current state) and `billing-plan-2026-09-17.md` (suggested plan), both in this folder.
 

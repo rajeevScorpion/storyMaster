@@ -742,6 +742,8 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   graphic style extraction, voice selection and novelty assessment on 3.8 Low — compare on real calls.
 
 **Billing and cost**
+- **Payments are not safe for real money yet.** Work is in progress on branch `payments`; the living handoff is
+  `docs/payments/audit-progress.md` (audit, Phase 0 discovery, phase status, owner decisions).
 - The Story Bible LLM call is **unbilled** — it consumes tokens without a coin charge.
 - The full `ImageModelSnapshot` — including both `providerCost*Usd` fields — still reaches the client inside
   `beat.imageGenerationMetadata.imageModelSnapshot`. The picker leak was fixed by splitting
