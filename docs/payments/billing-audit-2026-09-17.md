@@ -4,7 +4,7 @@ _2026-09-17 · branch `payments` · audit only, nothing changed in code, schema,
 
 **Who this is for:** the owner deciding what to build before taking real money, and any later session that implements it. Evidence and full detail live in [research/](research/). This document consolidates it and is reviewer-checked: every item marked **verified** was confirmed by reading the code or querying the database, not taken from an agent report.
 
-Companion document: `billing-plan-2026-09-17.md` (suggested plan, written after the Razorpay and India-compliance research lands).
+Companion document: `billing-plan-2026-09-17.md` (suggested plan).
 
 ---
 
@@ -122,15 +122,15 @@ Severity is about taking **live money**: **Blocker** = fix before the first real
 |---|---|---|---|---|
 | H1 | **Payers get no notification of any kind.** Razorpay subscription notifications are off and the app has no email provider. _Pending: RBI pre-debit notice obligations (streams 06/07) may make this a blocker._ | Renewal charges show up only on the card statement → chargebacks, complaints. | `lib/billing/razorpay.ts:110`; `package.json` has no email provider | P-S5-2, P-S5-10, R |
 | H2 | **A user can end up with two live subscriptions.** The one-subscription guard only sees subscriptions already synced, not checkouts in progress. | Two tabs or a retry → two recurring charges, two coin grants a month. | `pricing-checkout.ts:50-65` | C-F4, R |
-| H3 | **Deleting a user deletes their payment records** (cascade), and nothing cancels their Razorpay subscription first. There is no deletion code today, so this only bites on a manual delete. | Tax records lost; the customer keeps being charged for a subscription Kissago no longer knows about. | `016_billing_core.sql:6,20,41`; `017_wallet_core.sql:6` | R, E-R-5, P-S5-9 |
-| H4 | **No billing identity, invoice, tax or refund data model.** | The "download invoices" goal can't be built on today's schema; GST invoices (if Kissago must issue them) have nowhere to come from. | Absent from all 123 migrations | D-B5, P-S5-5, A-F9 |
+| H3 | **Deleting a user deletes their payment records** (cascade), and nothing cancels their Razorpay subscription first. There is no deletion code today, so this only bites on a manual delete. **Stream 07:** GST and income-tax law require billing records to be kept 6–8 years, and DPDP erasure has a legal-retention exception, so the cascade is likely non-compliant. | Tax records lost; the customer keeps being charged for a subscription Kissago no longer knows about. | `016_billing_core.sql:6,20,41`; `017_wallet_core.sql:6` | R, E-R-5, P-S5-9 |
+| H4 | **No billing identity, invoice, tax or refund data model.** **Stream 07:** a Dec-2024 CBIC circular makes the customer's **state** mandatory on every online-service invoice regardless of value, and Kissago collects none. Likely SAC 998439 at 18% GST; registration is mandatory only above ₹20 lakh turnover. | The "download invoices" goal can't be built on today's schema; GST invoices (if Kissago must issue them) have nowhere to come from. | Absent from all 123 migrations | D-B5, P-S5-5, A-F9 |
 | H5 | **Admins can't see a user's payments or subscriptions.** The recovery tools need Razorpay IDs the admin doesn't have and are labelled test-only. | "I paid but got no coins" means asking the customer for IDs or writing SQL. | `app/actions/admin-users.ts:469-525`; `components/admin/PricingStudio.tsx:1778-1786` | A-F2, A-F7 |
 | H6 | **Coins can't be taken back.** Admin grants are positive-only. | A fat-fingered or fraudulent grant needs SQL to fix. | `lib/admin/user-management.shared.ts:245-247`; `083_admin_user_management.sql` | A-F3, E-R-4 |
 | H7 | **Blocking a user doesn't stop their subscription.** | A banned user keeps being charged and keeps receiving coins. | `083_admin_user_management.sql:950-1070`; `razorpay-sync.ts:177-230` | A-F5 |
 | H8 | **A failed renewal locks the user out.** Pending or halted subscriptions block a new checkout, and there is no retry, update-card or cancel. | Their only route is support, and support has no tools (B6, H5). | `pricing-checkout.ts:59-65` | R |
 | H9 | **Top-up coins are granted on signature alone**, without confirming capture, and orders don't request capture explicitly. _Pending stream 06 (account capture settings)._ | If capture is manual or late, coins are granted for money never captured. | `verify/route.ts:115-132`; `lib/billing/razorpay.ts:122-137` | C-F6, R |
 | H10 | **Subscription coins are granted on status `authenticated` as well as `active`.** _Pending stream 06: can `authenticated` exist before a real charge for UPI Autopay or eMandate?_ | Possibly coins before money. | `razorpay-sync.ts:188` | E-R-1 |
-| H11 | **Checkout doesn't disclose auto-renewal, next charge date or tax** — only the Terms page does. _Pending stream 07 (dark-pattern rules)._ | Disputes; regulatory exposure for subscription traps. | `components/pricing/WalletPage.tsx` | P-S5-4 |
+| H11 | **Checkout doesn't disclose auto-renewal, next charge date or tax** — only the Terms page does. **Stream 07:** the CCPA Dark Patterns Guidelines 2023 name "SaaS billing" (undisclosed auto-renewal) and "drip pricing" (tax shown late) almost exactly, cancellation must be as easy as sign-up, and a self-audit certificate is required from 1 Jan 2027. | Disputes; regulatory exposure for subscription traps. | `components/pricing/WalletPage.tsx` | P-S5-4 |
 | H12 | **Pricing: subscription coins cost more than top-up coins, and the catalogs differ between dev and prod.** Prod: Plus ₹4.83/coin, Studio ₹4.39, top-ups ₹3.44–3.75 (and top-ups never expire). Dev Plus is ₹7.08/coin, half the coins of the same-priced top-up. India coins also cost about 3–4.5× international top-up coins. **Owner decision, not a bug.** | Subscriptions only make sense for their tier-gated features; users who do the maths buy top-ups. | `pricing_plan_versions`, `pricing_topup_packs` (both envs) | E-R-2, D-B2, R |
 
 ### 5.3 Medium
@@ -144,7 +144,7 @@ Severity is about taking **live money**: **Blocker** = fix before the first real
 | M5 | No revenue or margin reporting; the cost dashboard uses a hardcoded ₹93/$. | `app/actions/cost-admin.ts:8` | A-F8 |
 | M6 | Archiving a live plan version has no confirmation and no "N subscribers use this" check. | `PricingStudio.tsx`; `pricing-admin.ts:416-453` | A-F14 |
 | M7 | A paused subscription drops the user straight to Free with no messaging. | `lib/pricing/snapshot.ts` | E |
-| M8 | Kids-mode or under-18 users can reach checkout; there is no gating. _Pending stream 07 (minors, DPDP)._ | `pricing-checkout.ts` | P |
+| M8 | Kids-mode or under-18 users can reach checkout; there is no gating. **Stream 07:** minors can't validly contract (Indian Contract Act §11), and DPDP child-consent rules phase in through 13 May 2027. | `pricing-checkout.ts` | P |
 | M9 | A missing webhook secret throws outside the route's error handling, leaving no database trace. | `webhook/route.ts:39` | C-F2 |
 
 ### 5.4 Low / housekeeping
@@ -211,7 +211,7 @@ From the owner's existing docs (stream 05, Part 1). "Proposed" items are not dec
 | 04 Admin & operations | complete | — |
 | 05 Docs & compliance surfaces | complete | Draft refund-policy seed confirmed |
 | 06 Razorpay capabilities | in progress | Resolves H9, H10, and whether H1 is a blocker |
-| 07 India tax & consumer law | in progress | Resolves H3 (retention), H4 (invoices), H11, M8 |
+| 07 India tax & consumer law | complete | Retention, invoice state field, dark patterns and minors folded into H3, H4, H11, M8. Open CA question: are coins taxed at purchase (advance for services) or at redemption (voucher)? |
 | 08 UX benchmarks & Stripe | paused | ChatGPT/Claude comparison and Stripe India status written; the rest deferred |
 
 Not verified by anyone: live Razorpay dashboard settings (webhook registration, capture mode, Subscriptions product status). Those need the owner.

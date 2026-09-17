@@ -2,7 +2,7 @@
 
 _Started 2026-09-17 on branch `payments`. Audit only: no code, schema, flag or config changes._
 
-**Deliverables (not yet written):** `billing-audit-2026-09-17.md` (current state) and `billing-plan-2026-09-17.md` (suggested plan), both in this folder.
+**Deliverables:** audit written; `billing-audit-2026-09-17.md` (current state) and `billing-plan-2026-09-17.md` (suggested plan), both in this folder.
 
 **Owner's framing:** coins track internal consumption; billing is real money. Users buy a subscription tier, get a limited number of coins per cycle, and spend them. Top-up packs also exist. Razorpay now (sandbox-tested, a few test payments in dev and prod); Stripe later for international.
 
@@ -20,7 +20,7 @@ Notes live in `research/`. Each paused stream has a `## Resume here` section lis
 | 04 | Admin tools and operations | done — reviewed; no cancel/refund wrapper confirmed in `lib/billing/razorpay.ts` |
 | 05 | Docs vs code, compliance surfaces | done — reviewed; draft refund-policy seed confirmed at `lib/managed-pages/registry.ts:315` |
 | 06 | Razorpay capabilities (web) | resumed (running) with 4 targeted questions |
-| 07 | India tax and consumer law (web) | resumed (running) with code-audit facts |
+| 07 | India tax and consumer law (web) | done — folded into audit H3/H4/H11/M8 |
 | 08 | Billing UX benchmarks, Stripe readiness (web) | paused (notes on disk) — queued next |
 
 ## Findings verified directly by the reviewer (Opus)
