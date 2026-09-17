@@ -10,9 +10,14 @@ code via Grep/Read (no writes; two read-only DB queries against dev and prod `ma
 Investigated customer-facing compliance surfaces (legal pages, pricing page, email infra, consent,
 account deletion) in the codebase and DB.
 
-**Status: PAUSED mid-task by coordinator instruction (usage-limiting). Not all Part 1/Part 2 items
-are done — see `## Resume here` at the bottom.** Everything below is either fully verified or
-explicitly marked as inferred/incomplete.
+**Status: COMPLETE.** Resumed after a coordinator pause; all originally-open items were closed this
+session (see the old `Resume here` list, now folded into the sections below with results). Context
+supplied by other streams on resume (not re-derived by me, cited where used): no invoice/receipt/
+tax/billing-address/payment-method tables exist in either DB (stream 3); billing tables cascade-delete
+with `auth.users` (stream 3, reviewer-confirmed); `pricing_checkout_enabled` is on in dev / off in
+prod and enforced only in `WalletPage.tsx` (streams 1/3); `lib/billing/razorpay.ts:110` sets
+`customer_notify: 0` on subscriptions; dev and prod published catalogs differ for the IN Plus plan
+(stream 3).
 
 ## Part 1 — Decisions already made by the owner (doc + heading)
 
@@ -68,9 +73,12 @@ pass (marked VERIFIED-05).
 | "Refund/Cancellation policy exists" (implied by Razorpay-readiness need) | — | **FALSE / PLACEHOLDER — VERIFIED-05** | DB query both envs: `refund_policy` is `enabled=true`, `access_level='public'` (i.e. **live and publicly routable at `/refund-policy` right now**), but `doc_version=null`, `published_at=null` (never went through the versioning/publish workflow used for the other four), and `content` literally begins `"## Starter Draft - Review Before Rollout"` on **both dev and prod**. Seed source: `lib/managed-pages/registry.ts:302-334`, `metadata: { requiresLegalReview: true, policyPlaceholder: true }`. |
 | "No self-serve account deletion" | legal-auth-audit.md §5 "Retention/deletion" | **TRUE — VERIFIED-05** | Grep for `deleteAccount`/`deleteUser`/self-serve deletion action across `app`,`lib` found no such action. DB query: `account_deletion` managed page has `enabled=false` on **both** dev and prod (not even routable), content also still `"## Starter Draft - Review Before Rollout"`. |
 | "No transactional email beyond Supabase Auth" | legal-auth-audit.md §5 vendor table | **TRUE — VERIFIED-05** | `package.json` has no `resend`/`sendgrid`/`postmark`/`nodemailer`/`mailgun` dependency; `.env.example` has no email-provider credential, only `SUPPORT_EMAIL` (a mailto target). |
-| "Stripe is schema-only, not implemented" | legal-auth-audit.md §5 vendor table; release-audit §15.1 | Consistent with two independent docs; **not independently re-grepped this pass** (see Resume here) | — |
-| "No age assurance / minor can create an account freely" | legal-auth-audit.md §6; PROJECT_STATE.md "Deferred / known gaps" | Consistent across two docs, both explicit deliberate deferrals, not contradicted by anything found | — |
+| "Stripe is schema-only, not implemented" | legal-auth-audit.md §5 vendor table; release-audit §15.1 | **TRUE — VERIFIED-05** | No `stripe` npm dependency in `package.json`. Every code hit for "stripe" is either a type-union literal (`BILLING_PROVIDERS = ['stripe','razorpay']`, `lib/types/pricing.ts:12`), a default-value fallback (`lib/pricing/snapshot.ts:437`), or a doc comment. `lib/managed-pages/registry.ts:477` states outright: "Outside-India Stripe routing exists in configuration but is not implemented as a checkout flow in this codebase." |
+| "No age assurance / minor can create an account freely" | legal-auth-audit.md §6; PROJECT_STATE.md "Deferred / known gaps" | Consistent across two docs, both explicit deliberate deferrals, not contradicted by anything found | Confirmed no age/kids/minor check anywhere in `app/actions/pricing-checkout.ts` either (grepped) — the gap extends to checkout specifically, not just signup. |
 | "No self-serve subscription plan switching" | future-subscription-account-management.md | Consistent with release-audit §15.3 ("No self-service subscription management") — same conclusion from two docs 6 weeks apart | — |
+| "Production pricing rollout stays dormant" (release-audit §4.1, 2026-07-30) | release-audit | **STILL TRUE today (2026-09-17) — VERIFIED-05, freshly queried** | `feature_flags` on prod: `pricing_snapshot_enabled`, `pricing_checkout_enabled`, `pricing_shadow_metering_enabled`, `pricing_hard_enforcement_enabled`, `pricing_story_length_ui_limits_enabled`, `pricing_admin_bypass_enabled`, `pricing_routing_provider_in` are **all `false`**. Only `pricing_india_only_beta_enabled=true`. **Dev has since moved far past its 2026-07-30 state**: on dev, `pricing_snapshot_enabled`, `pricing_checkout_enabled`, `pricing_hard_enforcement_enabled`, `pricing_shadow_metering_enabled`, `pricing_story_length_ui_limits_enabled`, `pricing_admin_bypass_enabled`, and `pricing_routing_provider_in` are **all `true`** — dev is now live-testing real hard-enforced coin spending and checkout, prod is not. I did not re-run the full July-30 P0 test matrix against dev's now-active state (out of this stream's scope; flagging for streams 1/2/3). |
+| Migration `082_coin_economy_gateway.sql` applied | coin-economy beta runbook | **TRUE on both envs — VERIFIED-05** | `beat_spend_reservation_components` and `beat_usage_event_components` tables exist on both dev and prod (`to_regclass` query). |
+| India Plus plan price — `docs/pricing-coin-economy-release-audit-2026-07-30.md` §4.3 says ₹1,450/month, 300 coins | release-audit | **Matches PRODUCTION only** | Prod published `plus`/`IN`/`monthly`: `price_minor=145000` (₹1,450), `monthly_included_beats=30` (=300 coins). **Dev's published row has since diverged**: `price_minor=85000` (₹850), `monthly_included_beats=12` (=120 coins) — a lower test price, not a data-entry error, but it means anyone reading the July audit's India-pricing table and checking it against dev today will see a mismatch. Studio/IN matches on both envs (₹3,950/month, 90 beats/900 coins). |
 
 ## Part 1 — Open TODOs, deferred items and known gaps still recorded
 
@@ -185,38 +193,56 @@ from scratch.
 
 ### 4. Billing identity fields
 
-**Not fully verified this pass — INFERRED from documentation, not from reading the live
-`billing_customers` schema or `lib/billing/razorpay-sync.ts` directly.** `docs/pricing-architecture-spec.md`
-("C. Billing provider mirror state" → `billing_customers`) lists only: `id`, `user_id`, `provider`,
-`provider_customer_id`, `pricing_market_key`, `country_code`, `currency_code`, timestamps — **no
-legal name, billing address, phone, GSTIN, or company name fields.** `docs/legal-auth-audit.md`'s
-identity-schema section confirms `public.profiles` has only `id`, `display_name`, `avatar_url`,
-`created_at` — "No consent, age, DOB, or guardian column" (and by extension, no billing-address-type
-column either). If accurate, there is nowhere to collect place-of-supply/GSTIN-style billing details
-for GST-compliant invoicing — **needs direct verification of the live schema and of what fields
-`lib/billing/razorpay-sync.ts` actually sends to Razorpay when creating a customer** (not done this
-pass).
+**VERIFIED — no billing identity fields are collected or stored anywhere.** Stream 3 confirms no
+invoice, receipt, tax, billing-address, or payment-method tables exist in either database. I
+independently read `lib/billing/razorpay.ts` and `lib/billing/razorpay-sync.ts` this pass:
+`createRazorpaySubscription`/`createRazorpayOrder`/`createRazorpayPlan` never take or send a
+customer name, email, phone, or address — the only "name" field anywhere in `razorpay.ts` (line 89)
+is the **plan item's display name** ("Plus Monthly"), not a customer identity. No `customer_id` is
+even passed when creating a subscription; Razorpay's own hosted Checkout.js widget is what
+collects payment details directly in the browser. `billing_customers` upserts in
+`razorpay-sync.ts:32-44` write only `user_id`, `provider`, `provider_customer_id` — nothing
+identity-shaped. The one place a name/email does travel client-side is `WalletPage.tsx:989-993`,
+which passes `prefill: { name: checkout.userName, email: checkout.userEmail }` to the Razorpay
+Checkout.js widget purely for autofill — this goes directly from the browser to Razorpay, never
+through a Kissago server route or table. **Conclusion: Kissago has no place-of-supply, billing
+name/address, phone, or GSTIN capture anywhere**, and relies entirely on Razorpay to hold whatever
+billing/payment-instrument data exists.
 
 ### 5. Consent at checkout
 
 No purchase-specific consent capture: grepped `WalletPage.tsx` and `app/actions/pricing-checkout.ts`
 for `consent|terms|agree|checkbox` — no matches. However, the **general legal-consent gate is ON on
 both dev and prod** (`legal_consent_gate_enabled`, verified by DB query this pass and consistent with
-PROJECT_STATE.md 2026-09-16). Per `docs/legal-consent-model.md` ("The gate"), it runs for every
-signed-in, non-restricted user on any route except `/auth/*`, `/signed-out`, `/account-restricted`,
-`/api/*`, and legal slugs — `/wallet` is not in that exempt list, so a signed-in user who hasn't
-accepted Terms should be redirected to `/auth/accept-terms` before ever reaching checkout. This is a
-general Terms-acceptance gate, not a purchase-specific "I agree to auto-renewal for this plan"
-disclosure — **I read the exempt-list description from the doc, not the literal array in
-`consent-middleware.ts`, so this is doc-verified rather than code-verified this pass.**
+PROJECT_STATE.md 2026-09-16). I read `proxy.ts` directly this pass (not just the doc description):
+the exempt route pattern is
+`^\/(terms|privacy|content-usage-policy|ai-disclosure|refund-policy|account-deletion|contact|help-legal)$`
+(`proxy.ts:18`), used both for the moderation-restriction allowlist and (with `/auth/*`, `/signed-out`
+added) for the consent-gate skip list. **`/wallet` is not in this pattern — VERIFIED, not just
+doc-inferred** — so a signed-in user who hasn't accepted Terms is redirected to
+`/auth/accept-terms?next=/wallet` before ever reaching checkout. This is still a general
+Terms-acceptance gate (satisfied once, at signup/re-consent time), not a purchase-specific "I agree
+to auto-renewal for this plan/price" disclosure at the moment of paying.
 
 ### 6. Account deletion and moderation interaction with an active subscription
 
-**Not reached this pass.** Confirmed no self-serve deletion action exists anywhere in the codebase
-(grep across `app`, `lib`). Did **not** check whether admin-initiated moderation (suspend/block, per
-`user_account_moderation`) or any deletion/support workflow cancels an active Razorpay subscription,
-or what happens to billing data on either path. This is a real open question for the owner and for
-Stream 2/3 — flagging it but not answering it.
+**VERIFIED.** There is no deletion code path of any kind, self-serve or admin: grepped `app` and
+`lib` for `auth.admin.deleteUser`, `admin.deleteUser(`, `deleteUser(` — zero matches anywhere in the
+codebase. The only way a user row could be removed today is a human deleting it directly in the
+Supabase dashboard, outside the application entirely. Stream 3 confirms billing tables cascade-delete
+with `auth.users`. Putting these two facts together: **if an account with a live Razorpay
+subscription were ever deleted this way, `billing_subscriptions`/`billing_orders`/`beat_grants` rows
+would vanish from Kissago's database, but nothing in that path calls Razorpay to cancel the actual
+subscription first** — no code exists to do so, since no deletion code exists at all. The
+subscription would keep renewing and charging the customer's card on Razorpay's side with no local
+record left to reconcile against, and (per finding S5-2/S5-9 below) no email trail either. This is
+recorded as a new finding (S5-9) rather than left as an open question, since the underlying facts
+(cascade behavior, absence of any deletion code) are now both confirmed. Moderation (suspend/block
+via `user_account_moderation`) is a separate, existing mechanism that does **not** delete the account
+or its rows — I did not find any code linking a suspend/block action to Razorpay subscription
+cancellation either, so a suspended user's subscription likely continues renewing untouched, but I
+did not exhaustively trace the moderation action handlers to confirm this negative — flagged as a
+narrower residual gap below.
 
 ### 7. Minors / kids mode and checkout
 
@@ -252,6 +278,8 @@ explicit market selector — **not exhaustively searched this pass.**
 | S5-6 | **MEDIUM** | VERIFIED | `copyright_licensing` (live, public) and `account_deletion` (disabled, not routable) managed pages are also unfinished "Starter Draft — Review Before Rollout" placeholders on both dev and prod. | DB query both envs, content head for both pages | Lower stakes than refund_policy since these aren't Razorpay-mandated, but still customer-facing legal surfaces (IP ownership, data retention) left as drafts. | Finalize or unpublish/hide before wide launch. |
 | S5-7 | **LOW-MEDIUM** | VERIFIED | No dedicated `/pricing` marketing page; pricing lives only at `/wallet`, which is functionally correct (reachable signed-out) but not discoverable/SEO-friendly as a "pricing page," and the FAQ page (which explains billing) is gated behind `access_level='billing_enabled_only'` so it's invisible whenever the billing flag is off. | `app/wallet/page.tsx`, `components/pricing/WalletPage.tsx:179-181`, `lib/managed-pages/access.ts:18` | Minor UX/discoverability gap, not a compliance blocker. | Consider a static `/pricing` route or explicitly link `/wallet` from marketing surfaces. |
 | S5-8 | **LOW** | VERIFIED | `docs/pricing-strategy.md` and `docs/pricing-architecture-spec.md`/`docs/pricing-phase-3-rollout-plan.md` (all 2026-04-06) are superseded in important ways by the 2026-07-30 audit pair but nothing marks them deprecated; a reader following the reading list in this task's own instructions would hit the stale docs first. | Doc dates and content comparison (this pass) | Wasted effort / wrong assumptions carried forward if someone treats the April docs as current without also reading the July pair. | Add a short "superseded by" pointer at the top of the April docs, or fold their still-valid architecture content into a single current doc. |
+| S5-9 | **HIGH** | VERIFIED | No account-deletion code exists at all (self-serve or admin), yet billing tables cascade-delete with `auth.users` (stream 3). If a user row is ever removed directly (e.g. via Supabase dashboard, the only way it could happen today), the local subscription record disappears with no code path that cancels the real Razorpay subscription first — it would keep renewing and charging with no local record left to reconcile. | Grep for `deleteUser`/`admin.deleteUser` across `app`,`lib` — zero matches; stream 3's cascade-delete confirmation | Support deletes a user row to satisfy a privacy request; the customer's card keeps getting charged by Razorpay for a subscription Kissago no longer has any record of, discovered only when the customer complains. | Before any account-deletion feature (self-serve or admin) ships, it must first look up and cancel any live Razorpay subscription for that user, in that order. |
+| S5-10 | **HIGH** | VERIFIED | Razorpay subscriptions are created with `customer_notify: 0` (`lib/billing/razorpay.ts:110`), meaning Razorpay itself will not notify the customer of subscription lifecycle events. Combined with S5-2 (no Kissago transactional email), **a real, successful subscription charge currently produces zero email notification to the payer from either system.** | `lib/billing/razorpay.ts:110`; S5-2 evidence | A customer is charged on renewal, receives no email from Kissago and none from Razorpay, and the first they hear of it is the card-statement line item — a strong driver of chargebacks and support complaints once real money is involved. | Either flip `customer_notify` to `1` for subscriptions as a stopgap, or (better) build Kissago's own receipt email and keep Razorpay's notification off deliberately once that exists. |
 
 ## Open questions for the owner
 
@@ -260,45 +288,38 @@ explicit market selector — **not exhaustively searched this pass.**
   other four documents?
 - Same question for `copyright_licensing` and `account_deletion`.
 - Does the owner want emailed receipts/invoices for v1 real-money launch, or is an in-app-only
-  purchase history (no email leg) acceptable initially given no email provider is wired up?
+  purchase history (no email leg) acceptable initially given no email provider is wired up? Note
+  Razorpay's own `customer_notify` is also currently off (S5-10), so today the answer is "no
+  notification at all," not "Razorpay covers it."
+- What should happen to a live Razorpay subscription when an account is deleted or suspended? No code
+  handles either case today (S5-9) — this needs an explicit answer before any deletion feature ships.
 - Should GST-compliant invoicing be Kissago's own responsibility, or is relying on Razorpay's
   transaction/invoice data sufficient for the owner's compliance posture? (Affects whether billing
   identity fields in S5-5 need to be built.)
 
-## Resume here
+## Resolved on resume (2026-09-17, second pass)
 
-Work **not yet done**, paused mid-task by coordinator instruction to limit parallel agent usage:
+All items from the original `Resume here` list were closed this session:
 
-1. **Re-verify current (2026-09-17) status of the 2026-07-30 audit's P0 list** — that audit is ~7
-   weeks old; I have not checked whether `supabase/migrations/082_coin_economy_gateway.sql` is
-   applied on dev/prod, whether production rollout flags have changed since 2026-07-30, or whether
-   any of the 9 unchecked items in its §22 decision checklist have since been resolved. This is the
-   single biggest open item — without it, Part 1's "Claimed vs actual" table is mostly borrowed from
-   a prior audit rather than freshly verified.
-2. **Did not independently grep for Stripe SDK/keys** to confirm "schema-only, not implemented" —
-   currently resting on two docs agreeing, not on my own code read this pass.
-3. **Did not read `lib/legal/business-config.ts` directly** to confirm the legal-entity constants
-   (name, GSTIN, address, emails) match what's quoted in `docs/legal-auth-audit.md` §10 — currently
-   medium-confidence via the doc only.
-4. **Did not check the exempt-route array in `lib/legal/consent-middleware.ts` directly** to confirm
-   `/wallet` is genuinely not exempted from the consent gate — currently resting on
-   `docs/legal-consent-model.md`'s description of the gate, not the literal code.
-5. **Did not investigate account deletion / moderation interaction with an active subscription**
-   (Part 2 item 6) at all — no code read attempted yet (billing_subscriptions cancellation on
-   suspend/block, or on any future deletion flow). Flagged as fully open in the findings above.
-6. **Did not check `lib/billing/razorpay-sync.ts` or the live `billing_customers` table schema**
-   directly for what customer data is actually sent to Razorpay (Part 2 item 4 / finding S5-5) —
-   currently inferred from architecture-doc field lists only, not the live schema or code.
-7. **Did not check PROJECT_STATE.md's migration ledger for migration `082`** (coin economy gateway)
-   or any pricing migrations beyond what I happened to grep (015-022, 099-101) — unknown whether the
-   ledger even tracks it, which bears on the "dev ahead of prod" picture for Stream 3 as well.
-8. **Did not verify minors/kids-mode checkout gating beyond what's already documented** — no fresh
-   code read of the checkout path for a kids-mode-specific block (likely none exists, per the
-   project's own documented policy stance, but not independently confirmed by reading
-   `pricing-checkout.ts` for an age/mode check this pass).
-9. Have not yet cross-checked the Part 1 "Claimed vs actual" table entries I marked as "not
-   re-checked this pass" against current code — items: production rollout-flag state, Free
-   image-generation admin toggle behavior.
-10. Have not done a final pass reordering the Findings table strictly by severity (currently already
-    roughly ordered BLOCKER→LOW but not double-checked) or polished the summary reply to the
-    coordinator — that reply itself still needs to be sent once work resumes.
+1. Production pricing rollout flags re-queried fresh: still all `false` except
+   `pricing_india_only_beta_enabled` — the July 30 audit's "dormant" conclusion still holds for
+   **production**. Dev, however, has since flipped `pricing_snapshot_enabled`,
+   `pricing_checkout_enabled`, `pricing_hard_enforcement_enabled`, `pricing_shadow_metering_enabled`,
+   `pricing_story_length_ui_limits_enabled`, and `pricing_admin_bypass_enabled` all to `true` — dev is
+   now live-testing real hard-enforced spend. A full re-run of the July audit's P0 test matrix against
+   dev's current state is out of this stream's scope (belongs to streams 1/2/3) and was not attempted.
+2. Stripe: confirmed no SDK/dependency, config-only — see Claimed vs actual table.
+3. `lib/legal/business-config.ts` read directly — matches `docs/legal-auth-audit.md` §10 exactly.
+4. `proxy.ts` read directly — confirmed `/wallet` is not in the legal-slug exempt pattern.
+5. Account deletion / subscription interaction — answered, see Part 2 §6 and finding S5-9.
+6. `lib/billing/razorpay.ts` and `razorpay-sync.ts` read directly — no billing identity data
+   collected or sent; see Part 2 §4 (upgraded from INFERRED to VERIFIED) and finding S5-10.
+7. Migration `082` confirmed applied on both dev and prod via its component tables' existence.
+8. Kids-mode/minor checkout gating — confirmed no age/kids/minor check anywhere in
+   `pricing-checkout.ts`.
+9. IN Plus plan price cross-checked: production matches the July audit's ₹1,450/300-coin figures;
+   dev has since diverged to a lower ₹850/120-coin test price — noted in Claimed vs actual.
+10. Findings table re-ordered with two new entries (S5-9, S5-10) added in severity position.
+
+No items remain open for this stream at completion time, beyond the standing "Open questions for the
+owner" below (which are genuinely for the owner, not further research).
