@@ -95,6 +95,12 @@ session at natural checkpoints.
    admin. This moves tax calculation at checkout into Phase 2; Phase 6 still renders and sends the documents.
 9. **Self-serve account deletion is built in Phase 2** (a must for the mobile app). Billing records stay after
    deletion, anonymised, for 8 years (decision 6).
+10. **Deletion removes access, not the work.** Stories and published storylines survive the account, still showing
+    the author name they were published with, so the content tables move to ownerless rather than cascading away.
+    Media is therefore untouched and no storage deletion is built. Consent records are kept, anonymised. The tax
+    point is the **purchase**, for every purchase, never coin redemption. 18% and SAC 998439 are the seeded editable
+    rule. Document issuing stays off until Phase 6. The privacy and account-deletion pages must disclose that
+    published stories and author names remain.
 
 **Deliberate deviation from the pack:** the checkout kill switch blocks new checkouts only. Verify, webhook and reconcile still honour payments already started (see `phase-1-plan.md` decision 8).
 

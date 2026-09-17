@@ -37,17 +37,24 @@ international/export treatment (Phase 8).
 | Research 07: 18% GST under OIDAR, SAC 998439 **unconfirmed**; declared state at checkout is **mandatory** for place of supply (Circular 242/36/2024-GST); CGST+SGST when the buyer is in Gujarat, otherwise IGST; invoice within 30 days, per renewal for subscriptions; credit notes by 30 Nov of the following FY; GST records kept 72 months; DPDP's legal-retention exception permits keeping billing records after deletion, and the current cascade is called "likely non-compliant". | `docs/payments/research/07-india-tax-and-consumer-compliance.md:26-27,41-46,57-61,65-82,88-90` |
 | Dev data: 12 orders, 1 subscription, 9 grants, and the webhook events from today's test top-up. Prod has never processed a checkout (only free-allowance grants). | `research/03-data-model-and-live-db-state.md:263-274` |
 
-**Open questions that need the owner or a CA before the affected code is written** — they gate parts of Unit B and C,
-not the migration:
-1. **Rate, SAC and classification.** The plan seeds 18% and SAC 998439 as an editable rule. Confirm with the CA.
-2. **Coin timing** (research 07, §41-46): GST at purchase, or at coin redemption for non-expiring top-up coins? The
-   plan assumes **at purchase**, which is what charging tax at checkout means.
-3. **Published stories when an account is deleted:** remove them from the gallery, or keep them with the author
-   anonymised? The plan assumes **remove**, since that is what "delete my data" usually means to a user.
-4. **Issuing documents now or later.** The plan creates document *records* from day one but leaves issuing behind an
-   admin switch that defaults **off**, so invoice numbering only starts once the CA has signed off (Phase 6).
-5. **Consent records** (`legal_acceptances`): keep them anonymised as proof of agreement, as this plan assumes, or
-   delete them with the account?
+**Owner answers (2026-09-17), settled before this plan was finalised:**
+1. **Rate and SAC:** 18% and SAC 998439 as the seeded, editable rule. Still worth a CA confirmation, not a blocker.
+2. **Tax point is the purchase**, for every purchase — never at coin redemption. That is what charging at checkout
+   does, and it settles research 07's open question (§41-46) for Kissago.
+3. **Deletion keeps the stories, with their author names.** Deleting an account removes the person's *access*, not
+   the work. Published storylines stay in the gallery, still showing the author name they were published with.
+4. **Consent records survive**, anonymised, as proof the terms were agreed.
+5. **Document issuing stays off** until Phase 6, so invoice numbering starts only after the CA signs off.
+
+The consequence of answer 3 reaches further than the gallery: a published storyline points at beats, which belong to
+the author's story rows, which cascade from the user. Keeping published content alive means the story and storyline
+rows must **outlive the account**, ownerless, not just the gallery listing. Because the author name on a published
+storyline is a copy taken at publish time, the credit survives on its own. **Storage deletion is therefore out of
+scope** (owner, same day): the media behind kept stories must stay, so no bulk-delete helpers are needed.
+
+**Disclosure this creates:** published stories and the author name on them remain visible after deletion. The
+privacy policy and the account-deletion page must say so plainly, because a reader of "delete my account" would
+otherwise expect the opposite.
 
 ---
 
@@ -78,11 +85,22 @@ not the migration:
     gain `subject_ref`, a stable id copied from the user id, so a deleted customer's records stay linked to each
     other without pointing at a person. Retained rows keep what GST requires (recipient name, state, GSTIN where
     given); contact details go.
-11. **Deletion is a server-side sequence, in order:** re-authenticate, read what must be read first (media keys,
-    billing rows), cancel the live subscription at Razorpay, stop pending jobs, delete content and storage objects,
-    anonymise what is retained, delete the profile and the auth user, then write an audit row. Order matters:
-    `beats.generated_by` has no delete rule, so content must go before the user.
-12. **Backfill records only what the provider told us.** Existing paid orders become payment rows marked
+11. **Every user-referencing table falls into one of three groups**, decided once and written into the migration:
+    - **Kept, ownerless** — the work and what it hangs on: `stories`, `storylines`, `beats.generated_by`,
+      `storyline_beats` (through its parents), `character_masters`, `story_bibles`, `episode_branches`,
+      `media_assets` (already SET NULL). The user id becomes NULL; the published author name stays as it is.
+    - **Kept, anonymised** — the record: billing and wallet tables, `legal_acceptances`, and the admin audit trail
+      (already SET NULL).
+    - **Deleted** — the person and their private activity: `profiles`, `viewer_profiles`, `saved_storylines`,
+      `explored_stories`, `storyline_progress`, `storyline_likes`, `storyline_views`, `reference_sources` and
+      adoptions, presets and settings, pending jobs, and finally the `auth.users` row itself.
+12. **Deletion is a server-side sequence, in order:** re-authenticate, cancel the live subscription at Razorpay, stop
+    pending jobs, delete the "deleted" group, anonymise the kept groups, delete the auth user, write the audit row.
+    Order matters: `beats.generated_by` currently has no delete rule at all, so it would block the deletion until it
+    is converted to SET NULL.
+13. **Access ends the moment the account does.** Deleting the auth user ends every session and frees the email
+    address for a fresh signup, which is the "removes their access" the owner asked for.
+14. **Backfill records only what the provider told us.** Existing paid orders become payment rows marked
     `backfilled`, with tax recorded as unknown rather than invented.
 
 ---
@@ -246,11 +264,24 @@ CREATE TABLE IF NOT EXISTS public.account_deletion_events (
 );
 ```
 
-**Retention conversion.** For each of `billing_customers`, `billing_orders`, `billing_subscriptions`, `beat_grants`,
-`beat_usage_events` and `legal_acceptances`: add `subject_ref uuid`, backfill it from `user_id`, index it, drop the
-CASCADE foreign key, make `user_id` nullable, and re-add the key as `ON DELETE SET NULL`. `beat_spend_reservations`
-stays CASCADE — a reservation is a few minutes of working state, not a record. Written as one `DO` block per table
-using `DROP CONSTRAINT IF EXISTS <table>_user_id_fkey`, so re-running is safe.
+**Survival conversion.** Two sets of tables stop cascading, for different reasons (decision 11).
+
+*Kept, anonymised* — `billing_customers`, `billing_orders`, `billing_subscriptions`, `beat_grants`,
+`beat_usage_events`, `legal_acceptances`: add `subject_ref uuid`, backfill it from `user_id`, index it, then drop the
+CASCADE key, make `user_id` nullable and re-add it as `ON DELETE SET NULL`. `beat_spend_reservations` stays CASCADE —
+a reservation is a few minutes of working state, not a record.
+
+*Kept, ownerless* — `stories.user_id`, `storylines.user_id`, `beats.generated_by` (today a plain reference with no
+delete rule, which would block deletion outright), `character_masters`, `story_bibles`, `episode_branches`: same
+conversion to `ON DELETE SET NULL`, without `subject_ref`, since nothing needs to link this content back to a person
+once the account is gone. The author credit already lives in `storylines.author_name`.
+
+Each conversion is a `DO` block using `DROP CONSTRAINT IF EXISTS <table>_<column>_fkey`, so re-running is safe.
+
+**Trap for the executor:** the owner policies on `stories` and `storylines` compare `user_id` to `auth.uid()`, so an
+ownerless row matches no one. Published storylines stay readable through the existing published-content policy;
+unpublished rows simply become invisible to everyone but the service role. That is intended, not a bug — verify it
+rather than "fixing" it.
 
 Then: a `billing_next_document_number(p_financial_year text, p_document_type text)` function that takes a per-type
 advisory lock, bumps the sequence and returns the formatted number; `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` with
@@ -293,14 +324,17 @@ rows a deletion has already anonymised, and must not be run once real documents 
   `backfilled` with `tax_status: 'unknown_legacy'`.
 
 ### Unit C — self-serve account deletion
-- `lib/account/deletion.ts` (`server-only`): the ordered sequence from decision 11, each step logged into the audit
-  row, written so a failure part-way can be resumed rather than leaving a half-deleted account.
-- Storage: add list-by-prefix and bulk delete for R2 and Supabase Storage (neither exists today), and enumerate
-  legacy story-scoped keys from `media_assets` and the user's stories **before** anything is deleted.
-- `app/actions/account.ts`: `requestAccountDeletion` (re-authentication required), and an admin equivalent.
-- UI: `/account/delete` page with a typed confirmation, what is removed and what is kept, reachable from the account
-  menu; update the `account-deletion` and privacy managed pages, which currently say no such flow exists.
-- Razorpay: cancel the live subscription immediately before deleting anything.
+- `lib/account/deletion.ts` (`server-only`): the ordered sequence from decision 12, driven by an explicit table list
+  per group so a table added later is a deliberate choice rather than an oversight; each step logged into the audit
+  row, and safe to re-run after a failure part-way.
+- `app/actions/account.ts`: `requestAccountDeletion` (re-authentication required) and an admin equivalent.
+- Razorpay: cancel the live subscription immediately, before anything is deleted.
+- UI: `/account/delete` with a typed confirmation that states plainly what goes (access, profile, private activity),
+  what stays visible (published stories, under the same author name) and what is kept by law (billing records,
+  8 years). Reachable from the account menu.
+- Update the `account-deletion` and privacy managed pages, which currently say no such flow exists, to describe both
+  the flow and the retention.
+- **No storage work** (owner, 2026-09-17): media stays, because the stories it belongs to stay.
 
 ---
 
@@ -311,8 +345,9 @@ rule (checkout refuses), and no table at all (charges the net). Ledger: idempote
 that must add up, a renewal refund matching its payment, gapless document numbering under concurrent issue, and the
 issuing switch off by default. Checkout: gross amount reaches Razorpay, the snapshot records all three numbers, a
 plan reference is not reused when the gross changes, and checkout refuses without a declared state. Deletion: the
-step order, billing rows surviving with `user_id` null and `subject_ref` intact, the subscription cancelled first,
-storage keys enumerated before deletion, and a resumable failure.
+step order, each of the three table groups behaving as decided, billing rows surviving with `user_id` null and
+`subject_ref` intact, a published story still readable with its author name, the subscription cancelled first, and a
+re-runnable failure.
 
 ## 6. Verification on dev (after the owner applies 125)
 
@@ -323,7 +358,8 @@ with `user_id` null.
 End to end: buy a top-up on the preview and confirm the charged amount is the price plus GST, one payment row with
 the correct split, and the grant unchanged; subscribe and confirm the first charge and one renewal each produce their
 own payment row; refund from the Razorpay dashboard and confirm a refund row matched to its payment; delete a test
-account and confirm the trace still holds — provider event, payment, order, grant, document — with the person gone.
+account and confirm the trace still holds — provider event, payment, order, grant, document — with the person gone,
+the published story still in the gallery under its author name, and sign-in with that account no longer possible.
 
 ## 7. Rollback and disable
 
