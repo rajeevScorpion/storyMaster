@@ -20,7 +20,15 @@
   - Google-only accounts re-authenticate by a 15-minute-old sign-in rather than a fresh OAuth round trip.
   - The terms, help-legal and FAQ pages still say self-serve deletion does not exist and now contradict the flow.
 - **Unit B1 (server money path) was still running as an agent when the session ended.** Check `git log payments`:
-  if its commit is there, review the diff; if not, re-run it from `phase-2-plan.md` §4. Note that Unit C reported
+  if its commit is there, review the diff. If not, **its work is not lost** — the working tree was snapshotted
+  mid-flight to `refs/wip/unit-b1` (2026-09-18), which includes migration **126** and the untracked new files:
+  ```
+  git show --stat refs/wip/unit-b1          # what was captured
+  git diff HEAD refs/wip/unit-b1            # the in-flight change
+  git checkout refs/wip/unit-b1 -- .        # restore it into the working tree
+  ```
+  It is a snapshot of an unfinished unit, taken while an agent was still writing: treat it as a starting point to
+  finish and review, never as a reviewed change. Delete the ref once B1 is properly committed. Note that Unit C reported
   two `tsc` errors in `razorpay-reconcile.ts`/`razorpay-sync.ts` as "pre-existing" — they were not. They were
   B1's uncommitted work in flight. **Run `npx tsc --noEmit` yourself before trusting either unit's gates.**
 - **Unit B2 (wallet billing-details step, admin tax-rules panel, backfill trigger) has not been started.** It was
