@@ -3,7 +3,32 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-17, end of the sandbox-setup session)
+## Next session starts here (updated 2026-09-18, owner at 85% usage — Phase 2 mid-flight)
+
+**Phase 2 state.** Plan approved: `phase-2-plan.md`, with owner decisions 8-10 below.
+- **Unit A done and reviewed** — `1ed8c6f` (tax engine, tax-rule loader, ledger writer, migration **125**),
+  plus Opus review fixes `218a9b6` (a future-dated rule would have been charged immediately; the fail-closed
+  error paths described themselves backwards). 1,553 tests green at that point.
+- **Unit B1 (server money path) and Unit C (account deletion) were running as agents when the session ended.**
+  Check `git log payments` first: if their commits are there, **review the diffs, not any report** — nobody has
+  reviewed them yet. If they are not there, the work was lost and both units must be re-run from
+  `phase-2-plan.md` §4.
+- **Unit B2 (wallet billing-details step, admin tax-rules panel, backfill trigger) has not been started.** It was
+  deliberately held back so it could be built against B1's finished server actions. Its brief: the wallet must
+  collect the customer's state before checkout (legal requirement) and show "₹X + GST" with the payable total; the
+  admin panel edits `billing_tax_rules` following the pricing draft→publish convention; both live in files B1 and
+  C were told not to touch (`components/pricing/WalletPage.tsx`, `components/admin/**`, `app/admin/**`).
+
+**Migrations 125, 126 and 127 are all unapplied, on every environment.** 126 (plan-ref amount) comes from B1 and
+127 (if any) from C. Apply them **together, in order, on dev only**, after the diffs are reviewed — 125 changes
+delete behaviour on twelve existing tables, so applying it half-reviewed is not worth the risk. Until they are
+applied, the code must behave exactly as it does today; that property is tested.
+
+**Phase 1 remains open:** runbook steps 4-9 (`phase-1-plan.md` §6) are owner-pending. The top-up test passed.
+
+---
+
+## Phase 1 handoff (written 2026-09-17, end of the sandbox-setup session)
 
 **State:** branch `payments`, working tree clean. Local commits after `cd5cd0c` are docs only and not pushed; the
 preview runs `cd5cd0c`. Phase 1 code is complete and reviewed, plus the checkout-frame fix (1,517 unit tests,
