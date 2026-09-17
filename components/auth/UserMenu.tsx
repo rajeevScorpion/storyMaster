@@ -12,6 +12,8 @@ import { startNavigationProgress } from '@/lib/navigation/progress';
 
 interface UserMenuProps {
   onMyStories?: () => void;
+  /** Story surfaces pass true: navigating to the wallet reloads the page, which would drop the in-memory story session. */
+  openWalletInNewTab?: boolean;
 }
 
 function beatsToCoins(value: number) {
@@ -29,7 +31,7 @@ const REVIEWER_ROLE_LABELS: Record<'reviewer' | 'editor', string> = {
   editor: 'Editor',
 };
 
-export default function UserMenu({ onMyStories }: UserMenuProps) {
+export default function UserMenu({ onMyStories, openWalletInNewTab = false }: UserMenuProps) {
   const { user, isLoading, openAuthDialog, signOut } = useAuth();
   const { data: pricing, isLoading: pricingLoading } = usePricingRuntime();
   const [isOpen, setIsOpen] = useState(false);
@@ -208,6 +210,8 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
               )}
               <Link
                 href="/wallet"
+                target={openWalletInNewTab ? '_blank' : undefined}
+                rel={openWalletInNewTab ? 'noopener' : undefined}
                 onClick={() => setIsOpen(false)}
                 className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-neutral-100 transition-colors"
               >

@@ -79,6 +79,25 @@ packaging.
 `EBADENGINE` warning and no observed runtime failure, but a fresh machine should install **Node 22.13+ or 24**
 and sidestep the question.
 
+### Cross-origin isolation blocks Razorpay Checkout — the wallet is exempt
+
+Every route sends `Cross-Origin-Embedder-Policy: credentialless` and `Cross-Origin-Opener-Policy: same-origin`
+so ffmpeg.wasm video export gets `SharedArrayBuffer`. Under COEP, Chrome and Firefox refuse any cross-origin
+frame that doesn't send COEP itself, and Razorpay's checkout frame doesn't. The symptom is a Razorpay window
+reading "api.razorpay.com refused to connect", `net::ERR_BLOCKED_BY_RESPONSE` on `api.razorpay.com/v1/checkout/public`,
+and nothing in the page console. Checkout was blocked like this from April to 2026-09-17, production included.
+
+**The fix has three parts; keep all three:**
+- `next.config.ts` leaves `/wallet` out of the header rule. The pattern must match
+  `lib/navigation/cross-origin-isolation.shared.ts`.
+- Headers belong to the document, so a client-side hop into or out of the wallet keeps the wrong ones. A boundary
+  component in `Providers` reloads when that happens.
+- That reload would drop an in-memory story session, so story surfaces open the wallet in a **new tab** (the
+  account menu's `openWalletInNewTab`, the "Open Wallet" error action, and StoryScreen's own links).
+
+Any new third-party frame (another payment provider, an embed) hits the same wall on isolated routes. The e2e
+smoke suite checks both sides of the boundary.
+
 ---
 
 ## Next.js server/client boundary

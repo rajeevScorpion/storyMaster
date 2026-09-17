@@ -16,10 +16,12 @@ const nextConfig: NextConfig = {
   // Required for ffmpeg.wasm — enables SharedArrayBuffer via COOP/COEP headers.
   // Using 'credentialless' for COEP to avoid breaking external resources (fonts, images)
   // that lack Cross-Origin-Resource-Policy headers.
+  // The wallet is left out: COEP blocks Razorpay Checkout's cross-origin frame. Keep this
+  // pattern matching lib/navigation/cross-origin-isolation.shared.ts.
   async headers() {
     return [
       {
-        source: '/(.*)',
+        source: '/:path((?!wallet(?:/|$)).*)',
         headers: [
           { key: 'Cross-Origin-Embedder-Policy', value: 'credentialless' },
           { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },

@@ -120,7 +120,7 @@ export default function StoryPage() {
 
       {/* User menu — fixed top-right */}
       <div className="fixed top-4 right-4 z-40">
-        <UserMenu onMyStories={() => setShowMyStories(true)} />
+        <UserMenu onMyStories={() => setShowMyStories(true)} openWalletInNewTab />
       </div>
 
       <MyStoriesDrawer

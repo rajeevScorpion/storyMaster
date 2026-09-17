@@ -15,6 +15,7 @@ import ManagedFooter from '@/components/layout/ManagedFooter';
 import { AnimatePresence } from 'motion/react';
 import type { Character, StoryConfig } from '@/lib/types/story';
 import { consumeHomeStoryResetRequest, hasHomeStoryResetRequest } from '@/lib/story/home-navigation';
+import { isCrossOriginIsolationExemptPath } from '@/lib/navigation/cross-origin-isolation.shared';
 import type { LandingInitialData } from '@/lib/story/landing-ui';
 import type { PricingRuntimeContext } from '@/lib/types/pricing';
 
@@ -131,7 +132,7 @@ export default function HomeContent({ initialLandingData, initialPricing }: Home
         >
           Gallery
         </Link>
-        <UserMenu onMyStories={() => setShowMyStories(true)} />
+        <UserMenu onMyStories={() => setShowMyStories(true)} openWalletInNewTab={Boolean(session)} />
       </div>
 
       <MyStoriesDrawer
@@ -144,7 +145,12 @@ export default function HomeContent({ initialLandingData, initialPricing }: Home
           <p className="text-sm font-medium">{error}</p>
           {errorAction && (
             <button
-              onClick={() => router.push(errorAction.href)}
+              onClick={() =>
+                // The wallet reloads the page (cross-origin isolation); a new tab keeps this session.
+                isCrossOriginIsolationExemptPath(errorAction.href)
+                  ? window.open(errorAction.href, '_blank')
+                  : router.push(errorAction.href)
+              }
               className="text-xs uppercase tracking-wider font-bold hover:text-white transition-colors"
             >
               {errorAction.label}
