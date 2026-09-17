@@ -66,6 +66,13 @@ export interface RazorpayPayment {
   refund_status: string | null;
   invoice_id: string | null;
   captured: boolean;
+  /** Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit A): received but deliberately not
+   * stored verbatim -- lib/billing/ledger.ts derives a coarse method_category from this instead.
+   * `card`/`bank_account`/`vpa`/etc. are intentionally absent from this type: they are never read. */
+  method?: string;
+  /** Razorpay's fee and tax on its fee, in minor units. Stored as provider_fee_minor/provider_tax_minor. */
+  fee?: number;
+  tax?: number;
 }
 
 export interface RazorpayInvoice {

@@ -1,9 +1,20 @@
 import type {
+  AccountDeletionActor,
+  AccountDeletionStatus,
   BeatGrantSourceType,
   BeatReservationStatus,
+  BillingDocumentStatus,
+  BillingDocumentType,
   BillingInterval,
+  BillingMethodCategory,
   BillingOrderType,
+  BillingPaymentKind,
+  BillingPaymentStatus,
   BillingProvider,
+  BillingRefundInitiator,
+  BillingRefundStatus,
+  BillingTaxRegime,
+  BillingTaxRuleAppliesTo,
   BillingWebhookEventStatus,
   PlanKey,
   PricingActionKey,
@@ -776,6 +787,144 @@ export interface DbBillingWebhookEvent {
   attempt_count: number;
   last_attempt_at: string | null;
   outcome: string | null;
+}
+
+// Payments Phase 2 (docs/payments/phase-2-plan.md, migration 125): the durable payment/refund/
+// document ledger, its GST rules, and retention-safe deletion tracking. `subject_ref` is a stable
+// id (copied from user_id) that survives account deletion; `user_id` is nulled at that point.
+
+export interface DbBillingProfile {
+  id: string;
+  user_id: string;
+  legal_name: string | null;
+  billing_email: string | null;
+  phone: string | null;
+  company_name: string | null;
+  gstin: string | null;
+  state_code: string;
+  country_code: string;
+  address_line_1: string | null;
+  address_line_2: string | null;
+  city: string | null;
+  postal_code: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbBillingTaxRule {
+  id: string;
+  market_key: string;
+  applies_to: BillingTaxRuleAppliesTo;
+  tax_regime: BillingTaxRegime;
+  rate_percent: number;
+  sac_code: string | null;
+  supplier_state_code: string;
+  status: PricingCatalogStatus;
+  effective_from: string;
+  effective_to: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbBillingPayment {
+  id: string;
+  subject_ref: string;
+  user_id: string | null;
+  provider: BillingProvider;
+  provider_mode: 'test' | 'live';
+  provider_payment_id: string;
+  provider_order_id: string | null;
+  provider_subscription_id: string | null;
+  provider_invoice_id: string | null;
+  billing_order_id: string | null;
+  billing_subscription_id: string | null;
+  plan_version_id: string | null;
+  topup_pack_id: string | null;
+  kind: BillingPaymentKind;
+  status: BillingPaymentStatus;
+  currency_code: string;
+  net_minor: number;
+  tax_minor: number;
+  gross_minor: number;
+  tax_breakdown_json: Record<string, unknown>;
+  method_category: BillingMethodCategory | null;
+  provider_fee_minor: number | null;
+  provider_tax_minor: number | null;
+  cycle_start: string | null;
+  cycle_end: string | null;
+  purchase_snapshot_json: Record<string, unknown> | null;
+  customer_snapshot_json: Record<string, unknown> | null;
+  webhook_event_id: string | null;
+  captured_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbBillingRefund {
+  id: string;
+  subject_ref: string | null;
+  payment_id: string | null;
+  provider: BillingProvider;
+  provider_mode: 'test' | 'live';
+  provider_refund_id: string;
+  provider_payment_id: string | null;
+  amount_minor: number;
+  net_minor: number | null;
+  tax_minor: number | null;
+  currency_code: string;
+  status: BillingRefundStatus;
+  reason: string | null;
+  initiated_by: BillingRefundInitiator | null;
+  actor_user_ref: string | null;
+  coin_adjustment_json: Record<string, unknown> | null;
+  raw_payload_json: Record<string, unknown>;
+  processed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbBillingDocument {
+  id: string;
+  subject_ref: string;
+  document_type: BillingDocumentType;
+  document_number: string;
+  financial_year: string;
+  issued_at: string;
+  payment_id: string | null;
+  refund_id: string | null;
+  currency_code: string;
+  net_minor: number;
+  tax_minor: number;
+  gross_minor: number;
+  tax_breakdown_json: Record<string, unknown>;
+  customer_snapshot_json: Record<string, unknown>;
+  business_snapshot_json: Record<string, unknown>;
+  status: BillingDocumentStatus;
+  void_reason: string | null;
+  storage_ref: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbBillingDocumentSequence {
+  financial_year: string;
+  document_type: string;
+  prefix: string;
+  next_number: number;
+  updated_at: string;
+}
+
+export interface DbAccountDeletionEvent {
+  id: string;
+  subject_ref: string;
+  actor: AccountDeletionActor;
+  status: AccountDeletionStatus;
+  requested_at: string;
+  completed_at: string | null;
+  removed_summary_json: Record<string, unknown>;
+  retained_summary_json: Record<string, unknown>;
+  failure_reason: string | null;
 }
 
 export interface DbBeatGrant {

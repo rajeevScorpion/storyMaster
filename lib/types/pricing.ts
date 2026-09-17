@@ -30,6 +30,43 @@ export type BillingOrderType = (typeof BILLING_ORDER_TYPES)[number];
 export const BILLING_WEBHOOK_EVENT_STATUSES = ['received', 'processed', 'failed', 'ignored'] as const;
 export type BillingWebhookEventStatus = (typeof BILLING_WEBHOOK_EVENT_STATUSES)[number];
 
+// Payments Phase 2 (docs/payments/phase-2-plan.md, migration 125): the durable payment/refund/
+// document ledger and its GST rules.
+export const BILLING_TAX_RULE_APPLIES_TO = ['all', 'subscription', 'topup'] as const;
+export type BillingTaxRuleAppliesTo = (typeof BILLING_TAX_RULE_APPLIES_TO)[number];
+
+export const BILLING_TAX_REGIMES = ['in_gst', 'none'] as const;
+export type BillingTaxRegime = (typeof BILLING_TAX_REGIMES)[number];
+
+export const BILLING_PAYMENT_KINDS = ['topup', 'subscription_first', 'subscription_renewal'] as const;
+export type BillingPaymentKind = (typeof BILLING_PAYMENT_KINDS)[number];
+
+export const BILLING_PAYMENT_STATUSES = ['captured', 'failed', 'refunded', 'partially_refunded', 'disputed'] as const;
+export type BillingPaymentStatus = (typeof BILLING_PAYMENT_STATUSES)[number];
+
+export const BILLING_METHOD_CATEGORIES = [
+  'card', 'upi', 'netbanking', 'wallet', 'emi', 'paylater', 'other', 'unknown',
+] as const;
+export type BillingMethodCategory = (typeof BILLING_METHOD_CATEGORIES)[number];
+
+export const BILLING_REFUND_STATUSES = ['pending', 'processed', 'failed'] as const;
+export type BillingRefundStatus = (typeof BILLING_REFUND_STATUSES)[number];
+
+export const BILLING_REFUND_INITIATORS = ['user', 'admin', 'provider', 'dispute'] as const;
+export type BillingRefundInitiator = (typeof BILLING_REFUND_INITIATORS)[number];
+
+export const BILLING_DOCUMENT_TYPES = ['receipt', 'tax_invoice', 'credit_note'] as const;
+export type BillingDocumentType = (typeof BILLING_DOCUMENT_TYPES)[number];
+
+export const BILLING_DOCUMENT_STATUSES = ['issued', 'void'] as const;
+export type BillingDocumentStatus = (typeof BILLING_DOCUMENT_STATUSES)[number];
+
+export const ACCOUNT_DELETION_ACTORS = ['user', 'admin'] as const;
+export type AccountDeletionActor = (typeof ACCOUNT_DELETION_ACTORS)[number];
+
+export const ACCOUNT_DELETION_STATUSES = ['started', 'completed', 'failed'] as const;
+export type AccountDeletionStatus = (typeof ACCOUNT_DELETION_STATUSES)[number];
+
 export const BEAT_GRANT_SOURCE_TYPES = [
   'subscription',
   'carry_forward',
