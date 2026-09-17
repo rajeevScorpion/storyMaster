@@ -21,7 +21,7 @@ Notes live in `research/`. Each paused stream has a `## Resume here` section lis
 | 05 | Docs vs code, compliance surfaces | done — reviewed; draft refund-policy seed confirmed at `lib/managed-pages/registry.ts:315` |
 | 06 | Razorpay capabilities (web) | done — answers folded into audit H1/H9/H10 and plan Phases 1, 4, 6 |
 | 07 | India tax and consumer law (web) | done — folded into audit H3/H4/H11/M8 |
-| 08 | Billing UX benchmarks, Stripe readiness (web) | paused (notes on disk) — queued next |
+| 08 | Billing UX benchmarks, Stripe readiness (web) | paused by owner usage limit — Part 1 and 4.1 used in the plan; the rest is needed before plan Phase 7 |
 
 ## Findings verified directly by the reviewer (Opus)
 
