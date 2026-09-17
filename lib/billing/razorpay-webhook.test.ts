@@ -9,6 +9,8 @@ vi.mock('@/lib/billing/razorpay', () => ({
 vi.mock('@/lib/billing/razorpay-sync', () => ({
   settleTopupOrder: vi.fn(),
   syncSubscriptionFromProvider: vi.fn(),
+  nextSubscriptionCheckoutOrderStatus: (current: string, provider: string) =>
+    ['refunded', 'partially_refunded', 'disputed'].includes(current) ? current : provider,
 }));
 
 import { fetchRazorpayPayment } from '@/lib/billing/razorpay';
@@ -121,6 +123,37 @@ describe('processRazorpayWebhookEvent — subscription events', () => {
     expect(result).toEqual({ status: 'processed', outcome: 'cycle_granted', relatedUserId: 'user-1', relatedSubscriptionId: 'billing-sub-1' });
     const orderUpdate = calls.find((call) => call.table === 'billing_orders' && call.op === 'update');
     expect(orderUpdate?.payload).toMatchObject({ status: 'active' });
+  });
+
+  it('keeps a recorded refund and the first payment id when a renewal syncs the checkout order', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_subscriptions', 'select', { data: { user_id: 'user-1', plan_version_id: 'plan-version-1' }, error: null });
+    enqueue('billing_orders', 'select', {
+      data: fakeOrder({
+        order_type: 'subscription_checkout',
+        provider_checkout_session_id: 'sub_1',
+        provider_payment_id: 'pay_first',
+        status: 'refunded',
+      }),
+      error: null,
+    });
+    enqueue('pricing_plan_versions', 'select', { data: { id: 'plan-version-1' }, error: null });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+    syncSubscriptionFromProviderMock.mockResolvedValueOnce({
+      billingSubscriptionId: 'billing-sub-1',
+      grantedCoins: 1000,
+      firstChargeConfirmed: true,
+      status: 'active',
+    });
+
+    const payload: RazorpayWebhookPayload = {
+      event: 'subscription.charged',
+      payload: { subscription: { entity: { id: 'sub_1' } }, payment: { entity: { id: 'pay_renewal' } } },
+    };
+    await processRazorpayWebhookEvent({ supabase, payload });
+
+    const orderUpdate = calls.find((call) => call.table === 'billing_orders' && call.op === 'update');
+    expect(orderUpdate?.payload).toMatchObject({ status: 'refunded', provider_payment_id: 'pay_first' });
   });
 
   it('reports subscription_synced when no coins were granted this event', async () => {

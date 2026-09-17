@@ -58,7 +58,10 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
+  -- Razorpay's expire_by is 30 minutes, so an older checkout can't be paid; reuse stops at 20 so the payer has time.
   v_stale_after constant interval := interval '30 minutes';
+  v_reuse_within constant interval := interval '20 minutes';
+  v_preparing_timeout constant interval := interval '2 minutes';
   v_version public.pricing_plan_versions%ROWTYPE;
   v_open public.billing_orders%ROWTYPE;
   v_superseded text[] := ARRAY[]::text[];
@@ -85,8 +88,10 @@ BEGIN
   WHERE user_id = p_user_id
     AND provider = 'razorpay'
     AND order_type = 'subscription_checkout'
-    AND status IN ('preparing', 'created')
-    AND created_at <= now() - v_stale_after;
+    AND (
+      (status = 'created' AND created_at <= now() - v_stale_after)
+      OR (status = 'preparing' AND created_at <= now() - v_preparing_timeout)
+    );
 
   SELECT * INTO v_open
   FROM public.billing_orders
@@ -103,7 +108,9 @@ BEGIN
       RETURN;
     END IF;
 
-    IF v_open.plan_version_id = p_plan_version_id AND v_open.provider_mode = p_provider_mode THEN
+    IF v_open.plan_version_id = p_plan_version_id
+      AND v_open.provider_mode = p_provider_mode
+      AND v_open.created_at > now() - v_reuse_within THEN
       RETURN QUERY SELECT v_open.id, true, v_open.provider_checkout_session_id, v_superseded, NULL::text;
       RETURN;
     END IF;

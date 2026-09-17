@@ -1,6 +1,10 @@
 import 'server-only';
 
-import { settleTopupOrder, syncSubscriptionFromProvider } from '@/lib/billing/razorpay-sync';
+import {
+  nextSubscriptionCheckoutOrderStatus,
+  settleTopupOrder,
+  syncSubscriptionFromProvider,
+} from '@/lib/billing/razorpay-sync';
 import { buildPricingRuntimeContextData } from '@/lib/pricing/snapshot';
 import { normalizeEntitlementPlanKey } from '@/lib/pricing/entitlement-tier.shared';
 import {
@@ -523,7 +527,7 @@ export async function reconcileRazorpaySubscription(
     const { error } = await supabase
       .from('billing_orders')
       .update({
-        status: syncResult.status,
+        status: nextSubscriptionCheckoutOrderStatus(billingOrder.status, syncResult.status),
         updated_at: new Date().toISOString(),
       })
       .eq('id', billingOrder.id);

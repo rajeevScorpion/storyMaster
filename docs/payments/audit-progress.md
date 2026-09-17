@@ -8,7 +8,7 @@
 | Phase | Status |
 |---|---|
 | 0 Discovery | **done 2026-09-17** — `phase-0-discovery-2026-09-17.md`; new streams `research/09`, `research/10` |
-| 1 Money correctness | **planned** — `phase-1-plan.md`. Next: Unit A (Sonnet), owner applies migration 124 on dev, Unit B, Opus review, sandbox runbook |
+| 1 Money correctness | **code complete, not yet sandbox-verified** — `phase-1-plan.md`. Unit A `1392121`, Unit B `fabea84`, Opus review fixes in the following commit. Next: owner applies 124 on dev, then sandbox runbook (plan §6). Phase 1 closes only after §6 passes |
 | 2–8 | not started |
 
 **Delegation:** Opus plans/reviews, Sonnet executes; **at most 2 agents at once**; ask the owner for session usage at each phase boundary.

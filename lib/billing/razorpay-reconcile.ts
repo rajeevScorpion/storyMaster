@@ -4,7 +4,11 @@ import type { PostgrestError } from '@supabase/supabase-js';
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { fetchRazorpaySubscription, getRazorpayMode, RazorpayConfigError, type RazorpayMode } from '@/lib/billing/razorpay';
-import { settleTopupOrder, syncSubscriptionFromProvider } from '@/lib/billing/razorpay-sync';
+import {
+  nextSubscriptionCheckoutOrderStatus,
+  settleTopupOrder,
+  syncSubscriptionFromProvider,
+} from '@/lib/billing/razorpay-sync';
 import { processRazorpayWebhookEvent, type RazorpayWebhookPayload } from '@/lib/billing/razorpay-webhook';
 import type { DbBillingOrder, DbBillingSubscription, DbBillingWebhookEvent, DbPricingPlanVersion } from '@/lib/types/database';
 
@@ -91,7 +95,8 @@ async function reconcileSubscriptionCheckouts(
     .eq('provider', 'razorpay')
     .eq('provider_mode', mode)
     .eq('order_type', 'subscription_checkout')
-    .eq('status', 'created')
+    // Abandoned/superseded checkouts are included: their Razorpay subscription may still have been paid.
+    .in('status', ['created', 'abandoned', 'superseded'])
     .not('provider_checkout_session_id', 'is', null)
     .lte('created_at', new Date(now - MIN_AGE_MS).toISOString())
     .gte('created_at', new Date(now - CHECKOUT_MAX_AGE_MS).toISOString())
@@ -113,6 +118,18 @@ async function reconcileSubscriptionCheckouts(
         continue;
       }
 
+      // An abandoned or superseded checkout that Razorpay expired or we cancelled never took money: close it
+      // out so it leaves future scans, without creating a subscription row.
+      if (order.status !== 'created' && ['expired', 'cancelled'].includes(subscription.status)) {
+        const closeResult = await supabase
+          .from('billing_orders')
+          .update({ status: subscription.status, updated_at: new Date().toISOString() })
+          .eq('id', order.id);
+
+        throwIfQueryFailed(closeResult.error, 'Failed to close unpaid subscription checkout order');
+        continue;
+      }
+
       const planVersion = await loadPlanVersion(supabase, order.plan_version_id);
       await syncSubscriptionFromProvider({
         supabase,
@@ -126,7 +143,10 @@ async function reconcileSubscriptionCheckouts(
 
       const updateResult = await supabase
         .from('billing_orders')
-        .update({ status: subscription.status, updated_at: new Date().toISOString() })
+        .update({
+          status: nextSubscriptionCheckoutOrderStatus(order.status, subscription.status),
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', order.id);
 
       throwIfQueryFailed(updateResult.error, 'Failed to update reconciled subscription checkout order');

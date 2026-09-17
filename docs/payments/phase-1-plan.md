@@ -519,9 +519,25 @@ Gates: `npx tsc --noEmit`, `npm run lint`, `npm test` (full suite).
 
 ## 8. Execution units (max 2 agents at once; commit per unit)
 
-1. **Unit A** — §4 Unit A + its tests + migration 124 files. Commit. Report back: the owner applies 124 on dev.
-2. **Unit B** — §4 Unit B + its tests. Commit.
+1. **Unit A** — §4 Unit A + its tests + migration 124 files. Commit. **Done: `1392121`, reviewed by Opus.**
+2. **Unit B** — §4 Unit B + its tests. Commit. **The owner applies 124 on dev only after Unit B**: before it, the
+   old checkout insert has no `provider_mode`, and 124 makes that column NOT NULL without a default.
 3. **Opus review** of both diffs (not the reports), then sandbox runbook §6 with the owner, then update
    `audit-progress.md` and PROJECT_STATE's migration ledger row for 124.
+
+### What landed (2026-09-17)
+
+- **Unit B `fabea84`.** Also moved the admin manual-recovery actions in `lib/pricing/enforcement.ts` onto the new
+  core; they now also require confirmed money before granting.
+- **Opus review fixes** (committed after Unit B):
+  - Migration 124's RPC reuses an open checkout only within 20 minutes of its creation (Razorpay's `expire_by`
+    is 30), and releases a stuck `preparing` row after 2 minutes.
+  - A subscription sync never overwrites a checkout order already marked `refunded`, `partially_refunded` or
+    `disputed`.
+  - Renewal payments no longer replace the checkout order's first payment id.
+  - Reconcile also rechecks `abandoned`/`superseded` checkouts, and closes them as `expired`/`cancelled` when
+    Razorpay confirms nothing was paid.
+- **Gates:** `tsc` clean, eslint clean, full suite 1,510 passed.
+- **Not done yet:** migration 124 on dev, sandbox runbook §6.
 
 Units A and B touch the same files' imports, so they run **sequentially**, not in parallel.

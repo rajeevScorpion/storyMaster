@@ -3,7 +3,11 @@ import 'server-only';
 import type { PostgrestError } from '@supabase/supabase-js';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { fetchRazorpayPayment } from '@/lib/billing/razorpay';
-import { settleTopupOrder, syncSubscriptionFromProvider } from '@/lib/billing/razorpay-sync';
+import {
+  nextSubscriptionCheckoutOrderStatus,
+  settleTopupOrder,
+  syncSubscriptionFromProvider,
+} from '@/lib/billing/razorpay-sync';
 import type { DbBillingOrder, DbBillingSubscription, DbPricingPlanVersion } from '@/lib/types/database';
 
 type AdminClient = ReturnType<typeof createAdminClient>;
@@ -110,8 +114,9 @@ async function processSubscriptionEvent(
     const updateResult = await supabase
       .from('billing_orders')
       .update({
-        status: syncResult.status,
-        provider_payment_id: payload.payload?.payment?.entity?.id ?? subscriptionOrder.provider_payment_id,
+        status: nextSubscriptionCheckoutOrderStatus(subscriptionOrder.status, syncResult.status),
+        // The checkout order keeps its first payment; renewal payments must not overwrite it.
+        provider_payment_id: subscriptionOrder.provider_payment_id ?? payload.payload?.payment?.entity?.id ?? null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', subscriptionOrder.id);

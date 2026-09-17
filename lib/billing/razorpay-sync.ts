@@ -29,6 +29,13 @@ export function isUniqueViolation(error: { code?: string } | null | undefined): 
   return error?.code === '23505';
 }
 
+const SETTLEMENT_EXCEPTION_ORDER_STATUSES = new Set(['refunded', 'partially_refunded', 'disputed']);
+
+/** A later subscription sync must not erase a refund or dispute already recorded on the checkout order. */
+export function nextSubscriptionCheckoutOrderStatus(currentStatus: string, providerStatus: string): string {
+  return SETTLEMENT_EXCEPTION_ORDER_STATUSES.has(currentStatus) ? currentStatus : providerStatus;
+}
+
 export interface SettleTopupOrderResult {
   state: 'granted' | 'already_granted' | 'pending' | 'failed' | 'refunded';
   grantedCoins: number;

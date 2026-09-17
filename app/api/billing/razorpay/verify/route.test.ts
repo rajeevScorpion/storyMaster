@@ -8,6 +8,8 @@ vi.mock('@/lib/billing/razorpay', () => ({
 vi.mock('@/lib/billing/razorpay-sync', () => ({
   settleTopupOrder: vi.fn(),
   syncSubscriptionFromProvider: vi.fn(),
+  nextSubscriptionCheckoutOrderStatus: (current: string, provider: string) =>
+    ['refunded', 'partially_refunded', 'disputed'].includes(current) ? current : provider,
 }));
 
 vi.mock('@/lib/supabase/admin', () => ({

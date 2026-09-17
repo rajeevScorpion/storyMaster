@@ -27,6 +27,7 @@ import {
 } from '@/lib/billing/razorpay';
 import {
   isUniqueViolation,
+  nextSubscriptionCheckoutOrderStatus,
   settleTopupOrder,
   syncSubscriptionFromProvider,
 } from './razorpay-sync';
@@ -233,6 +234,18 @@ describe('isUniqueViolation', () => {
     expect(isUniqueViolation({ code: '23503' })).toBe(false);
     expect(isUniqueViolation(null)).toBe(false);
     expect(isUniqueViolation(undefined)).toBe(false);
+  });
+});
+
+describe('nextSubscriptionCheckoutOrderStatus', () => {
+  it('follows the provider status for an ordinary checkout order', () => {
+    expect(nextSubscriptionCheckoutOrderStatus('created', 'active')).toBe('active');
+  });
+
+  it('keeps a refund or dispute already recorded on the order', () => {
+    expect(nextSubscriptionCheckoutOrderStatus('refunded', 'active')).toBe('refunded');
+    expect(nextSubscriptionCheckoutOrderStatus('partially_refunded', 'active')).toBe('partially_refunded');
+    expect(nextSubscriptionCheckoutOrderStatus('disputed', 'halted')).toBe('disputed');
   });
 });
 

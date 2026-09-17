@@ -22,6 +22,8 @@ vi.mock('@/lib/billing/razorpay', async (importOriginal) => {
 vi.mock('@/lib/billing/razorpay-sync', () => ({
   settleTopupOrder: vi.fn(),
   syncSubscriptionFromProvider: vi.fn(),
+  nextSubscriptionCheckoutOrderStatus: (current: string, provider: string) =>
+    ['refunded', 'partially_refunded', 'disputed'].includes(current) ? current : provider,
 }));
 
 vi.mock('@/lib/billing/razorpay-webhook', () => ({
@@ -224,6 +226,36 @@ describe('reconcileRazorpayBilling — top-ups', () => {
       expect.objectContaining({ billingOrderId: 'order-1', source: 'reconcile' })
     );
     expect(settleTopupOrderMock.mock.calls[0][0]).not.toHaveProperty('paymentIdHint');
+  });
+});
+
+describe('reconcileRazorpayBilling — subscription checkouts', () => {
+  it('closes an abandoned checkout whose Razorpay subscription expired, without syncing a subscription', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    getRazorpayModeMock.mockReturnValueOnce('test');
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('billing_orders', 'select', {
+      data: [fakeTopupOrder({
+        order_type: 'subscription_checkout',
+        provider_checkout_session_id: 'sub_1',
+        plan_version_id: 'plan-version-1',
+        status: 'abandoned',
+      })],
+      error: null,
+    }); // checkouts
+    enqueue('billing_subscriptions', 'select', { data: [], error: null }); // subscriptions
+    enqueue('billing_orders', 'select', { data: [], error: null }); // topups
+    enqueue('billing_orders', 'update', { data: null, error: null }); // close checkout, then abandon stale top-ups
+    enqueue('billing_webhook_events', 'select', { data: [], error: null }); // webhooks
+    fetchRazorpaySubscriptionMock.mockResolvedValueOnce({ id: 'sub_1', status: 'expired' } as any);
+
+    const result = await reconcileRazorpayBilling();
+
+    expect(result.checkouts).toBe(0);
+    expect(syncSubscriptionFromProviderMock).not.toHaveBeenCalled();
+    const closeUpdate = calls.find((call) => call.table === 'billing_orders' && call.op === 'update');
+    expect(closeUpdate?.payload).toMatchObject({ status: 'expired' });
   });
 });
 

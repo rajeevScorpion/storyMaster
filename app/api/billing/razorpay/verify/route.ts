@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { verifyRazorpayOrderSignature, verifyRazorpaySubscriptionSignature } from '@/lib/billing/razorpay';
-import { settleTopupOrder, syncSubscriptionFromProvider } from '@/lib/billing/razorpay-sync';
+import {
+  nextSubscriptionCheckoutOrderStatus,
+  settleTopupOrder,
+  syncSubscriptionFromProvider,
+} from '@/lib/billing/razorpay-sync';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import type { DbBillingOrder, DbPricingPlanVersion } from '@/lib/types/database';
@@ -93,8 +97,8 @@ export async function POST(request: Request) {
       const updateResult = await admin
         .from('billing_orders')
         .update({
-          provider_payment_id: body.razorpayPaymentId,
-          status: syncResult.status,
+          provider_payment_id: billingOrder.provider_payment_id ?? body.razorpayPaymentId,
+          status: nextSubscriptionCheckoutOrderStatus(billingOrder.status, syncResult.status),
           updated_at: new Date().toISOString(),
         })
         .eq('id', billingOrder.id);
