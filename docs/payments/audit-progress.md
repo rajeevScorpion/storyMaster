@@ -3,18 +3,52 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
+## Next session starts here (written 2026-09-17, owner at 70% usage, away from desk)
+
+**State:** branch `payments`, last commit is the handoff commit after `6685db5`, working tree clean. Phase 1 code is
+complete and reviewed (tsc, eslint, 1,510 tests green) but **not verified against Razorpay** and **migration 124 is not
+applied anywhere**. Nothing is merged to `dev`/`main`, nothing deployed.
+
+**Step 1 — close Phase 1 with the owner (Opus, no agents needed):**
+1. Ask the owner for session usage.
+2. Owner applies `supabase/migrations/124_billing_money_correctness.sql` on **dev** (run the precheck in its header
+   first; dev had 0 duplicate grants on 2026-09-17). Then verify read-only on dev (plan §6 "Database" 2 and 4) and
+   update the 124 row in PROJECT_STATE's ledger.
+3. **Open question to ask first:** where does the `payments` branch run against the dev database with a public
+   URL (Vercel preview? other)? Razorpay test webhooks need it. Don't guess.
+4. Owner does the dashboard steps: register the test webhook (events listed in `research/06`, including
+   `refund.*` and `payment.dispute.*`), set `RAZORPAY_WEBHOOK_SECRET` on that deployment, and turn on
+   `pricing_checkout_enabled` and `billing_reconcile_enabled` on dev.
+5. Walk the sandbox runbook, `phase-1-plan.md` §6, steps 3–9. Record results here. The UPI Autopay step answers the
+   long-open question in `research/06` Q1: write the finding there.
+6. When §6 passes, mark Phase 1 **done** in the table below and commit.
+
+**Step 2 — plan Phase 2** (durable payment/refund/document records, billing profile, retention-safe deletion) from
+`prompt-packs/…/04_PHASE_2_DURABLE_BILLING_LEDGER.md`. Write `docs/payments/phase-2-plan.md` to the same
+standard as `phase-1-plan.md` (verified facts, full migration SQL, per-file edits, tests, verification). Stop for
+owner approval before any code. Owner decisions that bear on it: #5 (GSTIN from business config) and #6 (8-year
+retention, anonymise on delete) below. Phase 1 deliberately left refunds of **renewal** payments unmatched
+(outcome `refund_unmatched`, payload kept); Phase 2's ledger should backfill from `billing_webhook_events`.
+
+**If something fails in the sandbox:** checkout can be stopped with `pricing_checkout_enabled` off (server-enforced
+within 60 s), and the backstop with `billing_reconcile_enabled` off. Plan §7 has the rest.
+
+**Working rules:** Opus plans and reviews, Sonnet agents execute (at most 2 at once, sequential when files
+overlap), review diffs rather than agent reports, commit per unit, keep this section current, and advise a fresh
+session at natural checkpoints.
+
 ## Implementation status
 
 | Phase | Status |
 |---|---|
 | 0 Discovery | **done 2026-09-17** — `phase-0-discovery-2026-09-17.md`; new streams `research/09`, `research/10` |
-| 1 Money correctness | **code complete, not yet sandbox-verified** — `phase-1-plan.md`. Unit A `1392121`, Unit B `fabea84`, Opus review fixes in the following commit. Next: owner applies 124 on dev, then sandbox runbook (plan §6). Phase 1 closes only after §6 passes |
+| 1 Money correctness | **code complete, not yet sandbox-verified** — `phase-1-plan.md`. Unit A `1392121`, Unit B `fabea84`, Opus review fixes `6685db5`. Next: owner applies 124 on dev, then sandbox runbook (plan §6). Phase 1 closes only after §6 passes |
 | 2–8 | not started |
 
 **Delegation:** Opus plans/reviews, Sonnet executes; **at most 2 agents at once**; ask the owner for session usage at each phase boundary.
 
 **Owner answers so far (2026-09-17)**
-- Billing entity is **Aavriti Design Studio** (GST-registered parent). Use a **placeholder GSTIN** on billing documents; owner supplies the real one at the end.
+- Billing entity is **Aavriti Design Studio** (GST-registered parent). GSTIN: see decision 5 below.
 - Signed-out visitors browse the whole catalogue and must sign in to watch anything (already built). The daily quota only concerns signed-in users.
 - Phase 0 kept light: the audit is same-day and no billing code changed since.
 
