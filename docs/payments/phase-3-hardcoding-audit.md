@@ -135,6 +135,31 @@ Worth knowing before scoping, because it decides how much of this is mechanical:
 So the union widening is safe but almost entirely silent. A plan that relies on "tsc will show us the
 sites" will miss category A and B.
 
+---
+
+## Appendix — the watch path, and where a slot is actually consumed
+
+Not hardcoding, but verified in the same session and it settles the brief's decision 1 ("pin slot
+consumption to a specific call site"), so it is recorded here rather than rediscovered.
+
+**The existing view recorder cannot be the quota ledger.** `recordView` (`app/actions/engagement.ts:107`)
+is called from exactly one place — `components/story/StorylinePlayer.tsx:417`, a mount `useEffect`, client
+side, fire-and-forget (`.catch(() => {})`), logged-in only. It is analytics. It cannot refuse anything, it
+fires on *mount* rather than on a successful load (so Phase 0 decision 2's "failed loads don't count" is not
+expressible there), and being client-initiated it is trivially skippable — which fails the pack's
+"enforced server-side, race-safe across devices" outright.
+
+**The content is already fetched server-side before the player exists.** `beats: StoryBeat[]` is a *prop*
+(`StorylinePlayer.tsx:112`), passed down by `StorylinePersistenceLoader:153`, which is rendered by
+`app/storyline/[id]/page.tsx:227`. That page is an async **server component** (`:146`, no `'use client'`)
+that fetches the storyline and already refuses with `notFound()` at `:179`.
+
+So "the story opened and its content loaded" is decided on the server, before any client code runs, at a
+point that already has a refusal path. **That server component is the enforcement point** — the quota check
+and the ledger write belong there, in one transaction, with `recordView` left alone as the analytics it is.
+Worth confirming that `/explore/[id]` and the kids surface reach content the same way before the plan
+commits to a single choke point.
+
 ## Open — for the owner, alongside the brief's five
 
 The brief's decisions 1-5 stand. This audit adds one that has to be answered before unit A is cut:
