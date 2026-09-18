@@ -73,6 +73,10 @@ export interface RazorpayPayment {
   /** Razorpay's fee and tax on its fee, in minor units. Stored as provider_fee_minor/provider_tax_minor. */
   fee?: number;
   tax?: number;
+  /** Epoch seconds, from Razorpay. The tax point of a top-up is when the money was taken, not when
+   * we happened to observe it -- reconcile can settle an order days later, and a wall-clock stamp
+   * would put the payment in the wrong financial year across a 31 March boundary. */
+  created_at?: number;
 }
 
 export interface RazorpayInvoice {

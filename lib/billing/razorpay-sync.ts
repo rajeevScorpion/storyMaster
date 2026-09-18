@@ -195,7 +195,7 @@ export async function settleTopupOrder(input: {
       providerFeeMinor: payment.fee ?? null,
       providerTaxMinor: payment.tax ?? null,
       purchaseSnapshot: order.purchase_snapshot_json,
-      capturedAt: new Date().toISOString(),
+      capturedAt: payment.created_at ? razorpayUnixToIso(payment.created_at) : new Date().toISOString(),
     });
   }
 

@@ -374,6 +374,33 @@ describe('processRazorpayWebhookEvent — refunds', () => {
       );
     });
 
+    it('marks the payment refunded on the second of two half refunds, not partially_refunded', async () => {
+      // The second event's own amount is only half the payment. Judging by it alone would leave the
+      // ledger saying partially_refunded while billing_orders -- which uses Razorpay's cumulative
+      // amount_refunded -- says refunded, and the two are meant to be the same fact.
+      const { supabase, enqueue, calls } = createFakeSupabase();
+      enqueue('billing_payments', 'select', { data: fakeLedgerPayment(), error: null });
+      enqueue('billing_orders', 'select', { data: null, error: null });
+      enqueue('billing_payments', 'update', { data: null, error: null });
+      fetchRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'pay_1', order_id: null, status: 'captured', amount: 1180, currency: 'INR',
+        amount_refunded: 1180, refund_status: 'full', invoice_id: null, captured: true,
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-2' });
+
+      const payload: RazorpayWebhookPayload = {
+        event: 'refund.created',
+        payload: { refund: { entity: { id: 'rfnd_2', payment_id: 'pay_1', amount: 590 } } },
+      };
+      await processRazorpayWebhookEvent({ supabase, payload });
+
+      // This refund row still records only its own 590...
+      expect(recordRefundMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 590 }));
+      // ...but the payment it belongs to is now fully refunded.
+      const paymentUpdate = calls.find((call) => call.table === 'billing_payments' && call.op === 'update');
+      expect(paymentUpdate?.payload).toMatchObject({ status: 'refunded' });
+    });
+
     it('falls back to the provider payment total_refunded when the webhook payload carries no amount', async () => {
       const { supabase, enqueue } = createFakeSupabase();
       enqueue('billing_payments', 'select', { data: fakeLedgerPayment(), error: null });

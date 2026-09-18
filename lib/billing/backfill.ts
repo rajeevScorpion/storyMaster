@@ -13,6 +13,47 @@ const ORDER_STATUS_TO_PAYMENT_STATUS: Record<string, BillingPaymentStatus | unde
   disputed: 'disputed',
 };
 
+/**
+ * The net/tax/gross to record for a backfilled order. A pre-Phase-2 order has no tax fields on its
+ * snapshot and had no GST applied, so net = gross = what was charged, marked `unknown_legacy`.
+ *
+ * A Phase-2 order does carry them, and can still reach the backfill -- an order whose settlement
+ * failed, or ran before the ledger tables existed, has no billing_payments row for this to skip.
+ * Stamping that one `unknown_legacy` with tax_minor 0 would record ₹0 tax on a charge that really
+ * did collect GST, in the permanent record. Use the checkout's own figures whenever they are there.
+ */
+function deriveBackfillMoney(order: DbBillingOrder): {
+  netMinor: number;
+  taxMinor: number;
+  grossMinor: number;
+  taxBreakdownJson: Record<string, unknown>;
+} {
+  const snapshot = order.purchase_snapshot_json as
+    | { netMinor?: number; taxMinor?: number; grossMinor?: number; tax?: { breakdown?: Record<string, unknown> } | null }
+    | null;
+
+  if (
+    snapshot &&
+    typeof snapshot.netMinor === 'number' &&
+    typeof snapshot.taxMinor === 'number' &&
+    typeof snapshot.grossMinor === 'number'
+  ) {
+    return {
+      netMinor: snapshot.netMinor,
+      taxMinor: snapshot.taxMinor,
+      grossMinor: snapshot.grossMinor,
+      taxBreakdownJson: { ...(snapshot.tax?.breakdown ?? {}), backfilled: true },
+    };
+  }
+
+  return {
+    netMinor: order.amount_minor,
+    taxMinor: 0,
+    grossMinor: order.amount_minor,
+    taxBreakdownJson: { taxStatus: 'unknown_legacy', backfilled: true },
+  };
+}
+
 export interface BackfillBillingPaymentsResult {
   scanned: number;
   inserted: number;
@@ -96,6 +137,7 @@ export async function backfillHistoricalBillingPayments(
     }
 
     const kind: BillingPaymentKind = order.order_type === 'subscription_checkout' ? 'subscription_first' : 'topup';
+    const money = deriveBackfillMoney(order);
 
     const insertResult = await supabase.from('billing_payments').insert({
       subject_ref: subjectRef,
@@ -110,10 +152,10 @@ export async function backfillHistoricalBillingPayments(
       kind,
       status: paymentStatus,
       currency_code: order.currency_code,
-      net_minor: order.amount_minor,
-      tax_minor: 0,
-      gross_minor: order.amount_minor,
-      tax_breakdown_json: { taxStatus: 'unknown_legacy', backfilled: true },
+      net_minor: money.netMinor,
+      tax_minor: money.taxMinor,
+      gross_minor: money.grossMinor,
+      tax_breakdown_json: money.taxBreakdownJson,
       purchase_snapshot_json: order.purchase_snapshot_json,
       captured_at: order.created_at,
     });

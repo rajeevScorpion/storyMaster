@@ -657,6 +657,35 @@ describe('syncSubscriptionFromProvider', () => {
 });
 
 describe('settleTopupOrder — ledger recording (Payments Phase 2, Unit B)', () => {
+  it('stamps captured_at from Razorpay, not from the clock at settle time', async () => {
+    // reconcile is a daily backstop, so it settles payments taken hours or days earlier. A wall-clock
+    // stamp would misdate the tax point, and across 31 March put it in the wrong financial year.
+    const { supabase, enqueue } = createFakeSupabase();
+    enqueue('billing_orders', 'select', { data: fakeOrder(), error: null });
+    enqueue('beat_grants', 'insert', { data: null, error: null });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+    fetchRazorpayPaymentMock.mockResolvedValueOnce(fakePayment({ created_at: 1774915200 })); // 2026-03-31T00:00:00Z
+
+    await settleTopupOrder({ supabase, billingOrderId: 'order-1', paymentIdHint: 'pay_1', source: 'reconcile' });
+
+    expect(recordPaymentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ capturedAt: '2026-03-31T00:00:00.000Z' })
+    );
+  });
+
+  it('falls back to now when Razorpay sent no created_at', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    enqueue('billing_orders', 'select', { data: fakeOrder(), error: null });
+    enqueue('beat_grants', 'insert', { data: null, error: null });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+    fetchRazorpayPaymentMock.mockResolvedValueOnce(fakePayment());
+
+    await settleTopupOrder({ supabase, billingOrderId: 'order-1', paymentIdHint: 'pay_1', source: 'verify' });
+
+    const capturedAt = recordPaymentMock.mock.calls[0][0].capturedAt as string;
+    expect(Number.isNaN(Date.parse(capturedAt))).toBe(false);
+  });
+
   it('records the payment even when the grant races into already_granted', async () => {
     const { supabase, enqueue } = createFakeSupabase();
     enqueue('billing_orders', 'select', { data: fakeOrder(), error: null });

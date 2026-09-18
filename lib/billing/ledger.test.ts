@@ -30,6 +30,7 @@ class FakeQueryBuilder implements PromiseLike<QueryResult> {
   constructor(private readonly result: QueryResult) {}
   select() { return this; }
   eq() { return this; }
+  is() { return this; }
   maybeSingle(): Promise<QueryResult> { return Promise.resolve(this.result); }
   single(): Promise<QueryResult> { return Promise.resolve(this.result); }
   then<TResult1 = QueryResult, TResult2 = never>(
@@ -170,6 +171,33 @@ describe('recordPayment', () => {
     const updateCall = calls.find((call) => call.table === 'billing_payments' && call.op === 'update');
     expect(updateCall?.payload).toMatchObject({ status: 'refunded' });
     expect(calls.filter((call) => call.op === 'insert')).toHaveLength(1); // never a second insert
+  });
+
+  it('never moves captured_at on a payment it has already recorded', async () => {
+    // captured_at is the tax point. Verify, the webhook and the daily reconcile all re-observe the
+    // same payment, so re-stamping it would walk an immutable financial record's date forward every
+    // time -- and across 31 March, into the wrong financial year.
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_payments', 'update', { data: { id: 'payment-1' }, error: null });
+
+    await recordPayment(basePaymentInput(supabase, { capturedAt: '2026-04-01T00:00:00.000Z' }));
+
+    const updateCalls = calls.filter((call) => call.table === 'billing_payments' && call.op === 'update');
+    // The main patch must not carry captured_at at all...
+    expect(updateCalls[0]?.payload).not.toHaveProperty('captured_at');
+    // ...and the only write that does is the separate one narrowed to rows where it is still null.
+    expect(updateCalls[1]?.payload).toEqual({ captured_at: '2026-04-01T00:00:00.000Z' });
+  });
+
+  it('does not attempt the captured_at fill-in when no capture time was supplied', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_payments', 'update', { data: { id: 'payment-1' }, error: null });
+
+    await recordPayment(basePaymentInput(supabase));
+
+    expect(calls.filter((call) => call.table === 'billing_payments' && call.op === 'update')).toHaveLength(1);
   });
 
   it('fails closed (does not throw) when migration 125 is absent, and latches for later calls', async () => {

@@ -660,6 +660,57 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax'
     expect(failUpdate?.payload).toMatchObject({ status: 'failed' });
   });
 
+  it('refuses to reuse a cached plan ref, while charging tax, on a database without migration 126', async () => {
+    // 125 applied without 126: the plan cache is still keyed on mode alone, so this ref was created
+    // at the pre-tax net. Reusing it would have Razorpay debit the net while the order records the
+    // gross -- a silent under-charge. No gross column means unverifiable, and unverifiable refuses.
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue, enqueueRpc } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    // fakePlanVersion carries no provider_price_ref_gross_minor key at all -- 126 is absent.
+    enqueue('pricing_plan_versions', 'select', {
+      data: fakePlanVersion({ provider_price_ref: 'plan_pre_tax', provider_price_ref_mode: 'test' }),
+      error: null,
+    });
+    enqueue('pricing_plans', 'select', { data: fakePlan(), error: null });
+    taxAvailable();
+    billingProfileWithState('24');
+    enqueueRpc({ data: [{ order_id: 'order-new', reused: false, provider_checkout_session_id: null, superseded_session_ids: [], blocked_reason: null }], error: null });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+
+    await expect(
+      prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' })
+    ).rejects.toThrow('pending a database update');
+
+    expect(createRazorpaySubscriptionMock).not.toHaveBeenCalled();
+  });
+
+  it('still creates a fresh plan at the gross on a database without migration 126', async () => {
+    // The counterpart to the test above: a plan created right now was created at the gross just
+    // quoted, so there is nothing stale to guard against and checkout must not be blocked.
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue, enqueueRpc } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_plan_versions', 'select', {
+      data: fakePlanVersion({ provider_price_ref: null, provider_price_ref_mode: null }),
+      error: null,
+    });
+    enqueue('pricing_plans', 'select', { data: fakePlan(), error: null });
+    taxAvailable();
+    billingProfileWithState('24');
+    enqueueRpc({ data: [{ order_id: 'order-new', reused: false, provider_checkout_session_id: null, superseded_session_ids: [], blocked_reason: null }], error: null });
+    createRazorpayPlanMock.mockResolvedValueOnce(fakeRazorpayPlan({ id: 'plan_rzp_fresh' }));
+    enqueue('pricing_plan_versions', 'update', { data: null, error: null });
+    enqueue('pricing_plan_versions', 'select', { data: { provider_price_ref: 'plan_rzp_fresh' }, error: null });
+    createRazorpaySubscriptionMock.mockResolvedValueOnce(fakeRazorpaySubscription());
+    enqueue('billing_orders', 'update', { data: null, error: null });
+
+    await prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' });
+
+    expect(createRazorpayPlanMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 23482 }));
+    expect(createRazorpaySubscriptionMock).toHaveBeenCalledWith(expect.objectContaining({ planId: 'plan_rzp_fresh' }));
+  });
+
   it('refuses subscription checkout without a declared billing-profile state', async () => {
     getFeatureFlagMock.mockResolvedValueOnce(true);
     const { supabase, enqueue } = createFakeSupabase();

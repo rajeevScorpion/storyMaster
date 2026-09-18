@@ -249,6 +249,15 @@ export async function prepareRazorpayCheckoutInternal(
     try {
       const planRef = await ensureRazorpayPlanRef(supabase, version, plan, providerMode, tax.grossMinor);
 
+      if (planRef.reused && planRef.grossMinor === null && tax.taxMinor > 0) {
+        // 125 applied but 126 not: tax is being charged, yet the plan cache is still keyed on mode
+        // alone, so a plan created before Phase 2 is reused and Razorpay debits the old net while
+        // this order records the gross. A freshly created plan is fine -- it was created at the
+        // gross just quoted -- so only reuse is refused. The two migrations are meant to be applied
+        // together (docs/payments/audit-progress.md).
+        throw new Error('Subscription checkout is temporarily unavailable pending a database update. Please try again shortly.');
+      }
+
       if (planRef.grossMinor !== null && planRef.grossMinor !== tax.grossMinor) {
         // A concurrent request created/reused a plan at a different gross (e.g. a rate change mid-flight).
         // Refuse rather than charge a subscription at an amount that doesn't match what we just quoted.
@@ -494,6 +503,10 @@ interface EnsureRazorpayPlanRefResult {
   /** null when the database has no provider_price_ref_gross_minor column (migration 126 absent) --
    * the caller can't verify the gross matched and must not compare against it. */
   grossMinor: number | null;
+  /** True when a previously stored plan ref was returned as-is. A reused ref was created at some
+   * earlier amount; a freshly created one was created at the gross just quoted. The caller needs the
+   * difference to tell "unverifiable but known-correct" from "unverifiable and possibly stale". */
+  reused: boolean;
 }
 
 /**
@@ -521,7 +534,7 @@ async function ensureRazorpayPlanRef(
     (!hasGrossColumn || storedGross === grossMinor);
 
   if (canReuse) {
-    return { razorpayPlanId: version.provider_price_ref as string, grossMinor: hasGrossColumn ? storedGross : null };
+    return { razorpayPlanId: version.provider_price_ref as string, grossMinor: hasGrossColumn ? storedGross : null, reused: true };
   }
 
   const createdPlan = await createRazorpayPlan({
@@ -578,6 +591,7 @@ async function ensureRazorpayPlanRef(
   return {
     razorpayPlanId: providerPriceRef,
     grossMinor: hasGrossColumn ? (reselected?.provider_price_ref_gross_minor ?? null) : null,
+    reused: false,
   };
 }
 

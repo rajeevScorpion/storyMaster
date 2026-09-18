@@ -117,6 +117,35 @@ describe('backfillHistoricalBillingPayments', () => {
     });
   });
 
+  it('keeps the tax figures a Phase-2 order already carries, instead of stamping it unknown_legacy', async () => {
+    // Reachable whenever a taxed order never got a payment row -- a settlement that failed, or one
+    // that ran before 125 created the ledger tables. Recording tax_minor 0 on a charge that really
+    // did collect GST would put a wrong number in the permanent record.
+    const { supabase, insertedRows } = fakeSupabase([
+      fakeOrder({
+        amount_minor: 23482,
+        purchase_snapshot_json: {
+          kind: 'topup',
+          beatAmount: 50,
+          netMinor: 19900,
+          taxMinor: 3582,
+          grossMinor: 23482,
+          tax: { breakdown: { ratePercent: 18, supplyType: 'intra_state', cgstMinor: 1791, sgstMinor: 1791, igstMinor: 0 } },
+        },
+      }),
+    ]);
+
+    await backfillHistoricalBillingPayments(supabase);
+
+    expect(insertedRows[0]).toMatchObject({
+      net_minor: 19900,
+      tax_minor: 3582,
+      gross_minor: 23482,
+      tax_breakdown_json: { ratePercent: 18, supplyType: 'intra_state', backfilled: true },
+    });
+    expect(insertedRows[0].tax_breakdown_json).not.toHaveProperty('taxStatus');
+  });
+
   it('maps a subscription_checkout order to kind subscription_first', async () => {
     const { supabase, insertedRows } = fakeSupabase([fakeOrder({ order_type: 'subscription_checkout' })]);
 

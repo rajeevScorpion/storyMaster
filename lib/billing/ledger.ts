@@ -177,7 +177,6 @@ export async function recordPayment(input: RecordPaymentInput): Promise<LedgerWr
       provider_fee_minor: input.providerFeeMinor ?? null,
       provider_tax_minor: input.providerTaxMinor ?? null,
       webhook_event_id: input.webhookEventId ?? null,
-      captured_at: input.capturedAt ?? null,
       updated_at: new Date().toISOString(),
     })
     .eq('provider', input.provider)
@@ -188,6 +187,24 @@ export async function recordPayment(input: RecordPaymentInput): Promise<LedgerWr
 
   if (updateResult.error) {
     throw new Error(`Failed to update already-recorded payment: ${updateResult.error.message}`);
+  }
+
+  // captured_at is deliberately absent from the patch above: it is the tax point, so it is written
+  // once and never moved. Verify, the webhook and the daily reconcile all re-observe the same
+  // payment, and re-stamping would walk an immutable financial record's date forward every time.
+  // Only fill it in when the first write couldn't (an authorized-not-captured row, say).
+  if (input.capturedAt) {
+    const backfillCapturedAt = await input.supabase
+      .from('billing_payments')
+      .update({ captured_at: input.capturedAt })
+      .eq('provider', input.provider)
+      .eq('provider_mode', input.providerMode)
+      .eq('provider_payment_id', input.providerPaymentId)
+      .is('captured_at', null);
+
+    if (backfillCapturedAt.error) {
+      throw new Error(`Failed to stamp the capture time on an already-recorded payment: ${backfillCapturedAt.error.message}`);
+    }
   }
 
   return { state: 'already_recorded', id: (updateResult.data as { id: string } | null)?.id ?? null };

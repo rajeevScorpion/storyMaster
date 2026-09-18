@@ -268,7 +268,12 @@ async function processRefundEvent(
     if (recordResult.state === 'unavailable') {
       outcome = 'refund_recorded_ledger_unavailable';
     } else if (status === 'processed') {
-      const nextPaymentStatus: BillingPaymentStatus = refundAmountMinor >= payment.gross_minor ? 'refunded' : 'partially_refunded';
+      // Against the payment's refunded-to-date, not this one event's amount: two half refunds add up
+      // to a fully refunded payment, and comparing each event alone would leave the ledger saying
+      // 'partially_refunded' while billing_orders (which uses the same cumulative figure) says
+      // 'refunded'. refundedTotalMinor is Razorpay's own amount_refunded, fetched just above.
+      const refundedToDateMinor = Math.max(refundedTotalMinor ?? 0, refundAmountMinor);
+      const nextPaymentStatus: BillingPaymentStatus = refundedToDateMinor >= payment.gross_minor ? 'refunded' : 'partially_refunded';
       await markLedgerPaymentStatus(supabase, payment.id, nextPaymentStatus);
     }
   }
