@@ -3,28 +3,24 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-18 — Phase 2 code complete except Unit B2b)
+## Next session starts here (updated 2026-09-18 — Phase 2 code complete, all units reviewed)
 
-**Phase 2 state.** Plan approved: `phase-2-plan.md`, with owner decisions 8-10 below. Units A, B1, B2a and C
-are committed and reviewed. **Only Unit B2b (the admin tax-rules panel) is left**, and it was mid-flight when
-this session paused — see the snapshot under "Next steps". Migration 125 is no longer blocked on collecting a
-billing state (B2a ships that), but B2b is what lets the owner edit the rate without SQL; applying 125 before
-it exists means the seeded 18% rule is the only one available until it does.
+**Phase 2 state.** Plan approved: `phase-2-plan.md`, with owner decisions 8-10 below. **Every unit — A, B1,
+B2a, B2b and C — is committed and reviewed.** Phase 2 code is complete. What is left is not code: the owner
+applies 125, 126 and 127 on dev and walks `phase-2-plan.md` §6, and answers the open decisions below.
 
-### Blocker: applying 125 before Unit B2 ships kills checkout
+### What changed about applying 125
 
-125 seeds a **published** GST rule with `applies_to = 'all'` (`125_…sql:58`), and `getPublishedTaxRule`
-matches an `'all'` row for both `topup` and `subscription` (`lib/billing/tax-rules.ts:76,93`). So the moment
-125 is applied, every checkout runs the tax path, which refuses without a declared billing-profile state
-(`app/actions/pricing-checkout.ts`, "Please add your billing details (state) before checkout"). Nothing in
-the app can set that state: `getMyBillingProfile`/`saveMyBillingProfile` exist and have **no callers** —
-collecting it is exactly what B2 was held back to build. Applying 125 today therefore takes checkout down
-for everyone, on whichever environment it is applied to.
+The blocker recorded earlier is **resolved**: 125 seeds a *published* `'all'` GST rule, so applying it arms
+tax on every checkout, and checkout refuses anyone without a declared billing state — which nothing could
+collect until Unit B2a shipped the wallet's billing-details step. It ships now (`fb56e4c`), and B2b gives the
+owner an admin panel to edit or archive the rule without SQL (`f89ddda`), so 125 can be applied.
 
-Two ways out, owner's call:
-1. **Build Unit B2 first, then apply 125, 126 and 127 together** (recommended — it is the plan's own order).
-2. Change 125's seeded rule to `status = 'draft'` and publish it from the admin panel once B2 exists. 125 is
-   committed but unapplied everywhere, so editing it is still safe; it stops being safe the moment it is run.
+Two things to know before applying it:
+- The seeded rule is 18% / SAC 998439 / supplier state 24, marked "confirm rate and SAC with the CA". It goes
+  live the moment 125 runs.
+- Archiving the last published rule makes checkout **refuse**, not fall back to charging the net. That is
+  deliberate (`getPublishedTaxRule`'s `not_found`), and the admin panel says so.
 
 ### Review results (Opus, this session)
 
@@ -84,22 +80,24 @@ things international (Phase 7) has to revisit.
      multiple of ₹50, which today's catalogue happens to be — the next price typed into admin was all it
      would have taken. The test guarding it had built its expected string with the same formatter the code
      used, so it agreed with itself whatever the rounding did; it now states the rupees and paise outright.
-   - **B2b (admin)** — tax-rules panel on the pricing draft→publish convention, plus the backfill trigger.
-     **In flight when this session paused (2026-09-18).** First check `git log payments`: if a B2b commit is
-     there, the agent finished — review the diff, not its report. If it is not there, **the work is not
-     lost**; the working tree was snapshotted mid-flight to `refs/wip/unit-b2b`, which includes the untracked
-     new files:
-     ```
-     git show --stat refs/wip/unit-b2b      # what was captured
-     git diff HEAD refs/wip/unit-b2b        # the in-flight change
-     git checkout refs/wip/unit-b2b -- .    # restore it into the working tree
-     ```
-     It is a snapshot of an unfinished unit taken while an agent was still writing: a starting point to
-     finish and review, never a reviewed change. Delete the ref once B2b is properly committed.
-     **At snapshot time it had no `lib/billing/tax-rules-admin.test.ts`,** which the plan §4 requires — so at
-     minimum the tests were still to come. Run `npx tsc --noEmit`, `npm run lint` and `npm test` yourself
-     before trusting any gate claim.
-2. **Then** apply 125, 126 and 127 together, in order, on dev only, and walk plan §6.
+   - **B2b (admin) — done and reviewed.** `f89ddda`: the tax-rules panel (list, draft, publish, archive,
+     on the pricing draft→publish convention) and the payments backfill trigger. Publishing archives the
+     incumbent live rule first, so the partial unique index cannot bite; every read fails closed when 125 is
+     absent; `effective_from` is deliberately not editable, which is what keeps a future-dated rule — the
+     thing that would make checkout refuse outright — unreachable from the UI. Gates re-run by hand: tsc and
+     lint clean, **1,681 tests** across 148 files. The `refs/wip/unit-b2b` snapshot has been deleted.
+
+   **One open decision it surfaced, and correctly refused to decide for itself:** `pricing_publish_audit`
+   restricts `entity_type` by CHECK (`015_pricing_catalog.sql:88`) to the five entities that existed in 2026,
+   so inserting `'tax_rule'` raises 23514. **Tax-rule publish and archive therefore write no audit row** —
+   the one pricing entity with no trail, and the one that changes what every customer is charged.
+   `supabase/migrations/128_pricing_audit_tax_rule_entity.sql` is written (unapplied, with its rollback twin)
+   and widens the CHECK by one value. Applying it does **not** start the auditing on its own: the
+   `insertPricingAudit` calls still have to be added to `publishTaxRule`/`archiveTaxRule` in
+   `lib/billing/tax-rules-admin.ts`. Recommended, but it is the owner's call.
+
+2. **Then** apply 125, 126 and 127 together, in order, on dev only, and walk plan §6. 128 is optional and
+   independent — it only widens an audit CHECK, and nothing breaks without it.
 3. Answer the Unit C questions above; the flag one blocks nothing but ships a no-kill-switch delete button.
 
 **Migrations 125, 126 and 127 are all unapplied, on every environment**, and 125 is now blocked on B2 (above).
