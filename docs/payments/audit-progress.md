@@ -71,9 +71,30 @@ context and classified. Three findings change the shape of the phase and should 
   on creation). Whatever rank it is given is wrong on one axis, which breaks the seven sites that pass
   `'studio'` to mean "unrestricted". This is the case for capability entitlements over a tier rank.
 
-The audit adds a sixth owner decision to the brief's five, and it gates unit A: whether the three parallel
-per-plan shapes (`pricing_action_costs`'s three **columns**, plus two admin JSON settings objects) move to a
-plan-keyed representation or just get a fourth member each.
+### Phase 3 owner decisions (2026-09-18) — four of six answered
+
+These were put to the owner in one pass with the audit's findings and **answered**. They are binding input
+to `phase-3-plan.md`.
+
+11. **Quota reset is IST for everyone**, not per-user timezone — superseding Phase 0 decision 4 for now, to
+    be revisited when the product goes international. No timezone storage, no browser capture, no
+    anti-gaming rule. `lib/billing/financial-year.shared.ts` already has the IST handling to build on.
+12. **Audience adds no member to any of the three per-plan shapes.** It inherits Free by the existing
+    fallback, which the audit verified is already the correct behaviour for every one of them — Audience is
+    Free-like on creation coins, retention, HQ and action gates. No migration of `pricing_action_costs`, no
+    new settings keys. Revisit only when a capability must genuinely differ.
+13. **Audience ships monthly only.** Annual becomes its own unit after a sandbox walk, since no annual
+    subscription has ever run through Razorpay here and the mandate lifecycle is untested.
+14. **The quota ledger is a new table, unique on `(user_id, local_day, storyline_id)`**, making "replays are
+    free all day" a unique index and the cross-device race safe by construction. `storyline_views` is not
+    extended — its `UNIQUE(user_id, storyline_id)` is a lifetime view and changing it would rewrite the
+    meaning of every existing row.
+
+**Still open and owner-only:** the Audience launch prices, and with them audit finding 11 (dev Plus ₹850 vs
+prod ₹1,450 — the catalogues still disagree and a launch price has to be named).
+
+**What these answers remove from Phase 3:** all timezone infrastructure, the per-plan shape migration, and
+all annual billing work. What remains is the tier itself, the quota, and the capability tidy-up.
 
 **Read `phase-3-brief.md` next** — it is deliberately a brief, not a plan, and it says why.
 Scope is the pack's `05_PHASE_3_PLANS_ENTITLEMENTS_CONSUMPTION.md`: an entitlement model replacing plan-name
