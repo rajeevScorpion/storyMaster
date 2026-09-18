@@ -27,6 +27,7 @@ const EXPECTED_SETTINGS_HREFS = [
   '/admin/settings/video-export',
   '/admin/settings/generation',
   '/admin/settings/pages',
+  '/admin/settings/billing-operations',
 ];
 
 const EXPECTED_PRICING_HREFS = [

@@ -43,6 +43,7 @@ import {
   Wind,
   Workflow,
   Wrench,
+  ToggleRight,
 } from 'lucide-react';
 
 // ── Single source of truth for the admin navigation tree ───────────────
@@ -256,6 +257,14 @@ const SETTINGS_CHILD_GROUPS: AdminNavChildGroup[] = [
         icon: FileText,
         description: 'Rollout legal, support, blog, docs, FAQ, and footer controls.',
         staticSummary: 'Managed rollout pages, footer controls, and route guards',
+      },
+      {
+        id: 'billing-operations',
+        label: 'Billing operations',
+        href: '/admin/settings/billing-operations',
+        icon: ToggleRight,
+        description: 'Account deletion, payment reconciliation, and tax document issuing switches.',
+        staticSummary: 'Deletion, reconciliation, and document issuing switches',
       },
     ],
   },
