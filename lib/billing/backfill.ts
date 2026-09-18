@@ -39,20 +39,69 @@ const REACHABLE_SUBSCRIPTION_ORDER_STATUSES = [
 /**
  * The billing_payments status a backfilled order should carry, or undefined when it isn't eligible.
  * Branches by order_type because the two order types use `billing_orders.status` for entirely
- * different things (see the two maps above). A subscription_checkout order that carries a
- * provider_payment_id was, per settleTopupOrder / syncSubscriptionFromProvider (the only writers of
- * that column -- see the premise verified in lib/billing/backfill.test.ts's header comment), observed
- * captured by Razorpay regardless of what its current subscription status reads today, UNLESS a later
- * refund/dispute overwrote that status to one of the three settlement values.
+ * different things (see the two maps above).
+ *
+ * A top-up's payment id is proof of capture on its own: settleTopupOrder writes it only after
+ * fetching the payment and seeing `captured`.
+ *
+ * A subscription's is NOT. processSubscriptionEvent (razorpay-webhook.ts) stamps the checkout order
+ * with whatever `payment.entity.id` rides along on the first subscription event that carries one,
+ * and it keeps the first id it ever sees. A first charge that FAILED arrives as subscription.pending
+ * or subscription.halted carrying a failed payment entity -- so a payment id on a subscription order
+ * can be money that was never taken. Inventing captured revenue in an eight-year tax record is worse
+ * than omitting a charge, so eligibility here needs the one signal that means Razorpay itself
+ * reported a paid invoice for the cycle: billing_subscriptions.first_charge_confirmed_at
+ * (razorpay-sync.ts sets it nowhere else).
  */
-function resolveBackfillPaymentStatus(order: DbBillingOrder): BillingPaymentStatus | undefined {
+function resolveBackfillPaymentStatus(
+  order: DbBillingOrder,
+  confirmedSubscriptionIds: ReadonlySet<string>
+): BillingPaymentStatus | undefined {
   if (!order.provider_payment_id) return undefined;
 
   if (order.order_type === 'subscription_checkout') {
+    const sessionId = order.provider_checkout_session_id;
+    if (!sessionId || !confirmedSubscriptionIds.has(sessionId)) return undefined;
     return SUBSCRIPTION_SETTLEMENT_STATUS_TO_PAYMENT_STATUS[order.status] ?? 'captured';
   }
 
   return TOPUP_ORDER_STATUS_TO_PAYMENT_STATUS[order.status];
+}
+
+/**
+ * The provider subscription ids, among this page's subscription orders, whose subscription row
+ * records a confirmed first charge. One query for the page rather than one per order.
+ */
+async function loadConfirmedSubscriptionIds(
+  supabase: AdminClient,
+  page: DbBillingOrder[]
+): Promise<ReadonlySet<string>> {
+  const sessionIds = Array.from(
+    new Set(
+      page
+        .filter((order) => order.order_type === 'subscription_checkout')
+        .map((order) => order.provider_checkout_session_id)
+        .filter((id): id is string => Boolean(id))
+    )
+  );
+
+  if (sessionIds.length === 0) return new Set<string>();
+
+  const result = await supabase
+    .from('billing_subscriptions')
+    .select('provider_subscription_id, first_charge_confirmed_at')
+    .in('provider_subscription_id', sessionIds);
+
+  if (result.error) {
+    throw new Error(`Failed to load subscriptions for backfill: ${result.error.message}`);
+  }
+
+  const rows = (result.data ?? []) as { provider_subscription_id: string | null; first_charge_confirmed_at: string | null }[];
+  return new Set(
+    rows
+      .filter((row) => row.first_charge_confirmed_at && row.provider_subscription_id)
+      .map((row) => row.provider_subscription_id as string)
+  );
 }
 
 /**
@@ -154,12 +203,14 @@ export async function backfillHistoricalBillingPayments(
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
 
+  const confirmedSubscriptionIds = await loadConfirmedSubscriptionIds(supabase, page);
+
   let inserted = 0;
   let skippedAlreadyRecorded = 0;
   let skippedIneligible = 0;
 
   for (const order of page) {
-    const paymentStatus = resolveBackfillPaymentStatus(order);
+    const paymentStatus = resolveBackfillPaymentStatus(order, confirmedSubscriptionIds);
     const subjectRef = order.subject_ref ?? order.user_id ?? null;
 
     if (!order.provider_payment_id || !paymentStatus || !subjectRef) {

@@ -46,7 +46,7 @@ function fakeOrder(overrides: Partial<DbBillingOrder> = {}): DbBillingOrder {
     subject_ref: 'user-1',
     provider: 'razorpay',
     order_type: 'topup_checkout',
-    provider_checkout_session_id: null,
+    provider_checkout_session_id: 'sub_rzp_1',
     provider_order_id: 'order_rzp_1',
     provider_payment_id: 'pay_1',
     currency_code: 'INR',
@@ -63,13 +63,28 @@ function fakeOrder(overrides: Partial<DbBillingOrder> = {}): DbBillingOrder {
   } as DbBillingOrder;
 }
 
-function fakeSupabase(orders: DbBillingOrder[], existingPaymentIds: Set<string> = new Set()) {
+/** `confirmedSubscriptionIds` are the provider subscription ids whose billing_subscriptions row has a
+ *  non-null first_charge_confirmed_at -- the only thing that makes a subscription order eligible. */
+function fakeSupabase(
+  orders: DbBillingOrder[],
+  existingPaymentIds: Set<string> = new Set(),
+  confirmedSubscriptionIds: string[] = ['sub_rzp_1']
+) {
   const insertedRows: any[] = [];
 
   const supabase = {
     from(table: string) {
       if (table === 'billing_orders') {
         return new FakeListQueryBuilder({ data: orders, error: null });
+      }
+      if (table === 'billing_subscriptions') {
+        return new FakeListQueryBuilder({
+          data: confirmedSubscriptionIds.map((id) => ({
+            provider_subscription_id: id,
+            first_charge_confirmed_at: '2026-05-01T00:00:00.000Z',
+          })),
+          error: null,
+        });
       }
       if (table === 'billing_payments') {
         return {
@@ -209,6 +224,36 @@ describe('backfillHistoricalBillingPayments', () => {
 
       expect(insertedRows.map((r) => r.status)).toEqual(['refunded', 'partially_refunded', 'disputed']);
       expect(insertedRows.every((r) => r.kind === 'subscription_first')).toBe(true);
+    });
+
+    it('refuses a subscription order whose first charge was never confirmed, payment id or not', async () => {
+      // The case that makes a payment id alone unsafe here: processSubscriptionEvent stamps the
+      // checkout order with whatever payment entity rides along on the first subscription event that
+      // carries one, and a FAILED first charge arrives as subscription.pending / subscription.halted
+      // carrying a failed payment. Recording that as captured would invent revenue in an eight-year
+      // tax record. Only a confirmed paid invoice (first_charge_confirmed_at) makes it eligible.
+      const { supabase, insertedRows } = fakeSupabase(
+        [fakeOrder({ order_type: 'subscription_checkout', provider_payment_id: 'pay_failed_1', status: 'halted' })],
+        new Set(),
+        [] // no subscription has a confirmed first charge
+      );
+
+      const result = await backfillHistoricalBillingPayments(supabase);
+
+      expect(insertedRows).toHaveLength(0);
+      expect(result).toMatchObject({ scanned: 1, inserted: 0, skippedIneligible: 1 });
+    });
+
+    it('refuses a subscription order that links to no subscription row at all', async () => {
+      const { supabase, insertedRows } = fakeSupabase(
+        [fakeOrder({ order_type: 'subscription_checkout', provider_payment_id: 'pay_x', provider_checkout_session_id: null })],
+        new Set(),
+        []
+      );
+
+      await backfillHistoricalBillingPayments(supabase);
+
+      expect(insertedRows).toHaveLength(0);
     });
 
     it('still treats an abandoned subscription checkout with no payment id as ineligible', async () => {
