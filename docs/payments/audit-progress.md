@@ -63,12 +63,16 @@ idempotency and missing-schema latch, and the 126 plan-ref race guard.
 
 ### Next steps
 
-1. **Unit B2** — the wallet billing-details step (legal name, state, optional company and GSTIN, before
-   checkout), "₹X + GST" price lines with the payable total, the admin tax-rules panel following the pricing
-   draft→publish convention, and the backfill trigger. It lives in files B1 and C were told not to touch:
-   `components/pricing/WalletPage.tsx`, `components/admin/**`, `app/admin/**`. The server side is finished and
-   waiting: `getMyBillingProfile`/`saveMyBillingProfile` (`app/actions/billing-profile.ts`), the state list and
-   GSTIN regex (`lib/billing/india-states.shared.ts`), and `backfillHistoricalBillingPayments`.
+1. **Unit B2** — planned in `phase-2-unit-b2-plan.md` (`936475e`), self-contained, with the verified facts
+   and the two traps that would each have cost an executor a cycle: `billing_tax_rules` has a partial unique
+   index on `(market_key, applies_to)` for live rows, so publishing without archiving the incumbent first
+   raises 23505; and `lib/admin/nav.test.ts` asserts the pricing destinations by exact list with unique icons.
+   It splits in two, run **sequentially** because both touch `lib/types/pricing.ts`:
+   - **B2a (wallet)** — billing-details dialog, checkout gated on a declared state, "₹X + GST" price lines.
+     **Dispatched to a Sonnet agent 2026-09-18.** If no `feat(payments)` commit for it is on `payments`, it
+     did not finish: read the plan's §3 and finish it. Nothing else depends on its intermediate state.
+   - **B2b (admin)** — tax-rules panel on the pricing draft→publish convention, plus the backfill trigger.
+     **Not started**, and must not start until B2a is committed.
 2. **Then** apply 125, 126 and 127 together, in order, on dev only, and walk plan §6.
 3. Answer the Unit C questions above; the flag one blocks nothing but ships a no-kill-switch delete button.
 
