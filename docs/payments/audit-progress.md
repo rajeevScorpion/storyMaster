@@ -61,6 +61,14 @@ idempotency and missing-schema latch, and the 126 plan-ref race guard.
   a fresh OAuth round trip; and the terms, help-legal and FAQ pages still saying self-serve deletion does not
   exist.
 
+### Known, deliberate, and worth not rediscovering
+
+**The wallet asks for a tax rule by the user's pricing market key; checkout hardcodes `'IN'.`** For a non-IN
+market the wallet would therefore show no tax line while checkout would still find the seeded `'IN'` rule and
+demand a billing state. It cannot mis-charge anyone today — Razorpay checkout is refused outside the India
+market before any of this runs — but the hardcoded `'IN'` in `app/actions/pricing-checkout.ts` is one of the
+things international (Phase 7) has to revisit.
+
 ### Next steps
 
 1. **Unit B2** — planned in `phase-2-unit-b2-plan.md` (`936475e`), self-contained, with the verified facts
@@ -68,11 +76,15 @@ idempotency and missing-schema latch, and the 126 plan-ref race guard.
    index on `(market_key, applies_to)` for live rows, so publishing without archiving the incumbent first
    raises 23505; and `lib/admin/nav.test.ts` asserts the pricing destinations by exact list with unique icons.
    It splits in two, run **sequentially** because both touch `lib/types/pricing.ts`:
-   - **B2a (wallet)** — billing-details dialog, checkout gated on a declared state, "₹X + GST" price lines.
-     **Dispatched to a Sonnet agent 2026-09-18.** If no `feat(payments)` commit for it is on `payments`, it
-     did not finish: read the plan's §3 and finish it. Nothing else depends on its intermediate state.
+   - **B2a (wallet) — done and reviewed.** `fb56e4c`, plus Opus review fix `d199685`: the payable total was
+     formatted with no paise (copied from WalletPage's whole-rupee `formatPrice`), so ₹199 + 18% would have
+     been announced as "₹235 total" over a ₹234.82 debit. A gross is only a whole rupee when the net is a
+     multiple of ₹50, which today's catalogue happens to be — the next price typed into admin was all it
+     would have taken. The test guarding it had built its expected string with the same formatter the code
+     used, so it agreed with itself whatever the rounding did; it now states the rupees and paise outright.
    - **B2b (admin)** — tax-rules panel on the pricing draft→publish convention, plus the backfill trigger.
-     **Not started**, and must not start until B2a is committed.
+     **Dispatched to a Sonnet agent 2026-09-18.** If no commit for it is on `payments`, it did not finish:
+     read the plan's §4 and finish it. Nothing depends on its intermediate state.
 2. **Then** apply 125, 126 and 127 together, in order, on dev only, and walk plan §6.
 3. Answer the Unit C questions above; the flag one blocks nothing but ships a no-kill-switch delete button.
 
