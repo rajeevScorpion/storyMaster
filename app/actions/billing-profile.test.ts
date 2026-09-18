@@ -10,10 +10,17 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: vi.fn(),
 }));
 
-vi.mock('@/lib/billing/billing-profile', () => ({
-  loadBillingProfile: vi.fn(),
-  saveBillingProfile: vi.fn(),
-}));
+vi.mock('@/lib/billing/billing-profile', async (importOriginal) => {
+  // loadBillingProfile/saveBillingProfile are stubbed below; toBillingProfileDTO is left as the real,
+  // plain camelCase mapper (see lib/billing/billing-profile.ts) so these tests exercise the exact same
+  // mapping app/actions/pricing-runtime.ts relies on, rather than a third hand-copied version of it.
+  const actual = await importOriginal<typeof import('@/lib/billing/billing-profile')>();
+  return {
+    ...actual,
+    loadBillingProfile: vi.fn(),
+    saveBillingProfile: vi.fn(),
+  };
+});
 
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';

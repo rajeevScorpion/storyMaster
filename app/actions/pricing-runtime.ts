@@ -17,6 +17,8 @@ import { buildPricingRuntimeContextData } from '@/lib/pricing/snapshot';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { getFeatureFlag } from '@/lib/ai/model-config';
+import { loadBillingProfile, toBillingProfileDTO } from '@/lib/billing/billing-profile';
+import { getPublishedTaxRule, type TaxRuleLookupResult } from '@/lib/billing/tax-rules';
 import type {
   DbBeatGrant,
   DbBeatSpendReservation,
@@ -29,6 +31,7 @@ import type {
   DbBeatUsageEvent,
 } from '@/lib/types/database';
 import type {
+  BillingProfileDTO,
   PlanKey,
   PricingMarketKey,
   PricingRuntimeContext,
@@ -36,6 +39,7 @@ import type {
   PricingWalletPageData,
   PricingPlanOfferCard,
   PricingTopupOfferCard,
+  WalletTaxPreview,
 } from '@/lib/types/pricing';
 import { COINS_PER_BEAT, normalizeVideoExportPreset } from '@/lib/types/pricing';
 
@@ -240,9 +244,11 @@ export async function getPricingWalletPageData(
   let recentActivity: PricingWalletActivityItem[] = [];
   let storyCount = 0;
   let storylineCount = 0;
+  let billingProfile: BillingProfileDTO | null = null;
+  let taxPreview: WalletTaxPreview | null = null;
 
   if (userId) {
-    const [grantsResult, usageResult, storiesCountResult, storylinesCountResult] = await Promise.all([
+    const [grantsResult, usageResult, storiesCountResult, storylinesCountResult, taxRuleResult, billingProfileResult] = await Promise.all([
       supabase
         .from('beat_grants')
         .select('*')
@@ -264,6 +270,19 @@ export async function getPricingWalletPageData(
         .from('storylines')
         .select('*', { count: 'exact', head: true })
         .eq('user_id', userId),
+      // Payments Phase 2, Unit B2a: the wallet's headline is top-ups, so that is the rule kind asked
+      // for here; a market with different subscription rates can ask separately later. Neither of
+      // these two lookups may throw out of the wallet load -- a missing tax line or billing profile
+      // is far better than the whole wallet failing to open -- so both are wrapped and logged rather
+      // than allowed to reject the Promise.all.
+      getPublishedTaxRule(input.pricingMarketKey, 'topup').catch((err): TaxRuleLookupResult => {
+        console.error('getPricingWalletPageData: getPublishedTaxRule threw:', err);
+        return { status: 'unavailable' };
+      }),
+      loadBillingProfile(supabase, userId).catch((err) => {
+        console.error('getPricingWalletPageData: loadBillingProfile threw:', err);
+        return { status: 'unavailable' as const };
+      }),
     ]);
 
     throwIfQueryFailed(grantsResult.error, 'Failed to load wallet grant activity');
@@ -277,6 +296,10 @@ export async function getPricingWalletPageData(
     );
     storyCount = storiesCountResult.count ?? 0;
     storylineCount = storylinesCountResult.count ?? 0;
+    taxPreview = buildWalletTaxPreview(taxRuleResult);
+    billingProfile = billingProfileResult.status === 'ok' && billingProfileResult.profile
+      ? toBillingProfileDTO(billingProfileResult.profile)
+      : null;
   }
 
   return {
@@ -291,6 +314,30 @@ export async function getPricingWalletPageData(
     ),
     topupOffers: buildTopupOffers((topupsResult.data ?? []) as DbPricingTopupPack[]),
     recentActivity,
+    billingProfile,
+    taxPreview,
+  };
+}
+
+/**
+ * Payments Phase 2, Unit B2a (docs/payments/phase-2-unit-b2-plan.md §3): maps a tax rule lookup to
+ * what the wallet needs to know. 'unavailable' (migration 125 absent) becomes `null` so the wallet
+ * renders exactly as it does today; 'not_found' (125 applied, nothing published) still reports the
+ * label so a future "tax rules are being configured" message has somewhere to hang, but leaves
+ * `requiresBillingState: false` since checkout's existing refusal for that case is not a new message
+ * this unit should invent.
+ */
+function buildWalletTaxPreview(result: TaxRuleLookupResult): WalletTaxPreview | null {
+  if (result.status === 'unavailable') {
+    return null;
+  }
+  if (result.status === 'not_found') {
+    return { ratePercent: null, taxLabel: 'GST', requiresBillingState: false };
+  }
+  return {
+    ratePercent: result.rule.taxRegime === 'in_gst' ? result.rule.ratePercent : null,
+    taxLabel: 'GST',
+    requiresBillingState: true,
   };
 }
 

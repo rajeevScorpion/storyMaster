@@ -2,9 +2,8 @@
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
-import { loadBillingProfile, saveBillingProfile } from '@/lib/billing/billing-profile';
-import type { DbBillingProfile } from '@/lib/types/database';
-import type { BillingProfileDTO, BillingProfileInput, GetBillingProfileResult, SaveBillingProfileResult } from '@/lib/types/pricing';
+import { loadBillingProfile, saveBillingProfile, toBillingProfileDTO } from '@/lib/billing/billing-profile';
+import type { BillingProfileInput, GetBillingProfileResult, SaveBillingProfileResult } from '@/lib/types/pricing';
 
 /**
  * Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit B): the two actions Unit B2's wallet
@@ -25,25 +24,6 @@ async function getAuthenticatedUserId(): Promise<string> {
   }
 
   return user.id;
-}
-
-function toBillingProfileDTO(row: DbBillingProfile): BillingProfileDTO {
-  return {
-    id: row.id,
-    legalName: row.legal_name ?? '',
-    billingEmail: row.billing_email,
-    phone: row.phone,
-    companyName: row.company_name,
-    gstin: row.gstin,
-    stateCode: row.state_code,
-    countryCode: row.country_code,
-    addressLine1: row.address_line_1,
-    addressLine2: row.address_line_2,
-    city: row.city,
-    postalCode: row.postal_code,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
 }
 
 export async function getMyBillingProfile(): Promise<GetBillingProfileResult> {

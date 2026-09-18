@@ -3,6 +3,11 @@
 // its type here is erased at build time and safe on either side of the
 // client/server boundary, exactly like every other type in this file.
 import type { AgentReviewerRole } from '@/lib/agentic/reviewers.shared';
+// Payments Phase 2, Unit B2a: the wallet's GST display maths live in wallet-tax.shared.ts (pure,
+// isomorphic) so both the server action and the client wallet import the same arithmetic. Imported
+// (not redeclared) and re-exported below, so there is exactly one definition.
+import type { WalletTaxPreview } from '@/lib/billing/wallet-tax.shared';
+export type { WalletTaxPreview };
 
 export const PRICING_MARKET_KEYS = ['IN', 'ROW'] as const;
 export type PricingMarketKey = (typeof PRICING_MARKET_KEYS)[number];
@@ -526,6 +531,10 @@ export interface PricingWalletPageData {
   planOffers: PricingPlanOfferCard[];
   topupOffers: PricingTopupOfferCard[];
   recentActivity: PricingWalletActivityItem[];
+  // Payments Phase 2, Unit B2a: only populated for a signed-in user (see getPricingWalletPageData).
+  billingProfile: BillingProfileDTO | null;
+  /** null when migration 125 is absent -- the wallet then behaves exactly as it does today. */
+  taxPreview: WalletTaxPreview | null;
 }
 
 export type PricingAuthorizationDeniedReason =

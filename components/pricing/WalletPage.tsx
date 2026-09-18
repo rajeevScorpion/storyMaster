@@ -9,12 +9,16 @@ import { motion } from 'motion/react';
 import KissagoLogo from '@/components/ui/KissagoLogo';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
+import BillingDetailsDialog from '@/components/pricing/BillingDetailsDialog';
 import { RAZORPAY_CHECKOUT_SCRIPT_URL } from '@/lib/billing/razorpay-shared';
+import { formatPriceWithTaxLine } from '@/lib/billing/wallet-tax.shared';
+import { indiaStateName } from '@/lib/billing/india-states.shared';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { PRICING_RUNTIME_REFRESH_EVENT } from '@/lib/pricing/runtime-events';
 import { getPricingWalletPageData } from '@/app/actions/pricing-runtime';
 import type {
   BillingInterval,
+  BillingProfileDTO,
   PreparedRazorpayCheckout,
   PricingPlanOfferCard,
   PricingWalletPageData,
@@ -292,6 +296,8 @@ export default function WalletPage() {
   const [selectedPlanInterval, setSelectedPlanInterval] = useState<BillingInterval>('monthly');
   const [checkoutBusyKey, setCheckoutBusyKey] = useState<string | null>(null);
   const [razorpayReady, setRazorpayReady] = useState(false);
+  const [billingDialogOpen, setBillingDialogOpen] = useState(false);
+  const [pendingCheckoutAction, setPendingCheckoutAction] = useState<(() => void) | null>(null);
 
   useEffect(() => {
     if (
@@ -376,7 +382,13 @@ export default function WalletPage() {
     !usingRazorpayMarket ||
     !razorpayReady;
 
-  const handlePlanCheckout = useCallback(async (offer: PricingPlanOfferCard) => {
+  // Payments Phase 2, Unit B2a: once a tax rule is published, checkout requires a declared billing
+  // state (the GST place of supply). Both checkout handlers below gate on this before they ever call
+  // requestPreparedRazorpayCheckout.
+  const requiresBillingDetails =
+    Boolean(walletData?.taxPreview?.requiresBillingState) && !walletData?.billingProfile?.stateCode;
+
+  const runPlanCheckout = useCallback(async (offer: PricingPlanOfferCard) => {
     const planVersionId = getSelectedPlanVersionId(offer, selectedPlanInterval);
     const provider = getSelectedPlanProvider(offer, selectedPlanInterval);
 
@@ -426,7 +438,16 @@ export default function WalletPage() {
     }
   }, [loadWalletData, pricingData.snapshot.pricingMarketKey, pricingData.snapshot.routingProvider, refreshPricing, router, selectedPlanInterval]);
 
-  const handleTopupCheckout = useCallback(async (topupPackId: string, packKey: string, provider: string | null) => {
+  const handlePlanCheckout = useCallback((offer: PricingPlanOfferCard) => {
+    if (requiresBillingDetails) {
+      setPendingCheckoutAction(() => () => void runPlanCheckout(offer));
+      setBillingDialogOpen(true);
+      return;
+    }
+    void runPlanCheckout(offer);
+  }, [requiresBillingDetails, runPlanCheckout]);
+
+  const runTopupCheckout = useCallback(async (topupPackId: string, packKey: string, provider: string | null) => {
     if (provider !== 'razorpay') {
       setCheckoutError('Razorpay checkout is available only for the India market in this launch slice.');
       return;
@@ -459,6 +480,23 @@ export default function WalletPage() {
     }
   }, [loadWalletData, pricingData.snapshot.pricingMarketKey, refreshPricing, router]);
 
+  const handleTopupCheckout = useCallback((topupPackId: string, packKey: string, provider: string | null) => {
+    if (requiresBillingDetails) {
+      setPendingCheckoutAction(() => () => void runTopupCheckout(topupPackId, packKey, provider));
+      setBillingDialogOpen(true);
+      return;
+    }
+    void runTopupCheckout(topupPackId, packKey, provider);
+  }, [requiresBillingDetails, runTopupCheckout]);
+
+  const handleBillingDetailsSaved = useCallback((profile: BillingProfileDTO) => {
+    setWalletData((current) => (current ? { ...current, billingProfile: profile } : current));
+    setBillingDialogOpen(false);
+    const action = pendingCheckoutAction;
+    setPendingCheckoutAction(null);
+    if (action) action();
+  }, [pendingCheckoutAction]);
+
   return (
     <main className="relative min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
       {checkoutEnabled && usingRazorpayMarket && (
@@ -482,6 +520,16 @@ export default function WalletPage() {
       </div>
 
       <MyStoriesDrawer isOpen={showMyStories} onClose={() => setShowMyStories(false)} />
+
+      <BillingDetailsDialog
+        open={billingDialogOpen}
+        profile={walletData?.billingProfile ?? null}
+        onClose={() => {
+          setBillingDialogOpen(false);
+          setPendingCheckoutAction(null);
+        }}
+        onSaved={handleBillingDetailsSaved}
+      />
 
       <div className="mx-auto max-w-6xl px-4 pb-16 pt-[clamp(5.5rem,18vh,8rem)]">
         <motion.div
@@ -618,6 +666,26 @@ export default function WalletPage() {
               <BalanceCard icon={WalletIcon} label="Top-up coins" value={topupCoins} hint="Non-expiring coin packs" loading={pricingLoading} />
               <BalanceCard icon={Sparkles} label="Bonus coins" value={bonusCoins} hint="Promos and rewards" loading={pricingLoading} />
             </div>
+
+            {pricingData.userId && walletData?.taxPreview && (
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-neutral-900/50 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">Billing details</p>
+                  <p className="mt-1 truncate text-sm text-neutral-200">
+                    {walletData.billingProfile
+                      ? `${walletData.billingProfile.legalName} · ${indiaStateName(walletData.billingProfile.stateCode) ?? walletData.billingProfile.stateCode}`
+                      : 'Add your legal name and GST state before you check out.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBillingDialogOpen(true)}
+                  className="cursor-pointer rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-neutral-300 transition-all duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/10 hover:text-neutral-100"
+                >
+                  {walletData.billingProfile ? 'Edit' : 'Add billing details'}
+                </button>
+              </div>
+            )}
           </section>
 
           <section className="rounded-[28px] border border-white/10 bg-white/5 p-6 backdrop-blur-md">
@@ -731,6 +799,10 @@ export default function WalletPage() {
                 const features = buildPlanFeatures(offer, walletData);
                 const description = getPlanDescription(offer);
                 const rateLabel = getPlanRateLabel(offer, selectedPrice, selectedPlanInterval);
+                const taxPreview = walletData?.taxPreview ?? null;
+                const planTaxLine = taxPreview && selectedPrice != null
+                  ? formatPriceWithTaxLine(offer.currencyCode, selectedPrice, taxPreview.ratePercent, taxPreview.taxLabel)
+                  : '';
                 const ctaLabel = getPlanCtaLabel({
                   offer,
                   currentPlan,
@@ -769,6 +841,9 @@ export default function WalletPage() {
                           <p className="mt-2 text-xs text-neutral-500">
                             {formatPrice(offer.currencyCode, offer.monthlyPriceMinor)} monthly · {formatPrice(offer.currencyCode, offer.annualPriceMinor)} yearly
                           </p>
+                        )}
+                        {planTaxLine && (
+                          <p className="mt-1 text-xs text-emerald-300/80">{planTaxLine}</p>
                         )}
                       </div>
 
@@ -817,7 +892,12 @@ export default function WalletPage() {
               </p>
             ) : (
               <div className="grid gap-4 lg:grid-cols-3">
-                {topups.map((pack) => (
+                {topups.map((pack) => {
+                  const topupTaxLine = walletData?.taxPreview
+                    ? formatPriceWithTaxLine(pack.currencyCode, pack.priceMinor, walletData.taxPreview.ratePercent, walletData.taxPreview.taxLabel)
+                    : '';
+
+                  return (
                   <article key={pack.packKey} className="flex flex-col items-center rounded-3xl border border-white/10 bg-neutral-900/60 p-5 text-center transition-all duration-200 hover:-translate-y-1 hover:border-emerald-300/25 hover:bg-neutral-900/80 hover:shadow-[0_18px_40px_rgba(16,185,129,0.14)]">
                     <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-3 text-emerald-300">
                       <Coins className="h-5 w-5" />
@@ -828,6 +908,9 @@ export default function WalletPage() {
                       Lets you create {formatBeatCount(Math.round(pack.coinAmount / COINS_PER_BEAT))}.
                     </p>
                     <p className="mt-5 text-3xl text-neutral-100">{formatPrice(pack.currencyCode, pack.priceMinor)}</p>
+                    {topupTaxLine && (
+                      <p className="mt-1 text-xs text-emerald-300/80">{topupTaxLine}</p>
+                    )}
                     <button
                       type="button"
                       disabled={
@@ -853,7 +936,8 @@ export default function WalletPage() {
                         : 'Buy coins'}
                     </button>
                   </article>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>

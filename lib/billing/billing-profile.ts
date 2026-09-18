@@ -3,14 +3,37 @@ import 'server-only';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { GSTIN_REGEX, isValidIndiaStateCode } from '@/lib/billing/india-states.shared';
 import type { DbBillingProfile } from '@/lib/types/database';
-import type { BillingProfileInput } from '@/lib/types/pricing';
+import type { BillingProfileDTO, BillingProfileInput } from '@/lib/types/pricing';
 
 /**
  * Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit B): reads and writes billing_profiles
  * (migration 125). Shared between app/actions/billing-profile.ts (the customer's own profile) and
  * app/actions/pricing-checkout.ts (place of supply at checkout) so both read the exact same row
  * shape and fail closed the same way. Mirrors lib/billing/tax-rules.ts's missing-schema latch.
+ *
+ * toBillingProfileDTO also lives here (not duplicated in the two 'use server' action files that
+ * need it) because a 'use server' file may only export async functions -- this plain mapper has to
+ * live in a plain server-only module either way, so both callers share one definition.
  */
+
+export function toBillingProfileDTO(row: DbBillingProfile): BillingProfileDTO {
+  return {
+    id: row.id,
+    legalName: row.legal_name ?? '',
+    billingEmail: row.billing_email,
+    phone: row.phone,
+    companyName: row.company_name,
+    gstin: row.gstin,
+    stateCode: row.state_code,
+    countryCode: row.country_code,
+    addressLine1: row.address_line_1,
+    addressLine2: row.address_line_2,
+    city: row.city,
+    postalCode: row.postal_code,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
