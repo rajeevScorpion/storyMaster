@@ -59,6 +59,30 @@ idempotency and missing-schema latch, and the 126 plan-ref race guard.
   a fresh OAuth round trip; and the terms, help-legal and FAQ pages still saying self-serve deletion does not
   exist.
 
+### Phase 2 loose ends closed (2026-09-18) — `f213092`, review fix `d12b4e5`
+
+- **Unit C has a kill switch.** `account_deletion_enabled`, default **false**, gated on the page, the
+  UserMenu entry and — the one that matters — inside `requestAccountDeletion` itself, since a server action
+  is reachable whatever the UI shows. `adminDeleteAccount` is deliberately not gated: an admin must still be
+  able to delete an account when self-serve is off. **It ships off; turn it on when you want it live.**
+- **No admin UI for the flag.** The executor looked and reported honestly that there is no generic
+  `feature_flags` panel: the only registry-driven flag UI is pricing-scoped, and `billing_reconcile_enabled`
+  — the precedent flag — is flipped by hand in the Supabase dashboard too. So this one is flipped the same
+  way, by SQL or the dashboard. Building a general flag panel is a separate piece of work, not smuggled in here.
+- **Tax-rule publish and archive now write an audit row, fail-soft.** Until 128 is applied the insert raises
+  23514 and is swallowed with a log; the publish still goes through. Apply 128 and auditing simply starts
+  working, no code change.
+- **The backfill no longer invents revenue.** The fix that made subscription orders eligible treated any
+  payment id as proof of capture. It is not: the webhook stamps the checkout order with whatever payment
+  entity rides along on the first subscription event carrying one, and a *failed* first charge arrives as
+  `subscription.pending`/`halted` carrying a failed payment. Eligibility now requires
+  `billing_subscriptions.first_charge_confirmed_at`, which is only ever set against a paid invoice.
+
+**What the backfill will actually do on dev:** two paid top-ups are eligible; the one historical subscription
+order (April, ₹850) is **not**, because its first charge was never confirmed by a paid invoice. That is
+correct — it belongs to the Razorpay account that was decommissioned, so its capture cannot be verified with
+the current keys. Expect `inserted: 2, skippedIneligible: 1`.
+
 ### §6 verification on dev — the database half passes (2026-09-18)
 
 Owner applied **125, 126 and 127 on dev**, confirmed in `schema_migration_ledger` (04:26-04:27 UTC).
