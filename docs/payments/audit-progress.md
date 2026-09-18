@@ -103,12 +103,41 @@ any tier from the backend without hassle.**
 
 | Unit | Commit | Status |
 |---|---|---|
-| Migration 129 — quota table, `consume_watch_slot`, the two Audience CHECKs | `e5c0b3d` + race fix | written, **not applied anywhere** |
+| Migration 129 — quota table, `consume_watch_slot`, the two Audience CHECKs | `e5c0b3d`, race fix `40ff401` | written, **not applied anywhere** |
 | A — `'audience'` as a plan key, the capability tidy-up | `04c0ce4` | done, reviewed |
-| B, C, D, E | — | not started |
+| B — quota ledger, enforcement, the `unlimitedWatching` capability | `e7cea4d` | done, reviewed — **one open defect, below** |
+| C, D, E | — | not started |
 
-**Three defects were found by reviewing rather than by the suite**, which is the pattern this project keeps
-seeing:
+### Start here next session
+
+**1. Fix the open defect in Unit B before anything else.** It is written up in full in `phase-3-plan.md`
+§5, in the block above B5. In short: the quota refusal is thrown as an `Error` and matched by message on the
+client, which `GOTCHAS.md:484-486` says explicitly does not survive to the browser in production. It works
+on a local dev server and fails on the Vercel preview, and it fails *silently* — a reader holding a cached
+copy is shown the story the server just refused. The fix is to return the refusal as data instead of
+throwing; one caller, contained change.
+
+**Nothing is live**: 129 is unapplied everywhere, so the missing-RPC latch allows every watch and the quota
+is inert. There is no bypass in any running environment today. **Do not judge the quota on the preview until
+this is fixed** — it will look like it does not work, and the reason will not be the quota.
+
+**2. Then Unit C** (Audience catalogue row + flipping `unlimitedWatching` off for Free), **D** (the real
+quota UX — Unit B left a one-line placeholder deliberately), **E** (the admin quota setting; until it lands,
+`watch-quota.ts` carries `FALLBACK_FREE_DAILY_WATCH_QUOTA = 3` with a comment saying to delete it).
+
+### Owner actions waiting
+
+- **Apply migration 129 on dev** (not prod). Until it runs, an admin promoting anyone to Audience gets a
+  `23514`, and the quota does nothing.
+- **When creating the Audience plan in the studio:** set it to `tier_rank` 2 and move Plus to 3, Studio to 4.
+  The column has no unique constraint and the default would collide with Plus, which would stop Plus
+  presenting as an upgrade from Audience. Verify: `select plan_key, tier_rank from public.pricing_plans
+  order by tier_rank` — four rows, four distinct ranks.
+- **Audience launch prices** whenever convenient; they gate nothing (decision 15).
+
+**Four defects were found by reviewing rather than by the suite**, which is the pattern this project keeps
+seeing. The fourth is Unit B's thrown-error marker, described under "Start here" above — the executing agent
+flagged it as unverifiable rather than asserting it worked, which is how it got caught. The other three:
 
 1. **The quota function's race was not safe** (my error, in `e5c0b3d`). The unique index stops the same
    storyline counting twice, but two devices opening *different* storylines are different rows, and under
@@ -241,7 +270,7 @@ session at natural checkpoints.
 | 0 Discovery | **done 2026-09-17** — `phase-0-discovery-2026-09-17.md`; new streams `research/09`, `research/10` |
 | 1 Money correctness | **code complete, not yet sandbox-verified** — `phase-1-plan.md`. Unit A `1392121`, Unit B `fabea84`, Opus review fixes `6685db5`. 124 applied on dev 2026-09-17. Checkout-frame fix `cd5cd0c`. Next: sandbox runbook (plan §6), in progress. Phase 1 closes only after §6 passes |
 | 2 Durable billing ledger | **done 2026-09-18** — every unit reviewed; migrations 125-128 applied on dev, none on prod. `phase-2-plan.md` §6 database half verified; the money walk and a throwaway deletion still owner-pending |
-| 3 Plans, entitlements, consumption | **planned 2026-09-18, awaiting approval** — `phase-3-plan.md` (5 units, migration 129), built on `phase-3-hardcoding-audit.md`. Decisions 11-15 answered. No code written |
+| 3 Plans, entitlements, consumption | **in progress 2026-09-18** — `phase-3-plan.md`. Units A (`04c0ce4`) and B (`e7cea4d`) done and reviewed; C, D, E not started. Migration 129 written, unapplied everywhere. One open defect in B, described at the top of this file |
 | 4–8 | not started |
 
 **Delegation:** Opus plans/reviews, Sonnet executes; **at most 2 agents at once**; ask the owner for session usage at each phase boundary.

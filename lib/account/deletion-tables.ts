@@ -54,6 +54,9 @@ export const DELETED_TABLES: DeletedTableRule[] = [
   { table: 'storyline_progress', matchColumn: 'user_id' },
   { table: 'storyline_likes', matchColumn: 'user_id' },
   { table: 'storyline_views', matchColumn: 'user_id' },
+  // Payments Phase 3 (migration 129): a person's own watch history. Private activity, no retention
+  // obligation -- the opposite of the billing tables, which survive anonymised for 8 years.
+  { table: 'user_daily_watch_slots', matchColumn: 'user_id' },
   { table: 'reference_sources', matchColumn: 'user_id' },
   { table: 'reference_adoptions', matchColumn: 'user_id' },
   // preset_scope='user' rows only -- system presets carry a NULL user_id and never match.

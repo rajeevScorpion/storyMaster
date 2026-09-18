@@ -198,7 +198,9 @@ Order of checks, cheapest and most permissive first:
 2. Plan capability `unlimitedWatching` (Unit C) → same. **Read the capability, never the rank** (audit §D).
 3. Otherwise call `consume_watch_slot` with the limit from `controls.freeDailyWatchQuota`.
 
-**Fail closed on absence, not open.** If migration 129 has not run, the RPC is missing and the call throws.
+**An absent migration must not block watching.** (This heading previously read "Fail closed on absence, not
+open", which contradicted the paragraph under it and the executing agent had to guess. It meant what the
+paragraph says.) If migration 129 has not run, the RPC is missing and the call throws.
 Catch that specific case and **allow the watch**, logging once — this is the one place where failing open is
 right, because a missing migration must never make the product unusable for everyone (`WORKING_AGREEMENTS.md`,
 and the `069_narration_accent.sql` outage that motivated the rule). Structurally probe, exactly as
@@ -210,6 +212,26 @@ and before the storyline fetch at `:469`. On refusal, throw an error carrying a 
 
 Place it **after** auth so signed-out callers still get `Not authenticated`, and **before** the fetch so a
 refused watch costs one indexed query rather than the whole payload.
+
+> **OPEN DEFECT — fix this before anything else in Phase 3.** Unit B shipped the refusal as a *thrown*
+> `Error` whose `message` the loader matches by exact equality. `GOTCHAS.md:484-486` says plainly: *"Next.js
+> recommends returning expected errors from server functions; don't rely on a thrown action's message
+> reaching the browser in production."* Production builds redact server-action error messages to a generic
+> string plus a digest, so the match fails everywhere except a local dev server — **including the Vercel
+> preview**, which is a production build.
+>
+> The failure is not a visible error, which is what makes it dangerous. When the match misses, control falls
+> to the generic `catch`, which sets an error only when there is no cached copy. **A reader with a cached
+> copy is therefore shown the story the server just refused.** The beats in that payload came from the
+> cache, not the refused call, so the refusal is real but invisible.
+>
+> Nothing is live today: migration 129 is unapplied everywhere, so the missing-RPC latch allows every watch
+> and the quota is entirely inert. **Do not treat the quota as working on the preview until this is fixed.**
+>
+> The fix is the pattern GOTCHAS names: have `loadStorylineWithBeats` **return** the refusal as data
+> rather than throw it — a discriminated result the loader switches on. One caller, so the change is
+> contained. Delete `WATCH_QUOTA_EXHAUSTED_MARKER` with it; a marker that cannot cross the boundary is
+> worse than none, because it reads as though it handles the case.
 
 **B5. `components/story/StorylinePersistenceLoader.tsx`** — the refusal path, and the subtle half of this
 unit. At `:115-120` the catch currently keeps a displayed cached payload and only sets an error when nothing
