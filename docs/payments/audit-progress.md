@@ -59,6 +59,28 @@ idempotency and missing-schema latch, and the 126 plan-ref race guard.
   a fresh OAuth round trip; and the terms, help-legal and FAQ pages still saying self-serve deletion does not
   exist.
 
+### §6 verification on dev — the database half passes (2026-09-18)
+
+Owner applied **125, 126 and 127 on dev**, confirmed in `schema_migration_ledger` (04:26-04:27 UTC).
+Prod untouched. Checked directly against the dev database, not inferred:
+
+| Check (`phase-2-plan.md` §6) | Result |
+|---|---|
+| The seven new tables exist, RLS on, **no** policies | pass — all 7, `relrowsecurity` true, 0 policies each (service-role only, as designed) |
+| Delete rules converted | pass — all ten are SET NULL: 125's billing/wallet keys and 127's six admin-attribution keys |
+| `subject_ref` backfilled everywhere it was added | pass — 0 nulls: `billing_orders` (17 rows), `billing_subscriptions` (1), `beat_grants` (10) |
+| The seeded tax rule is live and resolvable | pass — IN / all / in_gst / 18.00 / SAC 998439 / supplier state 24, published, `effective_from` = when 125 ran, so it is not future-dated and `getPublishedTaxRule` returns it |
+| Cached Razorpay plan refs | none to worry about — every published plan version has `provider_price_ref` null (the owner cleared them at the Razorpay account move), so every subscription checkout creates a fresh plan at the gross |
+
+**Still to do in §6, and both need the owner:**
+- **Deleting a throwaway test user** to prove billing rows survive with `user_id` null. Irreversible, and needs a
+  disposable account on dev — not run yet.
+- **The end-to-end money walk** (buy a top-up, confirm the charge is price + GST and one payment row with the
+  right split; subscribe; refund from the Razorpay dashboard). Needs real test payments on the preview.
+
+**`billing_payments` is empty**, so nothing has exercised the ledger yet. The backfill has three candidates on
+dev: two paid top-ups and one subscription first charge.
+
 ### Known, deliberate, and worth not rediscovering
 
 **The wallet asks for a tax rule by the user's pricing market key; checkout hardcodes `'IN'.`** For a non-IN
