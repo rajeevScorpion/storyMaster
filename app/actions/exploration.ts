@@ -12,6 +12,8 @@ import { normalizeBeatMediaFields } from '@/lib/types/beat-media';
 import { repairMissingReadyBeatImageUrls } from '@/app/actions/persistence';
 import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
 import { readerSafeImageError } from '@/lib/media/image-failure.shared';
+import { consumeWatchSlot } from '@/lib/pricing/watch-quota';
+import { WATCH_QUOTA_EXHAUSTED_MARKER } from '@/lib/pricing/watch-quota.shared';
 
 /**
  * Convert a DbBeat row back into a StoryNode for the client StoryMap.
@@ -461,6 +463,17 @@ export async function loadStorylineWithBeats(
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
+
+  // Payments Phase 3, Unit B (docs/payments/phase-3-plan.md §5, B4): the Free daily watch quota's
+  // one enforcement point (docs/payments/phase-3-hardcoding-audit.md, watch-path appendix). After
+  // auth so a signed-out caller still gets "Not authenticated"; before the storyline fetch so a
+  // refusal costs one indexed query, not the whole payload.
+  const watchSlot = await consumeWatchSlot({ userId: user.id, storylineId });
+  if (!watchSlot.allowed) {
+    // Exact marker, not a message a reader would see -- StorylinePersistenceLoader.tsx matches it
+    // by exact equality to tell this apart from any other load failure.
+    throw new Error(WATCH_QUOTA_EXHAUSTED_MARKER);
+  }
 
   const storylineSelect = 'id, story_id, title, beat_count, cover_image_url, is_vertical_story, aspect_ratio, author_name, is_public, created_at, node_path, beats, choices, publish_quality, stories(story_map, story_config, story_kind, is_vertical_story, aspect_ratio, updated_at)';
 

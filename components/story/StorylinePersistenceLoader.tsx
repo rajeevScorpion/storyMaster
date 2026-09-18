@@ -6,6 +6,7 @@ import { loadCachedStoryline, saveStorylineAndPrefetch } from '@/lib/persistence
 import type { StorylineManifestPayload } from '@/lib/persistence';
 import type { StorylineSeriesContext } from '@/lib/types/series';
 import { preloadStorylineMedia } from '@/lib/media/storyline-preload';
+import { WATCH_QUOTA_EXHAUSTED_MARKER } from '@/lib/pricing/watch-quota.shared';
 import OpenFlowLoader from './OpenFlowLoader';
 import StorylinePlayer from './StorylinePlayer';
 
@@ -37,6 +38,7 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
   const [payload, setPayload] = useState<StorylineManifestPayload | null>(null);
   const [sourceUpdatedAt, setSourceUpdatedAt] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [watchQuotaExhausted, setWatchQuotaExhausted] = useState(false);
   const [loadMessage, setLoadMessage] = useState('Checking saved copy...');
   const [loadPhaseIndex, setLoadPhaseIndex] = useState(0);
 
@@ -46,6 +48,7 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
     void (async () => {
       setLoadMessage('Checking saved copy...');
       setLoadPhaseIndex(0);
+      setWatchQuotaExhausted(false);
       const cachePromise = loadCachedStoryline({
         storylineId: props.storylineId,
         storyId: props.storyId,
@@ -113,6 +116,22 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
           currentPageIndex: 0,
         });
       } catch (loadError) {
+        if (loadError instanceof Error && loadError.message === WATCH_QUOTA_EXHAUSTED_MARKER) {
+          if (!active) return;
+          // The cache read races the network call above and can paint the story before this
+          // refusal arrives (loadCachedStoryline / the cachePromise.then handler below). Setting
+          // this true -- not false -- both clears anything already shown AND stops a cache
+          // resolution that is still in flight from painting it afterwards: the .then handler
+          // below bails out whenever hasDisplayedPayload is true, and it stays true from here on
+          // for the rest of this effect run. Every other error keeps today's behaviour below --
+          // only a quota refusal needs the already-displayed payload discarded, not merely
+          // declined.
+          hasDisplayedPayload = true;
+          setPayload(null);
+          setError(null);
+          setWatchQuotaExhausted(true);
+          return;
+        }
         const cached = await cachePromise;
         if (active && !hasDisplayedPayload && !cached) {
           setError(loadError instanceof Error ? loadError.message : 'Unable to load storyline');
@@ -133,6 +152,16 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
     props.shareToken,
   ]);
 
+  if (watchQuotaExhausted) {
+    // Unit D (docs/payments/phase-3-plan.md §6) owns the real upsell surface -- "N of 3 left
+    // today" copy, the last-slot confirm, offering Audience. This is a minimal placeholder so a
+    // refused watch renders something instead of hanging on the loading skeleton.
+    return (
+      <div className="min-h-screen bg-neutral-950 p-8 text-center text-neutral-300">
+        You&apos;ve reached today&apos;s free watch limit. Come back tomorrow, or upgrade for unlimited watching.
+      </div>
+    );
+  }
   if (error && !payload) {
     return <div className="min-h-screen bg-neutral-950 p-8 text-center text-neutral-300">{error}</div>;
   }

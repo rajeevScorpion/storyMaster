@@ -1055,6 +1055,12 @@ function normalizePricingPlanFeatureFlags(input?: PricingPlanFeatureFlags | null
     canAccessDownloads: Boolean(input?.canAccessDownloads ?? false),
     canAccessUnbrandedExports: Boolean(input?.canAccessUnbrandedExports ?? false),
     creatorControls: Boolean(input?.creatorControls ?? false),
+    // Payments Phase 3, Unit B (docs/payments/phase-3-plan.md §5, B0): the one capability that
+    // must default true, not false. Every other flag here defaults false because absence should
+    // mean "no access" -- but absence of this one means "no quota row configured yet", and a
+    // false default would switch a daily watch limit on for every paying account the moment this
+    // ships, before any admin has touched a toggle. Do not "fix" this to match its neighbours.
+    unlimitedWatching: Boolean(input?.unlimitedWatching ?? true),
     videoExportPreset: normalizeVideoExportPreset(input?.videoExportPreset),
   };
 }

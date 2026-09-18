@@ -613,6 +613,31 @@ export async function resolveEntitlementPlanKeyForUser(userId: string): Promise<
   }
 }
 
+/**
+ * Payments Phase 3, Unit B (docs/payments/phase-3-plan.md §5, B3): whether this user's plan is
+ * exempt from the daily free watch quota (lib/pricing/watch-quota.ts's consumeWatchSlot). Reads
+ * the capability off the resolved snapshot, never the tier rank -- PLAN_TIER_RANK is a promotion
+ * order, not a feature matrix, and audit §D is explicit that Audience/Plus/Studio only get this by
+ * Unit C setting `unlimitedWatching` true on their plan rows.
+ *
+ * Defaults to `true` (unrestricted) on any resolution failure, mirroring
+ * EffectivePricingSnapshot.unlimitedWatching's own fail-open default -- a pricing-system hiccup
+ * must never be what switches a watch limit on.
+ */
+export async function resolveUnlimitedWatchingForUser(userId: string): Promise<boolean> {
+  try {
+    const supabase = createAdminClient();
+    const state = await loadPricingState(supabase, userId);
+    return state.snapshot.unlimitedWatching;
+  } catch (error) {
+    console.error(
+      'resolveUnlimitedWatchingForUser failed, defaulting to unlimited (fail-open):',
+      error instanceof Error ? error.message : error
+    );
+    return true;
+  }
+}
+
 export async function getPricingPolicyContextForUser(userId: string | null): Promise<{
   planKey: PlanKey;
   entitlementPlanKey: PlanKey;

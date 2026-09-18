@@ -92,6 +92,7 @@ type PlanEditorState = {
   canAccessDownloads: boolean;
   canAccessUnbrandedExports: boolean;
   creatorControls: boolean;
+  unlimitedWatching: boolean;
   videoExportVerticalResolution: VideoExportVerticalResolution;
   videoExportWatermarkMode: VideoExportWatermarkMode;
   videoExportWatermarkPosition: VideoExportWatermarkPosition;
@@ -601,6 +602,8 @@ function defaultPlanEditor(planKey: PlanKey, market: PricingMarketKey): PlanEdit
     canAccessDownloads: planKey === 'studio',
     canAccessUnbrandedExports: planKey === 'studio',
     creatorControls: planKey === 'studio',
+    // Defaults true for every plan, not just studio -- see PricingPlanFeatureFlags.unlimitedWatching.
+    unlimitedWatching: true,
     videoExportVerticalResolution: DEFAULT_VIDEO_EXPORT_PRESET.verticalResolution,
     videoExportWatermarkMode: DEFAULT_VIDEO_EXPORT_PRESET.watermarkMode,
     videoExportWatermarkPosition: DEFAULT_VIDEO_EXPORT_PRESET.watermarkPosition,
@@ -1278,6 +1281,7 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
               <ToggleBox label="Creator Controls" checked={planEditor.creatorControls} onToggle={() => setPlanEditor((current) => ({ ...current, creatorControls: !current.creatorControls }))} />
               <ToggleBox label="Downloads" checked={planEditor.canAccessDownloads} onToggle={() => setPlanEditor((current) => ({ ...current, canAccessDownloads: !current.canAccessDownloads }))} />
               <ToggleBox label="Unbranded Exports" checked={planEditor.canAccessUnbrandedExports} onToggle={() => setPlanEditor((current) => ({ ...current, canAccessUnbrandedExports: !current.canAccessUnbrandedExports }))} />
+              <ToggleBox label="Unlimited Watching" checked={planEditor.unlimitedWatching} onToggle={() => setPlanEditor((current) => ({ ...current, unlimitedWatching: !current.unlimitedWatching }))} />
             </div>
 
             <div className="mt-4 rounded-xl border border-white/10 bg-neutral-950/40 p-4">
@@ -1368,6 +1372,7 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                       canAccessDownloads: planEditor.canAccessDownloads,
                       canAccessUnbrandedExports: planEditor.canAccessUnbrandedExports,
                       creatorControls: planEditor.creatorControls,
+                      unlimitedWatching: planEditor.unlimitedWatching,
                       videoExportPreset: {
                         verticalResolution: planEditor.videoExportVerticalResolution,
                         watermarkMode: planEditor.videoExportWatermarkMode,
@@ -2362,6 +2367,7 @@ function buildPlanEditor(
     canAccessDownloads: Boolean(record?.plan.feature_flags_json?.canAccessDownloads ?? fallback.canAccessDownloads),
     canAccessUnbrandedExports: Boolean(record?.plan.feature_flags_json?.canAccessUnbrandedExports ?? fallback.canAccessUnbrandedExports),
     creatorControls: Boolean(record?.plan.feature_flags_json?.creatorControls ?? fallback.creatorControls),
+    unlimitedWatching: Boolean(record?.plan.feature_flags_json?.unlimitedWatching ?? fallback.unlimitedWatching),
     videoExportVerticalResolution: videoExportPreset.verticalResolution,
     videoExportWatermarkMode: videoExportPreset.watermarkMode,
     videoExportWatermarkPosition: videoExportPreset.watermarkPosition,

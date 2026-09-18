@@ -364,6 +364,13 @@ export interface PricingPlanFeatureFlags {
   canAccessDownloads?: boolean;
   canAccessUnbrandedExports?: boolean;
   creatorControls?: boolean;
+  /**
+   * Payments Phase 3, Unit B (docs/payments/phase-3-plan.md §5, B0). Exempts the plan from the
+   * daily free watch quota (lib/pricing/watch-quota.ts). Unlike every other capability here,
+   * absence must normalize to `true`, not `false` -- see the normalizer in
+   * app/actions/pricing-admin.ts for why.
+   */
+  unlimitedWatching?: boolean;
   videoExportPreset?: Partial<VideoExportPreset> | null;
 }
 
@@ -419,6 +426,9 @@ export interface EffectivePricingSnapshot {
   canAccessDownloads: boolean;
   canAccessUnbrandedExports: boolean;
   creatorControls: boolean;
+  /** See PricingPlanFeatureFlags.unlimitedWatching -- defaults `true` (unrestricted), the one
+   * capability in this codebase that fails open rather than closed. */
+  unlimitedWatching: boolean;
   videoExportPreset: VideoExportPreset;
   availablePromoBeats: number;
   availableSubscriptionBeats: number;
@@ -468,6 +478,7 @@ export interface PricingPlanOfferCard {
   canAccessDownloads: boolean;
   canAccessUnbrandedExports: boolean;
   creatorControls: boolean;
+  unlimitedWatching: boolean;
   videoExportPreset: VideoExportPreset;
   isCurrentPlan: boolean;
 }

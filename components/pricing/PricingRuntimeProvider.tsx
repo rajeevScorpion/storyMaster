@@ -134,6 +134,8 @@ const DEFAULT_PRICING_RUNTIME_CONTEXT: PricingRuntimeContext = {
     canAccessDownloads: false,
     canAccessUnbrandedExports: false,
     creatorControls: false,
+    // Defaults true, not false -- see PricingPlanFeatureFlags.unlimitedWatching (lib/types/pricing.ts).
+    unlimitedWatching: true,
     videoExportPreset: DEFAULT_VIDEO_EXPORT_PRESET,
     availablePromoBeats: 0,
     availableSubscriptionBeats: 0,

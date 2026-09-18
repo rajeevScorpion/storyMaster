@@ -391,6 +391,8 @@ function buildPlanOffers(
       canAccessDownloads: Boolean(plan.feature_flags_json?.canAccessDownloads ?? false),
       canAccessUnbrandedExports: Boolean(plan.feature_flags_json?.canAccessUnbrandedExports ?? false),
       creatorControls: Boolean(plan.feature_flags_json?.creatorControls ?? false),
+      // Defaults true, not false -- see PricingPlanFeatureFlags.unlimitedWatching.
+      unlimitedWatching: Boolean(plan.feature_flags_json?.unlimitedWatching ?? true),
       videoExportPreset: normalizeVideoExportPreset(plan.feature_flags_json?.videoExportPreset),
       isCurrentPlan: plan.plan_key === currentPlanKey,
     };

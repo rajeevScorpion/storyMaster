@@ -173,6 +173,8 @@ function buildEffectivePricingSnapshotWithControls(
     canAccessDownloads: Boolean(selectedPlan.feature_flags_json?.canAccessDownloads ?? false),
     canAccessUnbrandedExports: Boolean(selectedPlan.feature_flags_json?.canAccessUnbrandedExports ?? false),
     creatorControls: Boolean(selectedPlan.feature_flags_json?.creatorControls ?? false),
+    // Defaults true, not false -- see PricingPlanFeatureFlags.unlimitedWatching.
+    unlimitedWatching: Boolean(selectedPlan.feature_flags_json?.unlimitedWatching ?? true),
     videoExportPreset: normalizeVideoExportPreset(selectedPlan.feature_flags_json?.videoExportPreset),
     availablePromoBeats: walletAvailability.promo,
     availableSubscriptionBeats: walletAvailability.subscription,
@@ -210,6 +212,9 @@ function buildFallbackFreeSnapshot(
     canAccessDownloads: false,
     canAccessUnbrandedExports: false,
     creatorControls: false,
+    // This is the degraded-pricing-system fallback (no resolvable plan/version), not a real
+    // Free plan row -- still true, same reasoning as everywhere else this flag appears.
+    unlimitedWatching: true,
     videoExportPreset: normalizeVideoExportPreset(null),
     availablePromoBeats: 0,
     availableSubscriptionBeats: 0,
