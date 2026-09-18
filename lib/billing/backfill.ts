@@ -6,12 +6,54 @@ import type { BillingPaymentKind, BillingPaymentStatus } from '@/lib/types/prici
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
-const ORDER_STATUS_TO_PAYMENT_STATUS: Record<string, BillingPaymentStatus | undefined> = {
+/** A `topup_checkout` order's own `status` column tracks the payment lifecycle end to end (single
+ * charge, no subscription layer), so it maps onto a payment status directly. */
+const TOPUP_ORDER_STATUS_TO_PAYMENT_STATUS: Record<string, BillingPaymentStatus | undefined> = {
   paid: 'captured',
   refunded: 'refunded',
   partially_refunded: 'partially_refunded',
   disputed: 'disputed',
 };
+
+/**
+ * A `subscription_checkout` order's `status` column instead carries the Razorpay SUBSCRIPTION's own
+ * provider status verbatim (nextSubscriptionCheckoutOrderStatus in razorpay-sync.ts writes
+ * subscription.status -- 'active', 'authenticated', 'halted', 'pending', 'completed', 'cancelled',
+ * 'expired' -- straight onto it), never a payment status. The one exception: a refund or dispute
+ * webhook overwrites it directly to one of these three, and nextSubscriptionCheckoutOrderStatus then
+ * refuses to let a later subscription sync clobber it back to a plain provider status.
+ */
+const SUBSCRIPTION_SETTLEMENT_STATUS_TO_PAYMENT_STATUS: Record<string, BillingPaymentStatus | undefined> = {
+  refunded: 'refunded',
+  partially_refunded: 'partially_refunded',
+  disputed: 'disputed',
+};
+
+/** Every subscription-provider status this codebase has ever written onto a `subscription_checkout`
+ * order's `status` column once a real charge occurred -- widens the initial query's `.in('status',
+ * ...)` filter so those rows are even fetched. Eligibility itself is decided per-row below. */
+const REACHABLE_SUBSCRIPTION_ORDER_STATUSES = [
+  'authenticated', 'active', 'pending', 'halted', 'cancelled', 'completed', 'expired',
+];
+
+/**
+ * The billing_payments status a backfilled order should carry, or undefined when it isn't eligible.
+ * Branches by order_type because the two order types use `billing_orders.status` for entirely
+ * different things (see the two maps above). A subscription_checkout order that carries a
+ * provider_payment_id was, per settleTopupOrder / syncSubscriptionFromProvider (the only writers of
+ * that column -- see the premise verified in lib/billing/backfill.test.ts's header comment), observed
+ * captured by Razorpay regardless of what its current subscription status reads today, UNLESS a later
+ * refund/dispute overwrote that status to one of the three settlement values.
+ */
+function resolveBackfillPaymentStatus(order: DbBillingOrder): BillingPaymentStatus | undefined {
+  if (!order.provider_payment_id) return undefined;
+
+  if (order.order_type === 'subscription_checkout') {
+    return SUBSCRIPTION_SETTLEMENT_STATUS_TO_PAYMENT_STATUS[order.status] ?? 'captured';
+  }
+
+  return TOPUP_ORDER_STATUS_TO_PAYMENT_STATUS[order.status];
+}
 
 /**
  * The net/tax/gross to record for a backfilled order. A pre-Phase-2 order has no tax fields on its
@@ -89,7 +131,13 @@ export async function backfillHistoricalBillingPayments(
     .from('billing_orders')
     .select('*')
     .not('provider_payment_id', 'is', null)
-    .in('status', ['paid', 'refunded', 'partially_refunded', 'disputed'])
+    .in('status', [
+      'paid',
+      'refunded',
+      'partially_refunded',
+      'disputed',
+      ...REACHABLE_SUBSCRIPTION_ORDER_STATUSES,
+    ])
     .order('id', { ascending: true })
     .limit(limit + 1);
 
@@ -111,7 +159,7 @@ export async function backfillHistoricalBillingPayments(
   let skippedIneligible = 0;
 
   for (const order of page) {
-    const paymentStatus = order.provider_payment_id ? ORDER_STATUS_TO_PAYMENT_STATUS[order.status] : undefined;
+    const paymentStatus = resolveBackfillPaymentStatus(order);
     const subjectRef = order.subject_ref ?? order.user_id ?? null;
 
     if (!order.provider_payment_id || !paymentStatus || !subjectRef) {

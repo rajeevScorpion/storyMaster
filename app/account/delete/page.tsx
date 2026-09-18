@@ -1,10 +1,39 @@
 import Link from 'next/link';
 import { ShieldOff, CheckCircle2, XCircle } from 'lucide-react';
 import DeleteAccountForm from '@/components/account/DeleteAccountForm';
+import { getFeatureFlag } from '@/lib/ai/model-config';
 
 export const dynamic = 'force-dynamic';
 
-export default function DeleteAccountPage() {
+/**
+ * Payments Phase 2 plan §7: this page ships behind account_deletion_enabled, off by default (see
+ * requestAccountDeletion in app/actions/account.ts) -- "off means the page is hidden." No form is
+ * rendered while it's off, even though the route itself stays reachable.
+ */
+export default async function DeleteAccountPage() {
+  const accountDeletionEnabled = await getFeatureFlag('account_deletion_enabled', false);
+
+  if (!accountDeletionEnabled) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-neutral-950 px-4 py-16 text-neutral-100">
+        <section className="w-full max-w-xl rounded-3xl border border-white/10 bg-white/5 p-8 text-center shadow-2xl backdrop-blur-xl">
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-white/10 text-neutral-400">
+            <ShieldOff className="h-6 w-6" />
+          </span>
+          <p className="mt-6 text-xs uppercase tracking-[0.2em] text-neutral-500">Account</p>
+          <h1 className="mt-2 text-3xl font-serif">Self-serve deletion isn&apos;t available yet</h1>
+          <p className="mt-4 text-sm leading-6 text-neutral-400">
+            We can&apos;t process account deletion requests here right now. Contact support if you need your
+            account removed.
+          </p>
+          <p className="mt-6 text-xs text-neutral-500">
+            <Link href="/" className="text-neutral-300 underline hover:text-neutral-100">Go back home</Link>.
+          </p>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-neutral-950 px-4 py-16 text-neutral-100">
       <section className="w-full max-w-xl rounded-3xl border border-white/10 bg-white/5 p-8 shadow-2xl backdrop-blur-xl">

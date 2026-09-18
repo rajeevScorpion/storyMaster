@@ -9,6 +9,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import Link from 'next/link';
 import { COINS_PER_BEAT } from '@/lib/types/pricing';
 import { startNavigationProgress } from '@/lib/navigation/progress';
+import { getAccountDeletionEnabled } from '@/app/actions/account';
 
 interface UserMenuProps {
   onMyStories?: () => void;
@@ -36,6 +37,26 @@ export default function UserMenu({ onMyStories, openWalletInNewTab = false }: Us
   const { data: pricing, isLoading: pricingLoading } = usePricingRuntime();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Payments Phase 2 plan §7: "Delete account" is hidden while account_deletion_enabled is off.
+  // Defaults to hidden (fail closed) until the flag check resolves, rather than flashing the link
+  // and then removing it. Fetched only for a signed-in user -- there is nothing to gate otherwise.
+  const [accountDeletionEnabled, setAccountDeletionEnabled] = useState(false);
+  const userId = user?.id;
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    getAccountDeletionEnabled()
+      .then((enabled) => {
+        if (!cancelled) setAccountDeletionEnabled(enabled);
+      })
+      .catch(() => {
+        // Fail closed: leave the link hidden on any error, matching getFeatureFlag's own fallback.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   // Close menu on outside click
   useEffect(() => {
@@ -252,14 +273,16 @@ export default function UserMenu({ onMyStories, openWalletInNewTab = false }: Us
                 <LogOut className="w-4 h-4" />
                 Sign out
               </button>
-              <Link
-                href="/account/delete"
-                onClick={() => setIsOpen(false)}
-                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-500 hover:bg-white/5 hover:text-rose-300 transition-colors"
-              >
-                <Trash2 className="w-4 h-4" />
-                Delete account
-              </Link>
+              {accountDeletionEnabled && (
+                <Link
+                  href="/account/delete"
+                  onClick={() => setIsOpen(false)}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-500 hover:bg-white/5 hover:text-rose-300 transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete account
+                </Link>
+              )}
             </div>
           </motion.div>
         )}

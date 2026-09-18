@@ -19,6 +19,10 @@ vi.mock('@/lib/account/deletion', () => ({
   deleteAccount: vi.fn(),
 }));
 
+vi.mock('@/lib/ai/model-config', () => ({
+  getFeatureFlag: vi.fn(),
+}));
+
 const signInWithPasswordMock = vi.fn();
 vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(() => ({
@@ -29,11 +33,13 @@ vi.mock('@supabase/supabase-js', () => ({
 import { createClient } from '@/lib/supabase/server';
 import { verifyAdmin } from '@/lib/supabase/admin';
 import { deleteAccount } from '@/lib/account/deletion';
+import { getFeatureFlag } from '@/lib/ai/model-config';
 import { requestAccountDeletion, adminDeleteAccount } from '@/app/actions/account';
 
 const createClientMock = vi.mocked(createClient);
 const verifyAdminMock = vi.mocked(verifyAdmin);
 const deleteAccountMock = vi.mocked(deleteAccount);
+const getFeatureFlagMock = vi.mocked(getFeatureFlag);
 
 const CONFIRMATION = 'DELETE MY ACCOUNT';
 const USER_ID = 'user-1';
@@ -73,6 +79,49 @@ beforeEach(() => {
     eventId: 'event-1',
     removedSummary: {},
     retainedSummary: {},
+  });
+  // account_deletion_enabled defaults on for every test below except the gate tests, which set it
+  // to false themselves -- the flag ships off by default in production (see app/actions/account.ts).
+  getFeatureFlagMock.mockResolvedValue(true);
+});
+
+describe('requestAccountDeletion -- feature flag gate', () => {
+  it('refuses when account_deletion_enabled is off, before touching auth or deletion', async () => {
+    getFeatureFlagMock.mockResolvedValue(false);
+
+    const result = await requestAccountDeletion({ confirmation: CONFIRMATION });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/not available/i);
+    expect(getFeatureFlagMock).toHaveBeenCalledWith('account_deletion_enabled', false);
+    expect(createClientMock).not.toHaveBeenCalled();
+    expect(deleteAccountMock).not.toHaveBeenCalled();
+  });
+
+  it('proceeds past the gate when the flag is on', async () => {
+    mockSignedInAs(passwordUser());
+    signInWithPasswordMock.mockResolvedValue({ error: null });
+
+    const result = await requestAccountDeletion({ confirmation: CONFIRMATION, password: 'correct-horse' });
+
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe('adminDeleteAccount -- not gated by the self-serve flag', () => {
+  it('still deletes the target account when account_deletion_enabled is off', async () => {
+    verifyAdminMock.mockResolvedValue({ user: { id: 'admin-1' } } as any);
+    delete process.env.ADMIN_USER_ID;
+    getFeatureFlagMock.mockResolvedValue(false);
+
+    const result = await adminDeleteAccount({ userId: 'target-1', reason: 'requested by support ticket #4' });
+
+    expect(result.ok).toBe(true);
+    expect(deleteAccountMock).toHaveBeenCalledWith({
+      userId: 'target-1',
+      actor: 'admin',
+      reason: 'requested by support ticket #4',
+    });
   });
 });
 

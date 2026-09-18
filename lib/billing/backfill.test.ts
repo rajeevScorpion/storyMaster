@@ -179,6 +179,51 @@ describe('backfillHistoricalBillingPayments', () => {
     expect(insertedRows).toHaveLength(0);
   });
 
+  describe('subscription_checkout orders', () => {
+    // Regression coverage: billing_orders.status for a subscription_checkout order carries the
+    // Razorpay SUBSCRIPTION's own provider status (nextSubscriptionCheckoutOrderStatus in
+    // razorpay-sync.ts), never a payment status -- so a real, charged subscription order used to
+    // read as ineligible for every one of these statuses (none of them is 'paid').
+    it.each(['authenticated', 'active', 'pending', 'halted', 'cancelled', 'completed', 'expired'])(
+      'backfills a charged subscription order with status %s as subscription_first/captured',
+      async (status) => {
+        const { supabase, insertedRows } = fakeSupabase([
+          fakeOrder({ order_type: 'subscription_checkout', provider_payment_id: 'pay_sub_1', status }),
+        ]);
+
+        const result = await backfillHistoricalBillingPayments(supabase);
+
+        expect(result).toMatchObject({ inserted: 1, skippedIneligible: 0 });
+        expect(insertedRows[0]).toMatchObject({ kind: 'subscription_first', status: 'captured' });
+      }
+    );
+
+    it('maps a refunded/partially_refunded/disputed subscription order to its settlement status, not captured', async () => {
+      const { supabase, insertedRows } = fakeSupabase([
+        fakeOrder({ id: 's1', order_type: 'subscription_checkout', provider_payment_id: 'pay_s1', status: 'refunded' }),
+        fakeOrder({ id: 's2', order_type: 'subscription_checkout', provider_payment_id: 'pay_s2', status: 'partially_refunded' }),
+        fakeOrder({ id: 's3', order_type: 'subscription_checkout', provider_payment_id: 'pay_s3', status: 'disputed' }),
+      ]);
+
+      await backfillHistoricalBillingPayments(supabase);
+
+      expect(insertedRows.map((r) => r.status)).toEqual(['refunded', 'partially_refunded', 'disputed']);
+      expect(insertedRows.every((r) => r.kind === 'subscription_first')).toBe(true);
+    });
+
+    it('still treats an abandoned subscription checkout with no payment id as ineligible', async () => {
+      const { supabase, insertedRows } = fakeSupabase([
+        fakeOrder({ order_type: 'subscription_checkout', provider_payment_id: null, status: 'created' }),
+        fakeOrder({ order_type: 'subscription_checkout', provider_payment_id: null, status: 'expired' }),
+      ]);
+
+      const result = await backfillHistoricalBillingPayments(supabase);
+
+      expect(result).toMatchObject({ inserted: 0, skippedIneligible: 2 });
+      expect(insertedRows).toHaveLength(0);
+    });
+  });
+
   it('skips an order whose payment is already recorded, without overwriting it', async () => {
     const { supabase, insertedRows } = fakeSupabase([fakeOrder()], new Set(['pay_1']));
 

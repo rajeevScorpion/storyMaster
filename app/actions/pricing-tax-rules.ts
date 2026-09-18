@@ -34,13 +34,13 @@ export async function savePricingTaxRuleDraft(input: TaxRuleDraftInput): Promise
 }
 
 export async function publishPricingTaxRule(id: string): Promise<TaxRuleAdminMutationResult> {
-  await verifyAdmin();
+  const { user } = await verifyAdmin();
   const supabase = createAdminClient();
-  return publishTaxRule(supabase, id);
+  return publishTaxRule(supabase, id, user.id);
 }
 
 export async function archivePricingTaxRule(id: string): Promise<TaxRuleAdminMutationResult> {
-  await verifyAdmin();
+  const { user } = await verifyAdmin();
   const supabase = createAdminClient();
-  return archiveTaxRule(supabase, id);
+  return archiveTaxRule(supabase, id, user.id);
 }

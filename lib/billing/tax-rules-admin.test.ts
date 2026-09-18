@@ -238,6 +238,8 @@ describe('saveTaxRuleDraft', () => {
   });
 });
 
+const ADMIN_ID = 'admin-1';
+
 describe('publishTaxRule', () => {
   it('archives the incumbent published rule before publishing the draft, in that order', async () => {
     const { supabase, enqueue, calls } = createFakeSupabase();
@@ -248,16 +250,23 @@ describe('publishTaxRule', () => {
     enqueue('billing_tax_rules', 'select', { data: [draft], error: null }); // getTaxRuleById(draft)
     enqueue('billing_tax_rules', 'select', { data: [incumbent], error: null }); // incumbent lookup
     enqueue('billing_tax_rules', 'update', { data: null, error: null }); // archive incumbent
+    enqueue('pricing_publish_audit', 'insert', { data: null, error: null }); // audit: archive + publish
     enqueue('billing_tax_rules', 'update', { data: published, error: null }); // publish draft
     enqueue('billing_tax_rules', 'select', { data: [published], error: null }); // refreshed list
 
-    const result = await publishTaxRule(supabase, 'draft-1');
+    const result = await publishTaxRule(supabase, 'draft-1', ADMIN_ID);
 
     expect(result.status).toBe('ok');
     const updateCalls = calls.filter((call) => call.table === 'billing_tax_rules' && call.op === 'update');
     expect(updateCalls).toHaveLength(2);
     expect((updateCalls[0].payload as any).status).toBe('archived');
     expect((updateCalls[1].payload as any).status).toBe('published');
+
+    const auditCalls = calls.filter((call) => call.table === 'pricing_publish_audit' && call.op === 'insert');
+    expect(auditCalls).toHaveLength(2);
+    expect(auditCalls.map((call) => (call.payload as any).action_type)).toEqual(['archive', 'publish']);
+    expect(auditCalls.every((call) => (call.payload as any).entity_type === 'tax_rule')).toBe(true);
+    expect(auditCalls.every((call) => (call.payload as any).performed_by === ADMIN_ID)).toBe(true);
   });
 
   it('does not archive anything when there is no incumbent published rule', async () => {
@@ -268,21 +277,26 @@ describe('publishTaxRule', () => {
     enqueue('billing_tax_rules', 'select', { data: [draft], error: null });
     enqueue('billing_tax_rules', 'select', { data: [], error: null }); // no incumbent
     enqueue('billing_tax_rules', 'update', { data: published, error: null }); // publish draft
+    enqueue('pricing_publish_audit', 'insert', { data: null, error: null }); // audit: publish only
     enqueue('billing_tax_rules', 'select', { data: [published], error: null });
 
-    const result = await publishTaxRule(supabase, 'draft-1');
+    const result = await publishTaxRule(supabase, 'draft-1', ADMIN_ID);
 
     expect(result.status).toBe('ok');
     const updateCalls = calls.filter((call) => call.table === 'billing_tax_rules' && call.op === 'update');
     expect(updateCalls).toHaveLength(1);
     expect((updateCalls[0].payload as any).status).toBe('published');
+
+    const auditCalls = calls.filter((call) => call.table === 'pricing_publish_audit' && call.op === 'insert');
+    expect(auditCalls).toHaveLength(1);
+    expect((auditCalls[0].payload as any).action_type).toBe('publish');
   });
 
   it('refuses to publish a rule that is not a draft', async () => {
     const { supabase, enqueue } = createFakeSupabase();
     enqueue('billing_tax_rules', 'select', { data: [fakeTaxRule({ id: 'rule-1', status: 'published' })], error: null });
 
-    const result = await publishTaxRule(supabase, 'rule-1');
+    const result = await publishTaxRule(supabase, 'rule-1', ADMIN_ID);
 
     expect(result.status).toBe('invalid');
     if (result.status === 'invalid') {
@@ -301,7 +315,7 @@ describe('publishTaxRule', () => {
       error: { code: '23505', message: 'duplicate key value violates unique constraint "uq_billing_tax_rules_live"' },
     });
 
-    const result = await publishTaxRule(supabase, 'draft-1');
+    const result = await publishTaxRule(supabase, 'draft-1', ADMIN_ID);
 
     expect(result.status).toBe('conflict');
     if (result.status === 'conflict') {
@@ -317,8 +331,35 @@ describe('publishTaxRule', () => {
       error: { code: '42P01', message: 'relation "public.billing_tax_rules" does not exist' },
     });
 
-    const result = await publishTaxRule(supabase, 'draft-1');
+    const result = await publishTaxRule(supabase, 'draft-1', ADMIN_ID);
     expect(result).toEqual({ status: 'unavailable' });
+  });
+
+  it('still publishes successfully when the audit write raises 23514 (migration 128 not applied)', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    const draft = fakeTaxRule({ id: 'draft-1', status: 'draft' });
+    const published = { ...draft, status: 'published' as const };
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    enqueue('billing_tax_rules', 'select', { data: [draft], error: null }); // getTaxRuleById
+    enqueue('billing_tax_rules', 'select', { data: [], error: null }); // no incumbent
+    enqueue('billing_tax_rules', 'update', { data: published, error: null }); // publish draft
+    enqueue('pricing_publish_audit', 'insert', {
+      data: null,
+      error: { code: '23514', message: 'new row for relation "pricing_publish_audit" violates check constraint' },
+    });
+    enqueue('billing_tax_rules', 'select', { data: [published], error: null }); // refreshed list
+
+    const result = await publishTaxRule(supabase, 'draft-1', ADMIN_ID);
+
+    expect(result.status).toBe('ok');
+    if (result.status === 'ok') {
+      expect(result.rule.status).toBe('published');
+    }
+    expect(calls.filter((call) => call.table === 'pricing_publish_audit')).toHaveLength(1);
+    expect(consoleErrorSpy).toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
   });
 });
 
@@ -330,13 +371,17 @@ describe('archiveTaxRule', () => {
 
     enqueue('billing_tax_rules', 'select', { data: [rule], error: null });
     enqueue('billing_tax_rules', 'update', { data: archived, error: null });
+    enqueue('pricing_publish_audit', 'insert', { data: null, error: null });
     enqueue('billing_tax_rules', 'select', { data: [archived], error: null });
 
-    const result = await archiveTaxRule(supabase, 'rule-1');
+    const result = await archiveTaxRule(supabase, 'rule-1', ADMIN_ID);
 
     expect(result.status).toBe('ok');
-    const updateCall = calls.find((call) => call.op === 'update');
+    const updateCall = calls.find((call) => call.table === 'billing_tax_rules' && call.op === 'update');
     expect((updateCall?.payload as any).status).toBe('archived');
+
+    const auditCall = calls.find((call) => call.table === 'pricing_publish_audit' && call.op === 'insert');
+    expect((auditCall?.payload as any)).toMatchObject({ entity_type: 'tax_rule', action_type: 'archive', performed_by: ADMIN_ID });
   });
 
   it('is a no-op success for a rule that is already archived', async () => {
@@ -346,9 +391,32 @@ describe('archiveTaxRule', () => {
     enqueue('billing_tax_rules', 'select', { data: [rule], error: null });
     enqueue('billing_tax_rules', 'select', { data: [rule], error: null }); // refreshed list
 
-    const result = await archiveTaxRule(supabase, 'rule-1');
+    const result = await archiveTaxRule(supabase, 'rule-1', ADMIN_ID);
 
     expect(result.status).toBe('ok');
     expect(calls.some((call) => call.op === 'update')).toBe(false);
+    expect(calls.some((call) => call.table === 'pricing_publish_audit')).toBe(false);
+  });
+
+  it('still archives successfully when the audit write raises 23514 (migration 128 not applied)', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    const rule = fakeTaxRule({ id: 'rule-1', status: 'published' });
+    const archived = { ...rule, status: 'archived' as const };
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    enqueue('billing_tax_rules', 'select', { data: [rule], error: null });
+    enqueue('billing_tax_rules', 'update', { data: archived, error: null });
+    enqueue('pricing_publish_audit', 'insert', {
+      data: null,
+      error: { code: '23514', message: 'new row for relation "pricing_publish_audit" violates check constraint' },
+    });
+    enqueue('billing_tax_rules', 'select', { data: [archived], error: null });
+
+    const result = await archiveTaxRule(supabase, 'rule-1', ADMIN_ID);
+
+    expect(result.status).toBe('ok');
+    expect(consoleErrorSpy).toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
   });
 });

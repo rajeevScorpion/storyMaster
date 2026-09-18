@@ -4,6 +4,7 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/server';
 import { verifyAdmin } from '@/lib/supabase/admin';
 import { deleteAccount } from '@/lib/account/deletion';
+import { getFeatureFlag } from '@/lib/ai/model-config';
 
 export interface AccountDeletionActionResult {
   ok: boolean;
@@ -12,6 +13,19 @@ export interface AccountDeletionActionResult {
 
 const CONFIRMATION_PHRASE = 'DELETE MY ACCOUNT';
 const RECENT_SESSION_WINDOW_MS = 15 * 60 * 1000;
+const ACCOUNT_DELETION_FLAG_KEY = 'account_deletion_enabled';
+
+/**
+ * Payments Phase 2 plan §7 (never implemented until this review fix): self-serve deletion ships
+ * behind a kill switch, off by default. Read the same way billing_reconcile_enabled is
+ * (lib/billing/razorpay-reconcile.ts:39) -- fails closed (flag row absent or a read error both
+ * resolve to "disabled") so an un-migrated feature_flags table never accidentally turns this on.
+ * UserMenu calls this to decide whether to show the "Delete account" entry at all; requestAccountDeletion
+ * below re-checks the same flag itself, since a server action is reachable regardless of what the UI shows.
+ */
+export async function getAccountDeletionEnabled(): Promise<boolean> {
+  return getFeatureFlag(ACCOUNT_DELETION_FLAG_KEY, false);
+}
 
 /**
  * Self-serve deletion (Payments Phase 2 plan §4, Unit C). Requires a fresh proof
@@ -28,6 +42,13 @@ export async function requestAccountDeletion(input: {
   confirmation: string;
   password?: string | null;
 }): Promise<AccountDeletionActionResult> {
+  if (!(await getFeatureFlag(ACCOUNT_DELETION_FLAG_KEY, false))) {
+    return {
+      ok: false,
+      error: 'Self-serve account deletion is not available right now. Contact support if you need your account removed.',
+    };
+  }
+
   if (String(input.confirmation ?? '').trim().toUpperCase() !== CONFIRMATION_PHRASE) {
     return { ok: false, error: `Type "${CONFIRMATION_PHRASE}" exactly to confirm.` };
   }

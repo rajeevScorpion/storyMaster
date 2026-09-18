@@ -21,19 +21,56 @@ import {
  * takes the admin Supabase client as a parameter (not `createAdminClient()` internally) so tests can
  * pass a mocked client, matching lib/billing/billing-profile.ts and lib/billing/razorpay-sync.ts.
  *
- * Deliberately NOT audited through app/actions/pricing-admin.ts's insertPricingAudit/
- * pricing_publish_audit: that table's entity_type column carries a CHECK constraint seeded in
- * 015_pricing_catalog.sql -- ('plan_version', 'topup_pack', 'action_cost', 'promotion',
- * 'runtime_setting') -- which does not include 'tax_rule'. Writing that value would raise 23514 on
- * every publish/archive call. Per this unit's own instructions, that is a decision for the owner
- * (extend the CHECK via a migration, or reuse an existing entity_type), not something to invent here
- * -- flagged in the execution report instead. Publish/archive ordering below still protects
- * uq_billing_tax_rules_live; only the cross-catalog audit trail is missing.
+ * publishTaxRule/archiveTaxRule audit through pricing_publish_audit directly (not
+ * app/actions/pricing-admin.ts's insertPricingAudit, whose entity_type union and hard-throw-on-error
+ * behaviour serve five entity types that predate this one) -- see recordTaxRuleAudit below. Migration
+ * 128 (unapplied as of this writing) is what lets entity_type 'tax_rule' past
+ * pricing_publish_audit's CHECK (015_pricing_catalog.sql:88); until then the audit write raises 23514
+ * on every call, which recordTaxRuleAudit swallows on purpose. Publish/archive ordering below still
+ * protects uq_billing_tax_rules_live regardless of whether the audit row lands.
  */
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
 let schemaUnavailable = false;
+
+/**
+ * Records a publish/archive audit row for a tax rule -- fail-soft on purpose, unlike every other
+ * pricing entity's audit write. On a database without migration 128, entity_type 'tax_rule' raises
+ * 23514 against pricing_publish_audit's CHECK; a rate change must still go through unaudited rather
+ * than be blocked by a table it doesn't yet know about. Any other error (including the audit table
+ * itself being absent) is swallowed the same way, for the same reason -- a broken audit trail must
+ * never block a tax-rule publish/archive. Once 128 is applied, the insert simply starts succeeding;
+ * no further code change is needed.
+ */
+async function recordTaxRuleAudit(
+  supabase: AdminClient,
+  input: {
+    entityId: string;
+    actionType: 'publish' | 'archive';
+    performedBy: string;
+    beforeJson: unknown;
+    afterJson: unknown;
+  }
+): Promise<void> {
+  const { error } = await supabase.from('pricing_publish_audit').insert({
+    entity_type: 'tax_rule',
+    entity_id: input.entityId,
+    action_type: input.actionType,
+    performed_by: input.performedBy,
+    before_json: (input.beforeJson ?? null) as Record<string, unknown> | null,
+    after_json: (input.afterJson ?? null) as Record<string, unknown> | null,
+  });
+
+  if (error) {
+    console.error('[tax-rules-admin] audit write skipped', {
+      actionType: input.actionType,
+      entityId: input.entityId,
+      code: error.code,
+      message: error.message,
+    });
+  }
+}
 
 /** Test-only escape hatch -- mirrors every other missing-schema latch in this codebase (a
  * hand-applied migration needs a process restart, so the latch is otherwise permanent). */
@@ -199,7 +236,11 @@ export async function saveTaxRuleDraft(
  * effective_to -- archives that incumbent FIRST, because uq_billing_tax_rules_live only allows one
  * such row at a time and raises 23505 if the archive happens second or not at all.
  */
-export async function publishTaxRule(supabase: AdminClient, id: string): Promise<TaxRuleAdminMutationResult> {
+export async function publishTaxRule(
+  supabase: AdminClient,
+  id: string,
+  performedBy: string
+): Promise<TaxRuleAdminMutationResult> {
   const draftResult = await getTaxRuleById(supabase, id);
   if (draftResult.status === 'unavailable') return { status: 'unavailable' };
 
@@ -235,6 +276,14 @@ export async function publishTaxRule(supabase: AdminClient, id: string): Promise
     if (archiveError) {
       throw new Error(`Failed to archive the current published tax rule: ${archiveError.message}`);
     }
+
+    await recordTaxRuleAudit(supabase, {
+      entityId: incumbent.id,
+      actionType: 'archive',
+      performedBy,
+      beforeJson: incumbent,
+      afterJson: { ...incumbent, status: 'archived', effective_to: timestamp, updated_at: timestamp },
+    });
   }
 
   const { data: publishedData, error: publishError } = await supabase
@@ -258,6 +307,14 @@ export async function publishTaxRule(supabase: AdminClient, id: string): Promise
     throw new Error(`Failed to publish tax rule: ${publishError?.message || 'unknown error'}`);
   }
 
+  await recordTaxRuleAudit(supabase, {
+    entityId: draft.id,
+    actionType: 'publish',
+    performedBy,
+    beforeJson: draft,
+    afterJson: publishedData,
+  });
+
   const rulesResult = await listBillingTaxRules(supabase, draft.market_key as PricingMarketKey);
   return {
     status: 'ok',
@@ -270,7 +327,11 @@ export async function publishTaxRule(supabase: AdminClient, id: string): Promise
  * archivePricingTopupPack. Leaving the last published rule for a (market_key, applies_to) archived
  * is deliberate -- getPublishedTaxRule then returns 'not_found' and checkout refuses rather than
  * silently charging the net (plan §4). */
-export async function archiveTaxRule(supabase: AdminClient, id: string): Promise<TaxRuleAdminMutationResult> {
+export async function archiveTaxRule(
+  supabase: AdminClient,
+  id: string,
+  performedBy: string
+): Promise<TaxRuleAdminMutationResult> {
   const existingResult = await getTaxRuleById(supabase, id);
   if (existingResult.status === 'unavailable') return { status: 'unavailable' };
 
@@ -301,6 +362,14 @@ export async function archiveTaxRule(supabase: AdminClient, id: string): Promise
     }
     throw new Error(`Failed to archive tax rule: ${error?.message || 'unknown error'}`);
   }
+
+  await recordTaxRuleAudit(supabase, {
+    entityId: id,
+    actionType: 'archive',
+    performedBy,
+    beforeJson: existing,
+    afterJson: data,
+  });
 
   const rulesResult = await listBillingTaxRules(supabase, existing.market_key as PricingMarketKey);
   return {
