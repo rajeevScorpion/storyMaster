@@ -3,7 +3,7 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-18 — Phase 2 done; Phase 3 audited, not planned)
+## Next session starts here (updated 2026-09-18 — Phase 2 done; Phase 3 planned, awaiting approval)
 
 **Phase 2 is complete: every unit built, reviewed, and its migrations applied on dev.** Nothing is merged to
 `dev` or `main`; everything is on branch `payments`. Prod is untouched and stays that way until the whole
@@ -67,9 +67,11 @@ context and classified. Three findings change the shape of the phase and should 
   mechanism, not a design.
 - **Adding `'audience'` fails closed everywhere** — every gate falls through to the Free branch — so the
   tier can ship before the capability migration finishes. That decouples the brief's unit C from unit A.
-- **`PLAN_TIER_RANK` is a total order and Audience does not fit it** (above Free on watching, below Plus
-  on creation). Whatever rank it is given is wrong on one axis, which breaks the seven sites that pass
-  `'studio'` to mean "unrestricted". This is the case for capability entitlements over a tier rank.
+- **`PLAN_TIER_RANK` is a total order, and `free < audience < plus < studio` fits it** — *corrected while
+  writing the plan; the audit first claimed the rank breaks, and it does not.* Plus is a superset of
+  Audience at every pair, so the promote-only override rule stays correct and the seven `'studio'`-as-
+  "unrestricted" sentinels keep working. What survives is a **constraint**: capabilities must be read from
+  the plan's feature flags, never derived from rank, or the scale stops being a scale.
 
 ### Phase 3 owner decisions (2026-09-18) — four of six answered
 
@@ -90,8 +92,21 @@ to `phase-3-plan.md`.
     extended — its `UNIQUE(user_id, storyline_id)` is a lifetime view and changing it would rewrite the
     meaning of every existing row.
 
-**Still open and owner-only:** the Audience launch prices, and with them audit finding 11 (dev Plus ₹850 vs
-prod ₹1,450 — the catalogues still disagree and a launch price has to be named).
+15. **Audience launch prices do not gate the work** (owner, 2026-09-18): prices are catalogue data,
+    configurable in the pricing studio and changeable after launch. Audit finding 11 (dev Plus ₹850 vs prod
+    ₹1,450) should still be reconciled when the Audience row is created, but no unit waits on it.
+
+**`phase-3-plan.md` is written** (2026-09-18) to the Phase 2 standard: verified-facts section, five units,
+line-anchored edits, and migration 129 complete with its rollback. **Owner approval before any code**, as
+with Phase 2. Two things in it are worth reading before executing:
+
+- The plan corrects **two claims in `phase-3-hardcoding-audit.md` that were wrong** — the storyline page does
+  *not* fetch beats (the choke point is the `loadStorylineWithBeats` server action, one caller), and the tier
+  rank does *not* break (`free < audience < plus < studio` is sound, under a stated constraint). Both
+  corrections are marked in the audit and both change where code goes.
+- Migration 129 is small: widen two CHECK constraints that hardcode the plan triple in SQL — one of which
+  blocks admin promotion to Audience entirely — plus the quota table and an atomic `consume_watch_slot`
+  function that makes the two-device race safe by construction rather than by care.
 
 **What these answers remove from Phase 3:** all timezone infrastructure, the per-plan shape migration, and
 all annual billing work. What remains is the tier itself, the quota, and the capability tidy-up.
@@ -196,7 +211,7 @@ session at natural checkpoints.
 | 0 Discovery | **done 2026-09-17** — `phase-0-discovery-2026-09-17.md`; new streams `research/09`, `research/10` |
 | 1 Money correctness | **code complete, not yet sandbox-verified** — `phase-1-plan.md`. Unit A `1392121`, Unit B `fabea84`, Opus review fixes `6685db5`. 124 applied on dev 2026-09-17. Checkout-frame fix `cd5cd0c`. Next: sandbox runbook (plan §6), in progress. Phase 1 closes only after §6 passes |
 | 2 Durable billing ledger | **done 2026-09-18** — every unit reviewed; migrations 125-128 applied on dev, none on prod. `phase-2-plan.md` §6 database half verified; the money walk and a throwaway deletion still owner-pending |
-| 3 Plans, entitlements, consumption | **not started; audit done 2026-09-18** — `phase-3-hardcoding-audit.md` (all 47 references classified) and `phase-3-brief.md` (a brief, not a plan). Next: the six owner decisions, then `phase-3-plan.md` |
+| 3 Plans, entitlements, consumption | **planned 2026-09-18, awaiting approval** — `phase-3-plan.md` (5 units, migration 129), built on `phase-3-hardcoding-audit.md`. Decisions 11-15 answered. No code written |
 | 4–8 | not started |
 
 **Delegation:** Opus plans/reviews, Sonnet executes; **at most 2 agents at once**; ask the owner for session usage at each phase boundary.

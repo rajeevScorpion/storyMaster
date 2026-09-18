@@ -107,16 +107,43 @@ These pass `'studio'` to mean *"admin context, show everything"*, which works on
 `free < plus < studio` is a **total order** — encoded literally as `PLAN_TIER_RANK` in
 `entitlement-tier.shared.ts:16-20` and relied on by `resolveEffectiveEntitlementTier`.
 
-**Audience is not orderable in that scale.** It is above Free on watching and below Plus on creation. Any
-rank given to it is wrong for one of the two axes, and `resolveEffectiveEntitlementTier`'s promote-only
-rule (`override > billing`) silently does the wrong thing at whichever rank is chosen — promoting a
-paying Audience user to Plus would be refused, or promoting to Audience would appear to be an upgrade from
-Plus. This is the strongest single argument for capability-based entitlements over a tier rank, and it
-should be stated that way when the owner is asked.
+**Corrected 2026-09-18, while writing the plan.** This section first claimed Audience is not orderable in
+that scale and that any rank breaks the override logic. That was too strong, and the plan depends on the
+accurate version:
+
+`free < audience < plus < studio` **works**, because Plus is a superset of Audience on every axis —
+Audience's one advantage over Free is unlimited watching, and Plus has that too. The promote-only rule then
+behaves correctly at every pair: Free→Audience promotes, Audience→Plus promotes, and a paying Plus account
+is never pulled down to Audience. The seven sentinel sites keep working because Studio remains the maximum.
+
+What survives is a **constraint, not a breakage**: the rank is only safe while no capability belongs to
+Audience that Plus lacks. The moment one does, the scale stops being a scale and every sentinel site is
+wrong at once. So capabilities must be read from the plan's feature flags, never derived from rank — which
+is what the existing mechanism already does, and what the plan holds to.
 
 ### E — False positive (1)
 
 `lib/admin/nav.ts:514` — `id: 'studio'` is an admin nav section id, unrelated to plans.
+
+### F — In the schema, invisible to the grep above (2). Queried on dev 2026-09-18.
+
+A `'plus'`/`'studio'` sweep of `.ts`/`.tsx` cannot see a CHECK constraint. Two hardcode the triple in SQL,
+and an insert that violates one raises `23514` at runtime with nothing failing at compile time:
+
+| Constraint | Effect if not widened |
+|---|---|
+| `user_entitlement_overrides_entitlement_plan_key_check` | **An admin cannot promote anyone to Audience at all.** Directly disables the override path. |
+| `reel_visual_styles_min_plan_check` | A reel style can never be gated to Audience. |
+
+The three other plan-key-bearing columns are clear: **`pricing_plans.plan_key` has no CHECK**, so adding
+the Audience plan row is pure catalogue data with no migration; `pricing_promotions.target_plan_key` has
+none either; and `image_model_registry.allowed_plan_keys` is an array with no constraint (its filtering is
+the TypeScript trap already noted in category B).
+
+Confirmed on dev at the same time: `pricing_plans` holds exactly three rows (free/plus/studio, ranks 1-3),
+and `feature_flags_json` is populated and live on all three — including `canAccessDownloads: true` on
+**Free**, which is direct evidence the capability mechanism is already decoupled from tier in production
+use, not just in principle.
 
 ---
 
@@ -149,16 +176,29 @@ fires on *mount* rather than on a successful load (so Phase 0 decision 2's "fail
 expressible there), and being client-initiated it is trivially skippable — which fails the pack's
 "enforced server-side, race-safe across devices" outright.
 
-**The content is already fetched server-side before the player exists.** `beats: StoryBeat[]` is a *prop*
-(`StorylinePlayer.tsx:112`), passed down by `StorylinePersistenceLoader:153`, which is rendered by
-`app/storyline/[id]/page.tsx:227`. That page is an async **server component** (`:146`, no `'use client'`)
-that fetches the storyline and already refuses with `notFound()` at `:179`.
+**Corrected 2026-09-18, while writing the plan.** This section first said the storyline page fetches the
+content server-side and is therefore the enforcement point. **It does not.** `app/storyline/[id]/page.tsx`
+passes `storylineId`, `storyId`, `userId`, `title` and `beatCount` — **not** `beats`.
+`StorylinePersistenceLoader` is a `'use client'` component that loads the content itself.
 
-So "the story opened and its content loaded" is decided on the server, before any client code runs, at a
-point that already has a refusal path. **That server component is the enforcement point** — the quota check
-and the ledger write belong there, in one transaction, with `recordView` left alone as the analytics it is.
-Worth confirming that `/explore/[id]` and the kids surface reach content the same way before the plan
-commits to a single choke point.
+**The real choke point is `loadStorylineWithBeats` (`app/actions/exploration.ts:440`)** — a server action,
+already authenticated at `:462-463` (it throws for signed-out callers, which matches "the quota only
+concerns signed-in users"), and it has exactly **one** caller:
+`StorylinePersistenceLoader.tsx:55`. It is the moment beats are served, on the server, unskippable.
+
+Two properties of that loader the plan must respect:
+
+- **The network call always fires.** `:55` starts `loadStorylineWithBeats` unconditionally, in parallel with
+  the IndexedDB cache read, so enforcement there always runs — the cache cannot route around it.
+- **But the cache can win the race for display.** `:57-73` paints a cached payload as soon as it resolves.
+  So on a refusal the reader may already be looking at the story. The loader must therefore *discard* a
+  displayed cached payload when the server refuses, not merely decline to replace it.
+
+`/explore/[id]` is not a second choke point: it is `'use client'` and renders `StoryScreen` from the store —
+the authoring/branching surface, coin-gated, not a watch surface. Every watch entry point in the gallery
+(`GalleryHero:271`, `StorylineCard:229`, `StorylineCardPanel:119`, `SeriesEpisodeList:41`,
+`MyStoriesDrawer:497`, `ReviewHistory:81`) links to `/storyline/[id]`, so all watching funnels through the
+one action. `recordView` stays exactly as it is — analytics, not a ledger.
 
 ## Open — for the owner, alongside the brief's five
 
