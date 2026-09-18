@@ -1,4 +1,9 @@
 import type { StoryLanguage } from '@/lib/types/story';
+// Payments Phase 3, Unit A (A5): NarrationVoiceTier was previously a parallel union
+// ('free' | 'plus' | 'studio') that PLAN_KEYS widening would never reach -- redefined
+// as PlanKey so this file tracks the real plan-key set instead of diverging silently.
+import type { PlanKey } from '@/lib/types/pricing';
+import { isPlanKey } from '@/lib/pricing/entitlement-tier.shared';
 
 export type NarrationProvider = 'elevenlabs' | 'gemini_tts';
 export type NarrationFallbackProvider = 'gemini_tts';
@@ -10,7 +15,7 @@ export type NarrationVoiceGender = 'female' | 'male';
 export type TTSProvider = NarrationProvider;
 export type TimestampSource = 'elevenlabs' | 'none';
 export type PreviewScope = 'sample' | 'full';
-export type NarrationVoiceTier = 'free' | 'plus' | 'studio';
+export type NarrationVoiceTier = PlanKey;
 
 export interface NarrationVoiceOption {
   voiceId: string;
@@ -666,7 +671,7 @@ function normalizeTimestampSource(value: unknown): TimestampSource {
 }
 
 function normalizeVoiceTier(value: unknown): NarrationVoiceTier | null {
-  return value === 'studio' || value === 'plus' || value === 'free' ? value : null;
+  return isPlanKey(value) ? value : null;
 }
 
 function normalizeTierList(value: unknown, fallback: NarrationVoiceTier[] = ['free']): NarrationVoiceTier[] {

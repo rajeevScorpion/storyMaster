@@ -17,7 +17,7 @@ export const COINS_PER_BEAT = 10;
 export const BILLING_PROVIDERS = ['stripe', 'razorpay'] as const;
 export type BillingProvider = (typeof BILLING_PROVIDERS)[number];
 
-export const PLAN_KEYS = ['free', 'plus', 'studio'] as const;
+export const PLAN_KEYS = ['free', 'audience', 'plus', 'studio'] as const;
 export type PlanKey = (typeof PLAN_KEYS)[number];
 
 export const BILLING_INTERVALS = ['monthly', 'annual'] as const;

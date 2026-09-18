@@ -113,7 +113,7 @@ export interface AdminUserDetailData {
   recentStories: AdminUserRecentStory[];
 }
 
-export type AdminCohortPlanFilter = 'all' | 'free' | 'plus' | 'studio';
+export type AdminCohortPlanFilter = 'all' | 'free' | 'audience' | 'plus' | 'studio';
 
 export interface AdminPromotionalCohortInput {
   name: string;
@@ -274,6 +274,7 @@ export function normalizeCoinGrantInput(input: {
 
 export const ENTITLEMENT_TIER_OPTIONS: readonly { value: PlanKey; label: string }[] = [
   { value: 'free', label: 'Free' },
+  { value: 'audience', label: 'Audience' },
   { value: 'plus', label: 'Plus' },
   { value: 'studio', label: 'Studio' },
 ];
@@ -288,7 +289,7 @@ export function normalizeEntitlementTierInput(input: {
 }): { entitlementPlanKey: PlanKey; reason: string | null } {
   const entitlementPlanKey = normalizeEntitlementPlanKey(input.entitlementPlanKey);
   if (!entitlementPlanKey) {
-    throw new Error('Pick a valid access tier: free, plus, or studio.');
+    throw new Error('Pick a valid access tier: free, audience, plus, or studio.');
   }
 
   const reason = String(input.reason ?? '').trim();
@@ -343,7 +344,7 @@ export function normalizePromotionalCohortInput(
     expiresAt: input.grantExpiresAt,
   });
   const planKey = (
-    ['all', 'free', 'plus', 'studio'] as const
+    ['all', 'free', 'audience', 'plus', 'studio'] as const
   ).includes(input.planKey)
     ? input.planKey
     : 'all';

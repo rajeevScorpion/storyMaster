@@ -1,4 +1,5 @@
 import type { PlanKey } from '@/lib/types/pricing';
+import { isPlanKey } from '@/lib/pricing/entitlement-tier.shared';
 
 export const REEL_VISUAL_STYLE_STATUSES = ['draft', 'published', 'archived'] as const;
 export type ReelVisualStyleStatus = (typeof REEL_VISUAL_STYLE_STATUSES)[number];
@@ -245,12 +246,13 @@ export function getReelCaptionTopPercent(style: ReelTextOverlayStyle): number {
 
 const PLAN_RANK: Record<PlanKey, number> = {
   free: 0,
-  plus: 1,
-  studio: 2,
+  audience: 1,
+  plus: 2,
+  studio: 3,
 };
 
 export function normalizePlanKey(value: unknown): PlanKey {
-  return value === 'plus' || value === 'studio' ? value : 'free';
+  return isPlanKey(value) ? value : 'free';
 }
 
 export function canUseReelVisualStyle(userPlan: PlanKey | string | null | undefined, minPlan: PlanKey | string | null | undefined): boolean {

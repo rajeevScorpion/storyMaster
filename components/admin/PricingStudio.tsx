@@ -581,12 +581,19 @@ function defaultProviderForMarket(market: PricingMarketKey): BillingProvider {
 function defaultPlanEditor(planKey: PlanKey, market: PricingMarketKey): PlanEditorState {
   const defaultsByPlan: Record<PlanKey, { beats: number; cap: number; tier: number }> = {
     free: { beats: 0, cap: 4, tier: 1 },
-    plus: { beats: 100, cap: 8, tier: 2 },
-    studio: { beats: 300, cap: 8, tier: 3 },
+    audience: { beats: 0, cap: 4, tier: 2 },
+    plus: { beats: 100, cap: 8, tier: 3 },
+    studio: { beats: 300, cap: 8, tier: 4 },
   };
   const defaults = defaultsByPlan[planKey];
+  const nameByPlan: Record<PlanKey, string> = {
+    free: 'Free',
+    audience: 'Audience',
+    plus: 'Plus',
+    studio: 'Studio',
+  };
   return {
-    name: planKey === 'free' ? 'Free' : planKey === 'plus' ? 'Plus' : 'Studio',
+    name: nameByPlan[planKey],
     tierRank: defaults.tier,
     isActive: true,
     isPublic: true,

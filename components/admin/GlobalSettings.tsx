@@ -877,6 +877,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   }));
   const narrationPlanLabels: Record<PlanKey, string> = {
     free: 'Free',
+    audience: 'Audience',
     plus: 'Plus',
     studio: 'Studio',
   };

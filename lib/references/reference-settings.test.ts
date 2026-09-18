@@ -31,6 +31,7 @@ describe('normalizeReferencePersonalizationSettings', () => {
     const normalized = normalizeReferencePersonalizationSettings({
       tierMatrix: {
         free: { enabled: true, maxCharacterRefs: 99, maxWorldRefs: 99, worldAdoptionMode: 'description_only' },
+        audience: { enabled: true, maxCharacterRefs: 99, maxWorldRefs: 99, worldAdoptionMode: 'description_only' },
         plus: { enabled: true, maxCharacterRefs: 3, maxWorldRefs: 3, worldAdoptionMode: 'description_plus_canonical_visual' },
         studio: { enabled: true, maxCharacterRefs: 3, maxWorldRefs: 3, worldAdoptionMode: 'description_plus_canonical_visual' },
       },
