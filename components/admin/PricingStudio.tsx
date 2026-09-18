@@ -6,8 +6,10 @@ import {
   CheckCircle,
   Coins,
   CreditCard,
+  Database,
   Loader2,
   Megaphone,
+  Percent,
   RotateCcw,
   RefreshCw,
   Save,
@@ -35,15 +37,26 @@ import {
   type PricingAdminState,
 } from '@/app/actions/pricing-admin';
 import { saveAdminImageModelRegistryRecord } from '@/app/actions/image-models';
+import { runBillingPaymentsBackfill } from '@/app/actions/billing-backfill';
+import {
+  archivePricingTaxRule,
+  getPricingTaxRules,
+  publishPricingTaxRule,
+  savePricingTaxRuleDraft,
+} from '@/app/actions/pricing-tax-rules';
 import type { DbPricingPromotion, DbPricingTopupPack } from '@/lib/types/database';
 import { PRICING_NAV_ITEMS, findPricingNavItem, type AdminNavChild } from '@/lib/admin/nav';
 import AdminToggle from '@/components/admin/AdminToggle';
 import AdminPageHeader from '@/components/admin/AdminPageHeader';
 import AdminHubCard from '@/components/admin/AdminHubCard';
 import FilterDropdown from '@/components/ui/FilterDropdown';
+import { INDIA_GST_STATE_CODES } from '@/lib/billing/india-states.shared';
+import { LEGAL_GSTIN } from '@/lib/legal/business-config';
 import {
   BILLING_INTERVALS,
   BILLING_PROVIDERS,
+  BILLING_TAX_REGIMES,
+  BILLING_TAX_RULE_APPLIES_TO,
   COINS_PER_BEAT,
   DEFAULT_VIDEO_EXPORT_PRESET,
   PLAN_KEYS,
@@ -55,10 +68,14 @@ import {
   VIDEO_EXPORT_WATERMARK_SIZES,
   type BillingInterval,
   type BillingProvider,
+  type BillingTaxRegime,
+  type BillingTaxRuleAppliesTo,
   type PlanKey,
   type PricingCatalogStatus,
   type PricingMarketKey,
   type PromotionMarketScope,
+  type TaxRuleAdminMutationResult,
+  type TaxRuleAdminRecord,
   type VideoExportVerticalResolution,
   type VideoExportWatermarkMode,
   type VideoExportWatermarkPosition,
@@ -142,11 +159,34 @@ type InlineMutationFeedback = {
   message: string;
 };
 
+// Payments Phase 2, Unit B2b: 'new' covers a rule that has never been saved, so Save Draft is always
+// available and Publish/Archive stay disabled until a draft actually exists in the DB.
+type TaxRuleEditorState = {
+  id: string | null;
+  status: PricingCatalogStatus | 'new';
+  appliesTo: BillingTaxRuleAppliesTo;
+  taxRegime: BillingTaxRegime;
+  ratePercent: string;
+  sacCode: string;
+  supplierStateCode: string;
+  notes: string;
+  effectiveFrom: string | null;
+  effectiveTo: string | null;
+};
+
+type BackfillTotals = {
+  scanned: number;
+  inserted: number;
+  skippedAlreadyRecorded: number;
+  skippedIneligible: number;
+};
+
 export type PricingStudioSection =
   | 'workshop'
   | 'plans'
   | 'top-up-packs'
   | 'promotions'
+  | 'tax-rules'
   | 'action-costs'
   | 'runtime-controls'
   | 'recovery-tools';
@@ -156,10 +196,61 @@ const INPUT_CLASS = 'w-full rounded-lg border border-white/10 bg-neutral-800 px-
 // Workshop hub cards grouped like the Global Settings overview: catalog authoring,
 // live operations, and change history each get their own titled box.
 const WORKSHOP_CARD_GROUPS: { label: string; ids: string[] }[] = [
-  { label: 'Catalog', ids: ['plans', 'top-up-packs', 'promotions'] },
+  { label: 'Catalog', ids: ['plans', 'top-up-packs', 'promotions', 'tax-rules'] },
   { label: 'Operations', ids: ['action-costs', 'runtime-controls', 'recovery-tools'] },
   { label: 'History', ids: ['audit'] },
 ];
+
+// The company has one GST registration (lib/legal/business-config.ts) -- a new tax rule draft almost
+// always supplies from that same state, so default to it instead of an empty, easy-to-miss dropdown.
+const DEFAULT_SUPPLIER_STATE_CODE = LEGAL_GSTIN.slice(0, 2);
+
+function defaultTaxRuleEditor(): TaxRuleEditorState {
+  return {
+    id: null,
+    status: 'new',
+    appliesTo: 'all',
+    taxRegime: 'in_gst',
+    ratePercent: '18',
+    sacCode: '',
+    supplierStateCode: DEFAULT_SUPPLIER_STATE_CODE,
+    notes: '',
+    effectiveFrom: null,
+    effectiveTo: null,
+  };
+}
+
+function buildTaxRuleEditor(rule: TaxRuleAdminRecord): TaxRuleEditorState {
+  return {
+    id: rule.id,
+    status: rule.status,
+    appliesTo: rule.appliesTo,
+    taxRegime: rule.taxRegime,
+    ratePercent: String(rule.ratePercent),
+    sacCode: rule.sacCode ?? '',
+    supplierStateCode: rule.supplierStateCode,
+    notes: rule.notes ?? '',
+    effectiveFrom: rule.effectiveFrom,
+    effectiveTo: rule.effectiveTo,
+  };
+}
+
+function formatTaxRuleDate(value: string | null): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
+}
+
+/** Every tax-rule action returns a discriminated result instead of throwing (it can fail closed on a
+ * missing migration or a validation error, not just a hard error) -- runMutation expects a promise
+ * that resolves on success and rejects on failure, so this bridges the two. */
+function unwrapTaxRuleMutation(
+  result: TaxRuleAdminMutationResult
+): { rule: TaxRuleAdminRecord; rules: TaxRuleAdminRecord[] } {
+  if (result.status === 'ok') return result;
+  if (result.status === 'unavailable') throw new Error('Tax rules need migration 125.');
+  throw new Error(result.message);
+}
 const COIN_RUNTIME_SETTING_KEYS = new Set(['pricing_migration_grant_beats']);
 const LEGACY_TOPUP_PACK_KEYS = new Set(['beats_25', 'beats_80', 'beats_200']);
 const ACTION_COST_GROUP_DEFINITIONS = [
@@ -682,6 +773,16 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
     freeGrantMarket: 'IN' as PricingMarketKey,
   });
 
+  const [taxRuleMarket, setTaxRuleMarket] = useState<PricingMarketKey>('IN');
+  const [taxRules, setTaxRules] = useState<TaxRuleAdminRecord[]>([]);
+  const [taxRulesLoading, setTaxRulesLoading] = useState(false);
+  const [taxRulesUnavailable, setTaxRulesUnavailable] = useState(false);
+  const [taxRulesError, setTaxRulesError] = useState<string | null>(null);
+  const [taxRuleEditor, setTaxRuleEditor] = useState<TaxRuleEditorState>(defaultTaxRuleEditor());
+  const [backfillRunning, setBackfillRunning] = useState(false);
+  const [backfillSummary, setBackfillSummary] = useState<BackfillTotals | null>(null);
+  const [backfillError, setBackfillError] = useState<string | null>(null);
+
   useEffect(() => {
     void (async () => {
       setLoading(true);
@@ -701,6 +802,31 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
     if (!state) return;
     setPlanEditor(buildPlanEditor(state, selectedPlanKey, selectedPlanMarket, selectedPlanInterval));
   }, [state, selectedPlanKey, selectedPlanMarket, selectedPlanInterval]);
+
+  // Tax rules are not part of PricingAdminState (a separate table, separate admin-only surface), so
+  // they load on their own effect, gated to the tax-rules section so switching pricing tabs never
+  // fires an extra request.
+  useEffect(() => {
+    if (section !== 'tax-rules') return;
+    void (async () => {
+      setTaxRulesLoading(true);
+      setTaxRulesError(null);
+      try {
+        const result = await getPricingTaxRules(taxRuleMarket);
+        if (result.status === 'unavailable') {
+          setTaxRulesUnavailable(true);
+          setTaxRules([]);
+        } else {
+          setTaxRulesUnavailable(false);
+          setTaxRules(result.rules);
+        }
+      } catch (err: any) {
+        setTaxRulesError(err.message || 'Failed to load tax rules');
+      } finally {
+        setTaxRulesLoading(false);
+      }
+    })();
+  }, [section, taxRuleMarket]);
 
   const topupCatalogEntries = useMemo(
     () => buildTopupCatalogEntries(state?.topupPacks ?? [], selectedTopupMarket),
@@ -891,6 +1017,34 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
       delete next[key];
       return next;
     });
+  }
+
+  const isTaxRuleEditable = taxRuleEditor.status === 'new' || taxRuleEditor.status === 'draft';
+
+  // Loops on hasMore/afterId itself (outside runMutation, which is built for one call) so the panel
+  // can show running totals across every page instead of only the last one.
+  async function runTaxRuleBackfill() {
+    setBackfillRunning(true);
+    setBackfillError(null);
+    const totals: BackfillTotals = { scanned: 0, inserted: 0, skippedAlreadyRecorded: 0, skippedIneligible: 0 };
+    let afterId: string | null = null;
+    try {
+      let hasMore = true;
+      while (hasMore) {
+        const result = await runBillingPaymentsBackfill(afterId ? { afterId } : {});
+        totals.scanned += result.scanned;
+        totals.inserted += result.inserted;
+        totals.skippedAlreadyRecorded += result.skippedAlreadyRecorded;
+        totals.skippedIneligible += result.skippedIneligible;
+        setBackfillSummary({ ...totals });
+        hasMore = result.hasMore;
+        afterId = result.lastOrderId;
+      }
+    } catch (err: any) {
+      setBackfillError(err.message || 'Backfill failed');
+    } finally {
+      setBackfillRunning(false);
+    }
   }
 
   if (loading) {
@@ -1773,6 +1927,230 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
           </div>
         </div>
       </SectionCard>
+      )}
+
+      {section === 'tax-rules' && (
+      <>
+      <SectionCard
+        title="Tax Rules"
+        description="Draft and publish GST rules by market and kind. Checkout reads whichever rule is currently published for that market and kind."
+        icon={Percent}
+      >
+        <div className="mb-4 rounded-xl border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
+          A published change reaches checkout within about 60 seconds (the rule cache). Archiving the last published rule for a market and kind does not fall back to charging the bare price -- checkout refuses until a rule is published again.
+        </div>
+
+        {taxRulesUnavailable && (
+          <div className="mb-4 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            Tax rules need migration 125.
+          </div>
+        )}
+        {taxRulesError && (
+          <div className="mb-4 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">{taxRulesError}</div>
+        )}
+
+        <div className="grid gap-4 lg:grid-cols-[340px_1fr]">
+          <div className="space-y-3 rounded-xl border border-white/10 bg-neutral-900/50 p-4">
+            <SelectField label="Market">
+              <FilterDropdown
+                fullWidth
+                size="form"
+                value={taxRuleMarket}
+                options={PRICING_MARKET_KEYS.map((key) => ({ value: key, label: key }))}
+                onChange={(value) => {
+                  setTaxRuleMarket(value as PricingMarketKey);
+                  setTaxRuleEditor(defaultTaxRuleEditor());
+                }}
+                ariaLabel="Market"
+              />
+            </SelectField>
+            <button
+              type="button"
+              onClick={() => setTaxRuleEditor(defaultTaxRuleEditor())}
+              disabled={busyKey !== null}
+              className="w-full rounded-lg border border-dashed border-white/15 px-3 py-2 text-sm text-neutral-300 transition-colors hover:bg-white/5 disabled:opacity-50"
+            >
+              New rule
+            </button>
+
+            {taxRulesLoading && (
+              <p className="flex items-center gap-2 text-xs text-neutral-500"><Loader2 size={12} className="animate-spin" />Loading...</p>
+            )}
+            {!taxRulesLoading && taxRules.length === 0 && !taxRulesUnavailable && (
+              <p className="text-xs text-neutral-500">No tax rules yet for {taxRuleMarket}.</p>
+            )}
+
+            {taxRules.map((rule) => (
+              <button
+                key={rule.id}
+                onClick={() => setTaxRuleEditor(buildTaxRuleEditor(rule))}
+                className={`w-full rounded-xl border px-3 py-3 text-left transition-colors ${taxRuleEditor.id === rule.id ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-white/10 bg-neutral-950/40 hover:bg-white/5'}`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium text-neutral-100">{rule.appliesTo}</p>
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider ${rule.status === 'published' ? 'border-emerald-500/30 text-emerald-300' : rule.status === 'draft' ? 'border-amber-500/30 text-amber-300' : 'border-white/10 text-neutral-500'}`}>{rule.status}</span>
+                </div>
+                <p className="mt-1 text-xs text-neutral-400">
+                  {rule.taxRegime === 'in_gst' ? `${rule.ratePercent}% GST` : 'No tax'} · SAC {rule.sacCode || '—'} · Supplier {rule.supplierStateCode}
+                </p>
+                <p className="mt-1 text-xs text-neutral-500">
+                  From {formatTaxRuleDate(rule.effectiveFrom)}{rule.effectiveTo ? ` to ${formatTaxRuleDate(rule.effectiveTo)}` : ''}
+                </p>
+                {rule.notes && <p className="mt-1 truncate text-xs text-neutral-600">{rule.notes}</p>}
+              </button>
+            ))}
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-neutral-900/50 p-4">
+            {!isTaxRuleEditable && (
+              <div className="mb-4 rounded-lg border border-white/10 bg-neutral-950/40 px-3 py-2 text-xs text-neutral-400">
+                This rule is {taxRuleEditor.status} and read-only. Start a new rule to change it.
+              </div>
+            )}
+            <div className="grid gap-4 md:grid-cols-2">
+              <SelectField label="Applies To">
+                <FilterDropdown
+                  fullWidth
+                  size="form"
+                  value={taxRuleEditor.appliesTo}
+                  options={BILLING_TAX_RULE_APPLIES_TO.map((value) => ({ value, label: value }))}
+                  onChange={(value) => setTaxRuleEditor((current) => ({ ...current, appliesTo: value as BillingTaxRuleAppliesTo }))}
+                  ariaLabel="Applies To"
+                />
+              </SelectField>
+              <SelectField label="Tax Regime">
+                <FilterDropdown
+                  fullWidth
+                  size="form"
+                  value={taxRuleEditor.taxRegime}
+                  options={BILLING_TAX_REGIMES.map((value) => ({ value, label: value }))}
+                  onChange={(value) => setTaxRuleEditor((current) => ({ ...current, taxRegime: value as BillingTaxRegime }))}
+                  ariaLabel="Tax Regime"
+                />
+              </SelectField>
+              <InputField label="Rate Percent">
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={taxRuleEditor.ratePercent}
+                  onChange={(event) => setTaxRuleEditor((current) => ({ ...current, ratePercent: event.target.value }))}
+                  className={INPUT_CLASS}
+                />
+              </InputField>
+              <InputField label="SAC Code">
+                <input
+                  value={taxRuleEditor.sacCode}
+                  onChange={(event) => setTaxRuleEditor((current) => ({ ...current, sacCode: event.target.value }))}
+                  className={INPUT_CLASS}
+                />
+              </InputField>
+              <SelectField label="Supplier State">
+                <FilterDropdown
+                  fullWidth
+                  size="form"
+                  value={taxRuleEditor.supplierStateCode}
+                  options={INDIA_GST_STATE_CODES.map((option) => ({ value: option.code, label: option.name }))}
+                  onChange={(value) => setTaxRuleEditor((current) => ({ ...current, supplierStateCode: value }))}
+                  ariaLabel="Supplier State"
+                />
+              </SelectField>
+            </div>
+            <InputField label="Notes" className="mt-4">
+              <textarea
+                value={taxRuleEditor.notes}
+                onChange={(event) => setTaxRuleEditor((current) => ({ ...current, notes: event.target.value }))}
+                rows={2}
+                className={`${INPUT_CLASS} min-h-[64px]`}
+              />
+            </InputField>
+
+            <div className="mt-5 flex flex-wrap gap-3">
+              <ActionButton
+                busy={busyKey === 'tax-rule:save'}
+                disabled={!isTaxRuleEditable}
+                label="Save Draft"
+                icon={Save}
+                onClick={() => void runMutation(
+                  'tax-rule:save',
+                  () => savePricingTaxRuleDraft({
+                    id: taxRuleEditor.id,
+                    marketKey: taxRuleMarket,
+                    appliesTo: taxRuleEditor.appliesTo,
+                    taxRegime: taxRuleEditor.taxRegime,
+                    ratePercent: Number(taxRuleEditor.ratePercent) || 0,
+                    sacCode: taxRuleEditor.sacCode,
+                    supplierStateCode: taxRuleEditor.supplierStateCode,
+                    notes: taxRuleEditor.notes,
+                  }).then(unwrapTaxRuleMutation),
+                  (result) => {
+                    setTaxRules(result.rules);
+                    setTaxRuleEditor(buildTaxRuleEditor(result.rule));
+                  },
+                  'Tax rule draft saved'
+                )}
+              />
+              <ActionButton
+                busy={busyKey === 'tax-rule:publish'}
+                disabled={taxRuleEditor.status !== 'draft'}
+                label="Publish Draft"
+                icon={CheckCircle}
+                onClick={() => taxRuleEditor.id && void runMutation(
+                  'tax-rule:publish',
+                  () => publishPricingTaxRule(taxRuleEditor.id!).then(unwrapTaxRuleMutation),
+                  (result) => {
+                    setTaxRules(result.rules);
+                    setTaxRuleEditor(buildTaxRuleEditor(result.rule));
+                  },
+                  'Tax rule published'
+                )}
+              />
+              <ActionButton
+                busy={busyKey === 'tax-rule:archive'}
+                disabled={!taxRuleEditor.id || taxRuleEditor.status === 'archived'}
+                label="Archive Rule"
+                icon={Archive}
+                tone="secondary"
+                onClick={() => taxRuleEditor.id && void runMutation(
+                  'tax-rule:archive',
+                  () => archivePricingTaxRule(taxRuleEditor.id!).then(unwrapTaxRuleMutation),
+                  (result) => {
+                    setTaxRules(result.rules);
+                    setTaxRuleEditor(defaultTaxRuleEditor());
+                  },
+                  'Tax rule archived'
+                )}
+              />
+            </div>
+          </div>
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Payments Backfill"
+        description="One-shot: backfills billing_payments from historical Razorpay orders. Safe to re-run -- it never overwrites an existing payment row."
+        icon={Database}
+      >
+        {backfillError && (
+          <div className="mb-4 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">{backfillError}</div>
+        )}
+        <ActionButton
+          busy={backfillRunning}
+          label="Run Payments Backfill"
+          icon={RotateCcw}
+          onClick={() => void runTaxRuleBackfill()}
+        />
+        {backfillSummary && (
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <MetricCard label="Scanned" value={formatWholeNumber(backfillSummary.scanned)} hint="Orders examined" />
+            <MetricCard label="Inserted" value={formatWholeNumber(backfillSummary.inserted)} hint="New payment rows" />
+            <MetricCard label="Already recorded" value={formatWholeNumber(backfillSummary.skippedAlreadyRecorded)} hint="Skipped, already present" />
+            <MetricCard label="Ineligible" value={formatWholeNumber(backfillSummary.skippedIneligible)} hint="Skipped, not eligible" />
+          </div>
+        )}
+      </SectionCard>
+      </>
       )}
 
       {section === 'recovery-tools' && (

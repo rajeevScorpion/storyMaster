@@ -705,3 +705,49 @@ export type SaveBillingProfileResult =
   | { status: 'ok'; profile: BillingProfileDTO }
   | { status: 'unavailable' }
   | { status: 'invalid'; message: string };
+
+// Payments Phase 2, Unit B2b: the admin tax-rules panel over billing_tax_rules (migration 125).
+// Camel-cased DTO mirrors BillingProfileDTO above -- lib/billing/tax-rules-admin.ts (server-only)
+// maps DbBillingTaxRule rows to this shape so the 'use server' action and the admin panel never need
+// to import lib/types/database.ts directly.
+export interface TaxRuleAdminRecord {
+  id: string;
+  marketKey: string;
+  appliesTo: BillingTaxRuleAppliesTo;
+  taxRegime: BillingTaxRegime;
+  ratePercent: number;
+  sacCode: string | null;
+  supplierStateCode: string;
+  status: PricingCatalogStatus;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Input to create (no `id`) or update (`id` of an existing *draft*) a tax rule. */
+export interface TaxRuleDraftInput {
+  id?: string | null;
+  marketKey: PricingMarketKey;
+  appliesTo: BillingTaxRuleAppliesTo;
+  taxRegime: BillingTaxRegime;
+  ratePercent: number;
+  sacCode?: string | null;
+  /** A code from lib/billing/india-states.shared.ts's INDIA_GST_STATE_CODES. */
+  supplierStateCode: string;
+  notes?: string | null;
+}
+
+/** 'unavailable' means migration 125 hasn't run on this database yet -- mirrors GetBillingProfileResult. */
+export type TaxRuleAdminListResult =
+  | { status: 'ok'; rules: TaxRuleAdminRecord[] }
+  | { status: 'unavailable' };
+
+export type TaxRuleAdminMutationResult =
+  | { status: 'ok'; rules: TaxRuleAdminRecord[]; rule: TaxRuleAdminRecord }
+  | { status: 'unavailable' }
+  | { status: 'invalid'; message: string }
+  /** A concurrent publish already took the (market_key, applies_to) slot -- uq_billing_tax_rules_live
+   * (125_billing_ledger_and_retention.sql) raised 23505. Surfaced as a message, never a raw PG error. */
+  | { status: 'conflict'; message: string };

@@ -34,6 +34,7 @@ const EXPECTED_PRICING_HREFS = [
   '/admin/pricing/plans',
   '/admin/pricing/top-up-packs',
   '/admin/pricing/promotions',
+  '/admin/pricing/tax-rules',
   '/admin/pricing/action-costs',
   '/admin/pricing/runtime-controls',
   '/admin/pricing/recovery-tools',

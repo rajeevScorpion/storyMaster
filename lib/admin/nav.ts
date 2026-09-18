@@ -26,6 +26,7 @@ import {
   Package,
   Palette,
   PenLine,
+  Percent,
   Route,
   Settings,
   Settings2,
@@ -298,6 +299,14 @@ const PRICING_CHILD_GROUP: AdminNavChildGroup = {
       icon: Megaphone,
       description: 'Create and archive campaign bonus offers.',
       staticSummary: 'Campaign bonus offers',
+    },
+    {
+      id: 'tax-rules',
+      label: 'Tax rules',
+      href: '/admin/pricing/tax-rules',
+      icon: Percent,
+      description: 'Draft and publish GST rules by market and kind, and trigger the payments backfill.',
+      staticSummary: 'GST rules by market and kind, plus the payments backfill',
     },
     {
       id: 'action-costs',
