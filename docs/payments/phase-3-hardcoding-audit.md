@@ -151,16 +151,52 @@ use, not just in principle.
 
 Worth knowing before scoping, because it decides how much of this is mechanical:
 
-- **Caught, loudly.** `Record<PlanKey, …>` literals. `PricingStudio.tsx:582` (`defaultsByPlan`) and
-  `entitlement-tier.shared.ts:16` (`PLAN_TIER_RANK`) both become missing-property errors. Note
-  `defaultsByPlan` is then indexed unchecked at `:586` and dereferenced at `:590`, so without the type
-  it would be a runtime `TypeError`, not a fallback — the annotation is doing real work.
+- **Caught, loudly.** `Record<PlanKey, …>` literals — **eleven of them**, not the two this section first
+  named (corrected below). `defaultsByPlan` is indexed unchecked at `PricingStudio.tsx:586` and
+  dereferenced at `:590`, so without the type it would be a runtime `TypeError`, not a fallback — the
+  annotation is doing real work.
 - **Not caught.** Every `if (planKey === 'studio') … else <free>` chain (they stay valid and silently
   mean "Free"), parallel unions like `NarrationVoiceTier`, hardcoded filters like `image-models.ts:48`,
   and every per-plan *key* in an admin JSON settings object.
 
 So the union widening is safe but almost entirely silent. A plan that relies on "tsc will show us the
 sites" will miss category A and B.
+
+### Method correction — the count of 47 is a floor, not a total
+
+Found while executing Unit A, 2026-09-18. **This audit's method — "every `'plus'`/`'studio'` string literal"
+— is blind to an entire site class.** A `Record<PlanKey, …>` written with bare identifier keys
+(`free: 'Free'`, not `'free': 'Free'`) contains no matching string literal at all, so none of them appear in
+the 47.
+
+There are **eleven** such sites. Six were not in the 47 and surfaced only because `tsc` refused to compile
+after `PLAN_KEYS` widened:
+
+| Site | What it is |
+|---|---|
+| `components/admin/VideoExportPresetStudio.tsx:21` | `PLAN_LABELS` |
+| `components/admin/ReferenceSettingsPanel.tsx:33` | `TIER_LABELS` |
+| `components/admin/GlobalSettings.tsx:878` | `narrationPlanLabels` |
+| `lib/references/reference-settings.ts:54` | `DEFAULT_REFERENCE_TIER_LIMITS` — see below |
+| `lib/reel/styles.ts:247` | `PLAN_RANK` — see below |
+| `lib/references/reference-settings.test.ts` | its fixture |
+
+Two of those are more than labels:
+
+- **`DEFAULT_REFERENCE_TIER_LIMITS` is a fourth per-plan capability matrix** (`maxCharacterRefs`,
+  `maxWorldRefs`, `worldAdoptionMode`) — the same shape as the three named in decision 12, and it was
+  missed for the same reason. Audience mirrors Free there for now, which holds decision 12's line. If
+  Audience ever needs its own reference limits, this is a fourth place to change.
+  Its normalizer (`:125-128`) reduces over `PLAN_KEYS`, so a settings blob saved before Audience existed
+  still yields a complete matrix — it degrades correctly.
+- **`PLAN_RANK` in `lib/reel/styles.ts:247` is a second tier-rank scale**, duplicating `PLAN_TIER_RANK`.
+  Both were renumbered consistently in Unit A, and reel-style gating compares within its own scale so it
+  is correct today. But two independent copies of the same ordering will eventually disagree, and the
+  constraint in §D above has to hold in both.
+
+**The lesson for the next audit of this kind:** grep the *type*, not the values — `Record<PlanKey`,
+`: PlanKey`, `PlanKey[]` — and let `tsc` enumerate the rest. The 47 remain accurate for what they are
+(string-literal comparisons); they were never the whole surface.
 
 ---
 

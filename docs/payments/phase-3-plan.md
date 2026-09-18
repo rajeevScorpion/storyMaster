@@ -222,6 +222,15 @@ account is never refused. The two-device race is the RPC's job — assert it wit
 - The Audience plan row and its published monthly version are created in the studio. **Monthly only**
   (decision 13). Prices are catalogue data and the owner can change them after launch, which is why they do
   not gate this unit.
+- **`tier_rank` must be renumbered when the Audience row is created — this is a required step, not a tidy-up.**
+  Found reviewing Unit A. `pricing_plans.tier_rank` has **no unique constraint** (only `> 0`), and dev holds
+  free=1, plus=2, studio=3. Unit A's new-plan default gives Audience rank 2, which collides with the live
+  Plus row, and nothing rejects it. The consequence is not cosmetic:
+  `components/pricing/WalletPage.tsx:180` computes `isUpgrade = offer.tierRank > currentTierRank`, so at
+  equal ranks **Plus would stop presenting as an upgrade from Audience** — the exact conversion path the
+  tier exists to feed. When creating Audience, set it to 2 and move the existing Plus row to 3 and Studio to
+  4, in the studio's Tier Rank field (`components/admin/PricingStudio.tsx:1240`). Verify afterwards with
+  `select plan_key, tier_rank from public.pricing_plans order by tier_rank` — four rows, four distinct ranks.
 - `components/pricing/WalletPage.tsx:96,123` currently special-cases the Plus offer for copy; Audience needs
   its own arm.
 
@@ -307,6 +316,13 @@ DECLARE
   v_inserted uuid;
   v_used integer;
 BEGIN
+  -- Serialise this user's day. The unique index alone is NOT enough: it stops the same storyline
+  -- being counted twice, but two devices opening DIFFERENT storylines are two different rows, and
+  -- under READ COMMITTED each transaction's count sees only committed rows -- so both would insert,
+  -- both would count themselves as the last slot, and both would be allowed. The lock is per
+  -- (user, day) and released at transaction end, so it costs nothing across users.
+  PERFORM pg_advisory_xact_lock(hashtext(p_user_id::text), hashtext(p_local_day::text));
+
   INSERT INTO public.user_daily_watch_slots (user_id, local_day, storyline_id)
   VALUES (p_user_id, p_local_day, p_storyline_id)
   ON CONFLICT (user_id, local_day, storyline_id) DO NOTHING

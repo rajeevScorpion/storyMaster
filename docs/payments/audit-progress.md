@@ -96,9 +96,39 @@ to `phase-3-plan.md`.
     configurable in the pricing studio and changeable after launch. Audit finding 11 (dev Plus ₹850 vs prod
     ₹1,450) should still be reconciled when the Audience row is created, but no unit waits on it.
 
-**`phase-3-plan.md` is written** (2026-09-18) to the Phase 2 standard: verified-facts section, five units,
-line-anchored edits, and migration 129 complete with its rollback. **Owner approval before any code**, as
-with Phase 2. Two things in it are worth reading before executing:
+### Phase 3 execution — started 2026-09-18
+
+**Approved by the owner ("take the call") with requirement 16: an admin must be able to promote a user to
+any tier from the backend without hassle.**
+
+| Unit | Commit | Status |
+|---|---|---|
+| Migration 129 — quota table, `consume_watch_slot`, the two Audience CHECKs | `e5c0b3d` + race fix | written, **not applied anywhere** |
+| A — `'audience'` as a plan key, the capability tidy-up | `04c0ce4` | done, reviewed |
+| B, C, D, E | — | not started |
+
+**Three defects were found by reviewing rather than by the suite**, which is the pattern this project keeps
+seeing:
+
+1. **The quota function's race was not safe** (my error, in `e5c0b3d`). The unique index stops the same
+   storyline counting twice, but two devices opening *different* storylines are different rows, and under
+   READ COMMITTED each transaction counts only committed rows — so both would have been allowed past the
+   last slot. Fixed with a `pg_advisory_xact_lock` per `(user, day)`. The migration was never applied, so
+   nothing downstream was affected.
+2. **`tier_rank` collides when Audience is created** (my error, in the plan's A3). The column has no unique
+   constraint, dev holds plus=2, and the new-plan default gives Audience 2 as well. Because the wallet
+   computes "is this an upgrade" by comparing ranks, Plus would have stopped showing as an upgrade from
+   Audience. Renumbering the existing rows is now a required step in Unit C, not a tidy-up.
+3. **The audit's method had a blind spot** — a `Record<PlanKey, …>` with bare identifier keys contains no
+   `'plus'`/`'studio'` string literal, so six such sites never appeared in the 47. `tsc` caught all six when
+   the union widened. One of them is a genuine fourth per-plan capability matrix (reference upload limits)
+   and another is a second copy of the tier-rank scale. Recorded in the audit's "Method correction".
+
+**Do this when applying 129 on dev:** it is the first migration of Phase 3 and nothing reads it yet, so it
+can be applied at any time. Unit A is live in code without it — an admin promoting someone to Audience
+before 129 runs will get a `23514` from the database.
+
+Two things in the plan are worth reading before executing further:
 
 - The plan corrects **two claims in `phase-3-hardcoding-audit.md` that were wrong** — the storyline page does
   *not* fetch beats (the choke point is the `loadStorylineWithBeats` server action, one caller), and the tier

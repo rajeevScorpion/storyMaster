@@ -61,6 +61,13 @@ DECLARE
   v_inserted uuid;
   v_used integer;
 BEGIN
+  -- Serialise this user's day. The unique index alone is NOT enough: it stops the same storyline
+  -- being counted twice, but two devices opening DIFFERENT storylines are two different rows, and
+  -- under READ COMMITTED each transaction's count sees only committed rows -- so both would insert,
+  -- both would count themselves as the last slot, and both would be allowed. The lock is per
+  -- (user, day) and released at transaction end, so it costs nothing across users.
+  PERFORM pg_advisory_xact_lock(hashtext(p_user_id::text), hashtext(p_local_day::text));
+
   INSERT INTO public.user_daily_watch_slots (user_id, local_day, storyline_id)
   VALUES (p_user_id, p_local_day, p_storyline_id)
   ON CONFLICT (user_id, local_day, storyline_id) DO NOTHING
