@@ -164,7 +164,24 @@ plus→audience.
 
 ## 5. Unit B — the quota ledger and enforcement
 
-**B1. Migration 129** — `user_daily_watch_slots` plus `consume_watch_slot` (SQL in §7).
+**B0. The `unlimitedWatching` capability.** Built here rather than in Unit C, because B is its consumer and
+a capability that arrives after its reader is worse than useless: B3's check would find the field absent,
+fail closed, and **quota Plus and Studio accounts too**. Add it alongside the four existing capabilities —
+`app/actions/pricing-admin.ts:1055-1057` (normalizer), `lib/pricing/snapshot.ts:173-176`,
+`app/actions/pricing-runtime.ts:391-394`, `EffectivePricingSnapshot` (`lib/types/pricing.ts:419-422`), the
+admin toggle (`components/admin/PricingStudio.tsx:1271-1273`), and the client fallback in
+`PricingRuntimeProvider.tsx`.
+
+**It must default `true`, not `false` — the one capability in this codebase that does.** Every other one
+defaults false because absence should mean "no access". Here absence means "no quota row configured yet",
+and defaulting false would switch a daily limit on for every paying account the moment this ships, before
+any admin has set anything. The quota is a restriction being added, so its default must be the unrestricted
+state. Say so in a comment at the normalizer, or someone will "fix" it to match its neighbours.
+
+Unit C then flips it off for Free alone.
+
+**B1. Migration 129** — `user_daily_watch_slots` plus `consume_watch_slot` (SQL in §7). **Already written
+and committed** (`e5c0b3d`, race fix in `40ff401`); not applied on any environment.
 
 **B2. `lib/pricing/watch-quota.shared.ts`** (new, pure/isomorphic). One export:
 `istLocalDay(date: Date): string` returning `YYYY-MM-DD` in IST, by the `financial-year.shared.ts:24-27`
@@ -213,12 +230,8 @@ account is never refused. The two-device race is the RPC's job — assert it wit
 ## 6. Units C, D, E
 
 **C — the Audience tier.**
-- `unlimitedWatching` joins the capability set: `app/actions/pricing-admin.ts:1055-1057` (normalizer),
-  `lib/pricing/snapshot.ts:173-176`, `app/actions/pricing-runtime.ts:391-394`,
-  `EffectivePricingSnapshot` (`lib/types/pricing.ts:419-422`), the admin toggle
-  (`components/admin/PricingStudio.tsx:1271-1273`), and the client fallback in
-  `PricingRuntimeProvider.tsx` — which must default it **false**.
-- Set it true on audience/plus/studio, false on free, through the pricing studio.
+- The `unlimitedWatching` capability is built in **Unit B**, not here — see B0. C only sets it, true on
+  audience/plus/studio and false on free, through the pricing studio.
 - The Audience plan row and its published monthly version are created in the studio. **Monthly only**
   (decision 13). Prices are catalogue data and the owner can change them after launch, which is why they do
   not gate this unit.
