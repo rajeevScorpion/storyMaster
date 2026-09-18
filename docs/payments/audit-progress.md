@@ -3,7 +3,7 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-18 — Phase 2 done; Phase 3 not started)
+## Next session starts here (updated 2026-09-18 — Phase 2 done; Phase 3 audited, not planned)
 
 **Phase 2 is complete: every unit built, reviewed, and its migrations applied on dev.** Nothing is merged to
 `dev` or `main`; everything is on branch `payments`. Prod is untouched and stays that way until the whole
@@ -58,7 +58,24 @@ Checked against the dev database directly, not inferred:
 
 ### Then Phase 3
 
-**Not started. Read `phase-3-brief.md` first** — it is deliberately a brief, not a plan, and it says why.
+**Step 1 of the brief's §4 is done: `phase-3-hardcoding-audit.md`** (2026-09-18). All 47 references read in
+context and classified. Three findings change the shape of the phase and should be read before planning:
+
+- **The entitlement model already exists.** `pricing_plans.feature_flags_json` already carries four
+  capabilities end to end (admin toggle → normalizer → snapshot → client) with no plan-name conditional.
+  `extensions_json` is written and **never read**. Phase 3 item 1 is a migration onto an existing
+  mechanism, not a design.
+- **Adding `'audience'` fails closed everywhere** — every gate falls through to the Free branch — so the
+  tier can ship before the capability migration finishes. That decouples the brief's unit C from unit A.
+- **`PLAN_TIER_RANK` is a total order and Audience does not fit it** (above Free on watching, below Plus
+  on creation). Whatever rank it is given is wrong on one axis, which breaks the seven sites that pass
+  `'studio'` to mean "unrestricted". This is the case for capability entitlements over a tier rank.
+
+The audit adds a sixth owner decision to the brief's five, and it gates unit A: whether the three parallel
+per-plan shapes (`pricing_action_costs`'s three **columns**, plus two admin JSON settings objects) move to a
+plan-keyed representation or just get a fourth member each.
+
+**Read `phase-3-brief.md` next** — it is deliberately a brief, not a plan, and it says why.
 Scope is the pack's `05_PHASE_3_PLANS_ENTITLEMENTS_CONSUMPTION.md`: an entitlement model replacing plan-name
 conditionals, the new Audience tier, annual billing, and the Free daily watch quota. The brief carries the
 facts verified today — including that adding a fourth plan key touches **47 hardcoded references in 22 files**,
@@ -158,7 +175,7 @@ session at natural checkpoints.
 | 0 Discovery | **done 2026-09-17** — `phase-0-discovery-2026-09-17.md`; new streams `research/09`, `research/10` |
 | 1 Money correctness | **code complete, not yet sandbox-verified** — `phase-1-plan.md`. Unit A `1392121`, Unit B `fabea84`, Opus review fixes `6685db5`. 124 applied on dev 2026-09-17. Checkout-frame fix `cd5cd0c`. Next: sandbox runbook (plan §6), in progress. Phase 1 closes only after §6 passes |
 | 2 Durable billing ledger | **done 2026-09-18** — every unit reviewed; migrations 125-128 applied on dev, none on prod. `phase-2-plan.md` §6 database half verified; the money walk and a throwaway deletion still owner-pending |
-| 3 Plans, entitlements, consumption | **not started** — `phase-3-brief.md` (a brief, not a plan) |
+| 3 Plans, entitlements, consumption | **not started; audit done 2026-09-18** — `phase-3-hardcoding-audit.md` (all 47 references classified) and `phase-3-brief.md` (a brief, not a plan). Next: the six owner decisions, then `phase-3-plan.md` |
 | 4–8 | not started |
 
 **Delegation:** Opus plans/reviews, Sonnet executes; **at most 2 agents at once**; ask the owner for session usage at each phase boundary.

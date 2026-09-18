@@ -73,12 +73,12 @@ Four things, and it is bigger than Phase 2:
 
 In this order, and **not** as a single agent handoff:
 
-1. **The hardcoding audit the pack asks for** — the 47 references above, classified into "really means a
-   capability" versus "really means that plan". That audit is the input to the entitlement model, and doing it
-   second means designing blind.
-2. **Decide the entitlement representation.** `pricing_plan_versions` already carries per-plan columns
-   (`monthly_included_beats`, `story_length_cap`, `carry_forward_cap_multiplier`, `extensions_json`).
-   `extensions_json` may already be the intended home for capabilities; check before adding columns.
+1. ~~**The hardcoding audit the pack asks for**~~ — **done 2026-09-18: `phase-3-hardcoding-audit.md`.** All 47
+   classified. It answers step 2 below and adds a sixth owner decision.
+2. ~~**Decide the entitlement representation.**~~ **Answered by the audit:** it is
+   `pricing_plans.feature_flags_json`, which already carries four capabilities end to end and is
+   admin-editable. `extensions_json` is written and never read — not the home. Do not add columns, and do
+   not design a new model; migrate onto this one.
 3. **Take decisions 1-5 above to the owner in one pass**, the way Phase 2's decision gate worked.
 4. **Then** write `docs/payments/phase-3-plan.md` to the Phase 2 standard and split it into units.
 
