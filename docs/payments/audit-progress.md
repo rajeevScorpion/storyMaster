@@ -3,46 +3,86 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-18, owner at 85% usage — Phase 2 mid-flight)
+## Next session starts here (updated 2026-09-18 — Phase 2 code complete except Unit B2)
 
-**Phase 2 state.** Plan approved: `phase-2-plan.md`, with owner decisions 8-10 below.
-- **Unit A done and reviewed** — `1ed8c6f` (tax engine, tax-rule loader, ledger writer, migration **125**),
-  plus Opus review fixes `218a9b6` (a future-dated rule would have been charged immediately; the fail-closed
-  error paths described themselves backwards). 1,553 tests green at that point.
-- **Unit C (account deletion) committed as `ca318c2`, unreviewed.** Migration **127** (its own) closes a real gap
-  the plan missed: five admin-actor columns on pricing and reel tables had no delete rule at all, so any admin who
-  had ever published a price would have blocked their own deletion. Review the diff, not the report. Its open
-  items, all needing an owner decision:
-  - `billing_profiles` was left CASCADE by 125; the agent converted it to SET NULL in 127 so the GST-required
-    name/state/GSTIN survive while contact details are cleared. Sound, but it goes beyond the plan's text.
-  - `beat_revisions`, `timeline_rewrite_events`, `episode_journal_events` still cascade, so a kept story loses its
-    edit and series history when its author goes. Today's behaviour; changing it is a product call.
-  - Google-only accounts re-authenticate by a 15-minute-old sign-in rather than a fresh OAuth round trip.
-  - The terms, help-legal and FAQ pages still say self-serve deletion does not exist and now contradict the flow.
-- **Unit B1 (server money path) was still running as an agent when the session ended.** Check `git log payments`:
-  if its commit is there, review the diff. If not, **its work is not lost** — the working tree was snapshotted
-  mid-flight to `refs/wip/unit-b1` (2026-09-18), which includes migration **126** and the untracked new files:
-  ```
-  git show --stat refs/wip/unit-b1          # what was captured
-  git diff HEAD refs/wip/unit-b1            # the in-flight change
-  git checkout refs/wip/unit-b1 -- .        # restore it into the working tree
-  ```
-  It is a snapshot of an unfinished unit, taken while an agent was still writing: treat it as a starting point to
-  finish and review, never as a reviewed change. Delete the ref once B1 is properly committed. Note that Unit C reported
-  two `tsc` errors in `razorpay-reconcile.ts`/`razorpay-sync.ts` as "pre-existing" — they were not. They were
-  B1's uncommitted work in flight. **Run `npx tsc --noEmit` yourself before trusting either unit's gates.**
-- **Unit B2 (wallet billing-details step, admin tax-rules panel, backfill trigger) has not been started.** It was
-  deliberately held back so it could be built against B1's finished server actions. Its brief: the wallet must
-  collect the customer's state before checkout (legal requirement) and show "₹X + GST" with the payable total; the
-  admin panel edits `billing_tax_rules` following the pricing draft→publish convention; both live in files B1 and
-  C were told not to touch (`components/pricing/WalletPage.tsx`, `components/admin/**`, `app/admin/**`).
+**Phase 2 state.** Plan approved: `phase-2-plan.md`, with owner decisions 8-10 below. Units A, B1 and C
+are committed and reviewed. **Unit B2 (the wallet and admin UI) has not been started, and until it does,
+migration 125 must not be applied anywhere — see the blocker below.**
 
-**Migrations 125, 126 and 127 are all unapplied, on every environment.** 126 (plan-ref amount) comes from B1 and
-127 (if any) from C. Apply them **together, in order, on dev only**, after the diffs are reviewed — 125 changes
-delete behaviour on twelve existing tables, so applying it half-reviewed is not worth the risk. Until they are
-applied, the code must behave exactly as it does today; that property is tested.
+### Blocker: applying 125 before Unit B2 ships kills checkout
+
+125 seeds a **published** GST rule with `applies_to = 'all'` (`125_…sql:58`), and `getPublishedTaxRule`
+matches an `'all'` row for both `topup` and `subscription` (`lib/billing/tax-rules.ts:76,93`). So the moment
+125 is applied, every checkout runs the tax path, which refuses without a declared billing-profile state
+(`app/actions/pricing-checkout.ts`, "Please add your billing details (state) before checkout"). Nothing in
+the app can set that state: `getMyBillingProfile`/`saveMyBillingProfile` exist and have **no callers** —
+collecting it is exactly what B2 was held back to build. Applying 125 today therefore takes checkout down
+for everyone, on whichever environment it is applied to.
+
+Two ways out, owner's call:
+1. **Build Unit B2 first, then apply 125, 126 and 127 together** (recommended — it is the plan's own order).
+2. Change 125's seeded rule to `status = 'draft'` and publish it from the admin panel once B2 exists. 125 is
+   committed but unapplied everywhere, so editing it is still safe; it stops being safe the moment it is run.
+
+### Review results (Opus, this session)
+
+Gates were re-run by hand first, not taken from the agents' reports: `npx tsc --noEmit` clean and 1,646 tests
+green at `e1d476c`, so the two typecheck errors Unit C reported as pre-existing were indeed just B1's
+in-flight work and are gone. After the review fixes: tsc clean, lint clean, **1,654 tests**.
+
+**Unit B1 — reviewed, four defects found and fixed in `ea0db01`:**
+- `captured_at` is the tax point and it was moving: stamped from the wall clock instead of Razorpay's capture
+  time, and re-stamped on every re-observation (verify, webhook and the daily reconcile all see the same
+  payment). A top-up settled by the reconcile backstop was dated when we noticed it; across 31 March that is
+  the wrong financial year.
+- A second partial refund left the ledger contradicting itself — payment status judged on the single event's
+  amount, so two half refunds read `partially_refunded` while `billing_orders` read `refunded`.
+- The backfill stamped `unknown_legacy` with `tax_minor` 0 over Phase 2 orders that really did collect GST
+  (any order whose settlement failed, or that ran before 125 existed).
+- 125-without-126 charged tax while reusing a plan ref cached on mode alone — a plan created at the pre-tax
+  net, so Razorpay would debit the net while the order recorded the gross.
+
+Everything else in B1 held up: the tax reversal for renewals, the proportional refund split, the ledger's
+idempotency and missing-schema latch, and the 126 plan-ref race guard.
+
+**Unit C — reviewed. Two gaps against the plan, both owner calls:**
+- **There is no feature flag.** Plan §7 says deletion is behind one ("off means the page is hidden"), but
+  `/account/delete` renders unconditionally, `UserMenu` links to it, and `requestAccountDeletion` checks no
+  flag. Merging Unit C makes self-serve deletion live with no kill switch.
+- **Every `payment.dispute.*` event is treated identically** (`razorpay-webhook.ts`), so `won` and `closed`
+  leave the payment marked `disputed` for good and the `billing_refunds` row `pending` forever — in a record
+  kept 8 years.
+- Not a defect, worth knowing: deletion **fails closed without 125**, because the audit-row insert into
+  `account_deletion_events` (a 125 table) throws before anything is touched. It surfaces as an unhandled
+  server-action error rather than a clean message.
+- Its pre-existing open items still need answers: `billing_profiles` CASCADE→SET NULL in 127 going beyond the
+  plan's text; `beat_revisions`/`timeline_rewrite_events`/`episode_journal_events` still cascading, so a kept
+  story loses its edit history; Google-only accounts re-authenticating by a 15-minute-old sign-in rather than
+  a fresh OAuth round trip; and the terms, help-legal and FAQ pages still saying self-serve deletion does not
+  exist.
+
+### Next steps
+
+1. **Unit B2** — the wallet billing-details step (legal name, state, optional company and GSTIN, before
+   checkout), "₹X + GST" price lines with the payable total, the admin tax-rules panel following the pricing
+   draft→publish convention, and the backfill trigger. It lives in files B1 and C were told not to touch:
+   `components/pricing/WalletPage.tsx`, `components/admin/**`, `app/admin/**`. The server side is finished and
+   waiting: `getMyBillingProfile`/`saveMyBillingProfile` (`app/actions/billing-profile.ts`), the state list and
+   GSTIN regex (`lib/billing/india-states.shared.ts`), and `backfillHistoricalBillingPayments`.
+2. **Then** apply 125, 126 and 127 together, in order, on dev only, and walk plan §6.
+3. Answer the Unit C questions above; the flag one blocks nothing but ships a no-kill-switch delete button.
+
+**Migrations 125, 126 and 127 are all unapplied, on every environment**, and 125 is now blocked on B2 (above).
+Until they are applied the code must behave exactly as it does today; that property is tested.
+
+The `refs/wip/unit-b1` snapshot has been **deleted** — B1 is committed at `e1d476c` and reviewed, so the
+snapshot had nothing the branch does not.
 
 **Phase 1 remains open:** runbook steps 4-9 (`phase-1-plan.md` §6) are owner-pending. The top-up test passed.
+
+**Working rules:** Opus plans and reviews, Sonnet agents execute (at most 2 at once, sequential when files
+overlap), review diffs rather than agent reports, commit per unit, keep this section current, and advise a
+fresh session at natural checkpoints.
 
 ---
 
@@ -114,7 +154,8 @@ session at natural checkpoints.
 |---|---|
 | 0 Discovery | **done 2026-09-17** — `phase-0-discovery-2026-09-17.md`; new streams `research/09`, `research/10` |
 | 1 Money correctness | **code complete, not yet sandbox-verified** — `phase-1-plan.md`. Unit A `1392121`, Unit B `fabea84`, Opus review fixes `6685db5`. 124 applied on dev 2026-09-17. Checkout-frame fix `cd5cd0c`. Next: sandbox runbook (plan §6), in progress. Phase 1 closes only after §6 passes |
-| 2–8 | not started |
+| 2 Durable billing ledger | **code complete except Unit B2 (UI)** — `phase-2-plan.md`. Unit A `1ed8c6f` + review `218a9b6`, Unit C `ca318c2`, Unit B1 `e1d476c` + review `ea0db01`. Migrations 125/126/127 unapplied everywhere; **125 is blocked on B2** |
+| 3–8 | not started |
 
 **Delegation:** Opus plans/reviews, Sonnet executes; **at most 2 agents at once**; ask the owner for session usage at each phase boundary.
 
