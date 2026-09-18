@@ -3,11 +3,13 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-18 — Phase 2 code complete except Unit B2)
+## Next session starts here (updated 2026-09-18 — Phase 2 code complete except Unit B2b)
 
-**Phase 2 state.** Plan approved: `phase-2-plan.md`, with owner decisions 8-10 below. Units A, B1 and C
-are committed and reviewed. **Unit B2 (the wallet and admin UI) has not been started, and until it does,
-migration 125 must not be applied anywhere — see the blocker below.**
+**Phase 2 state.** Plan approved: `phase-2-plan.md`, with owner decisions 8-10 below. Units A, B1, B2a and C
+are committed and reviewed. **Only Unit B2b (the admin tax-rules panel) is left**, and it was mid-flight when
+this session paused — see the snapshot under "Next steps". Migration 125 is no longer blocked on collecting a
+billing state (B2a ships that), but B2b is what lets the owner edit the rate without SQL; applying 125 before
+it exists means the seeded 18% rule is the only one available until it does.
 
 ### Blocker: applying 125 before Unit B2 ships kills checkout
 
@@ -83,8 +85,20 @@ things international (Phase 7) has to revisit.
      would have taken. The test guarding it had built its expected string with the same formatter the code
      used, so it agreed with itself whatever the rounding did; it now states the rupees and paise outright.
    - **B2b (admin)** — tax-rules panel on the pricing draft→publish convention, plus the backfill trigger.
-     **Dispatched to a Sonnet agent 2026-09-18.** If no commit for it is on `payments`, it did not finish:
-     read the plan's §4 and finish it. Nothing depends on its intermediate state.
+     **In flight when this session paused (2026-09-18).** First check `git log payments`: if a B2b commit is
+     there, the agent finished — review the diff, not its report. If it is not there, **the work is not
+     lost**; the working tree was snapshotted mid-flight to `refs/wip/unit-b2b`, which includes the untracked
+     new files:
+     ```
+     git show --stat refs/wip/unit-b2b      # what was captured
+     git diff HEAD refs/wip/unit-b2b        # the in-flight change
+     git checkout refs/wip/unit-b2b -- .    # restore it into the working tree
+     ```
+     It is a snapshot of an unfinished unit taken while an agent was still writing: a starting point to
+     finish and review, never a reviewed change. Delete the ref once B2b is properly committed.
+     **At snapshot time it had no `lib/billing/tax-rules-admin.test.ts`,** which the plan §4 requires — so at
+     minimum the tests were still to come. Run `npx tsc --noEmit`, `npm run lint` and `npm test` yourself
+     before trusting any gate claim.
 2. **Then** apply 125, 126 and 127 together, in order, on dev only, and walk plan §6.
 3. Answer the Unit C questions above; the flag one blocks nothing but ships a no-kill-switch delete button.
 
