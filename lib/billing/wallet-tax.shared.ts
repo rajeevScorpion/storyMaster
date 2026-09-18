@@ -46,12 +46,22 @@ export function previewGrossMinor(netMinor: number, ratePercent: number | null):
   return netMinor + taxMinor;
 }
 
+/**
+ * Catalogue prices are whole rupees, and WalletPage's own formatPrice drops the fraction for that
+ * reason -- but a gross is only a whole rupee when the net is a multiple of 50 (18% of Rs 1 is 18
+ * paise). Today's catalogue happens to be all multiples of 50; the next price the owner types in
+ * admin need not be. Rs 199 + 18% is Rs 234.82, and showing "Rs 235 total" over a Rs 234.82 debit is
+ * the exact disagreement this module exists to prevent, so the paise are shown whenever there are
+ * any.
+ */
 function formatCurrencyMinor(currencyCode: string, amountMinor: number): string {
   const locale = currencyCode === 'INR' ? 'en-IN' : 'en-US';
+  const hasFraction = amountMinor % 100 !== 0;
   return new Intl.NumberFormat(locale, {
     style: 'currency',
     currency: currencyCode,
-    maximumFractionDigits: 0,
+    minimumFractionDigits: hasFraction ? 2 : 0,
+    maximumFractionDigits: hasFraction ? 2 : 0,
   }).format(amountMinor / 100);
 }
 

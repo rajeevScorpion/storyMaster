@@ -70,19 +70,31 @@ describe('formatPriceWithTaxLine', () => {
     expect(formatPriceWithTaxLine('INR', 100000, 12.5, 'GST')).toContain('+ 12.5% GST');
   });
 
-  it('never disagrees with computeTax on the total it displays', () => {
-    const netMinor = 339900;
-    const ratePercent = 18;
-    const expectedGross = computeTax({
-      netMinor,
-      rule: fakeRule(ratePercent),
-      supplierStateCode: GUJARAT,
-      placeOfSupplyStateCode: GUJARAT,
-    }).grossMinor;
+  it('never disagrees with computeTax on the total it displays, down to the paisa', () => {
+    // The expectation is written out in rupees and paise by hand rather than run back through the
+    // same Intl formatter the code under test uses -- formatted against itself, this assertion would
+    // hold no matter how the total were rounded, which is how a 99-paise gap hides.
+    const cases: { netMinor: number; expectedTotal: string }[] = [
+      { netMinor: 145000, expectedTotal: '₹1,711' },      // Rs 1,450 -> a whole rupee, no paise shown
+      { netMinor: 19900, expectedTotal: '₹234.82' },      // Rs 199 -> 82 paise, and they must be shown
+      { netMinor: 99900, expectedTotal: '₹1,178.82' },
+      { netMinor: 339900, expectedTotal: '₹4,010.82' },
+    ];
 
-    const line = formatPriceWithTaxLine('INR', netMinor, ratePercent, 'GST');
-    const expectedLine = `+ 18% GST · ${new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(expectedGross / 100)} total`;
-    expect(line).toBe(expectedLine);
+    for (const { netMinor, expectedTotal } of cases) {
+      const chargedGross = computeTax({
+        netMinor,
+        rule: fakeRule(18),
+        supplierStateCode: GUJARAT,
+        placeOfSupplyStateCode: GUJARAT,
+      }).grossMinor;
+
+      // What the user is told, and what the card is debited, are the same number.
+      expect(formatPriceWithTaxLine('INR', netMinor, 18, 'GST')).toBe(`+ 18% GST · ${expectedTotal} total`);
+      expect(expectedTotal.replace(/[₹,]/g, '')).toBe(
+        chargedGross % 100 === 0 ? String(chargedGross / 100) : (chargedGross / 100).toFixed(2)
+      );
+    }
   });
 
   it('shows no tax line when the rate is null (no published rule, or the none regime)', () => {
