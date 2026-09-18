@@ -124,8 +124,26 @@ divergence becomes permanent.
 **A8. `lib/ai/image-models.ts:48`** — replace the inline triple with `isPlanKey`. **This is the fails-open
 one**: today an `'audience'` entry stored by an admin is dropped and `:49` falls back to every plan.
 
-**A9. `lib/admin/user-management.shared.ts:116,277-278,346`** — add `'audience'` to `AdminCohortPlanFilter`,
-the label list, and the filter tuple.
+**A9. `lib/admin/user-management.shared.ts:116,277-278,291,346`** — add `'audience'` to
+`AdminCohortPlanFilter` (`:116`), to `ENTITLEMENT_TIER_OPTIONS` (`:277-278`), to the cohort filter tuple
+(`:346`), and fix the validator's error text at `:291`, which names "free, plus, or studio".
+
+**This is owner requirement 16 (2026-09-18): an admin must be able to promote a user to any tier from the
+backend without hassle.** It is not one edit but a path, and every link must widen or the promotion fails at
+a different layer:
+
+| Link | Where | Covered by |
+|---|---|---|
+| The dropdown's options | `ENTITLEMENT_TIER_OPTIONS`, `lib/admin/user-management.shared.ts:277-278` | A9 |
+| Input validation | `normalizeEntitlementTierInput:285-300`, via `isPlanKey` | A1 (automatic) |
+| The database write | `app/actions/admin-users.ts:313-321` upsert | **migration 129** — without the widened CHECK this raises `23514` |
+| The promotion taking effect | `PLAN_TIER_RANK` | A2 |
+| The UI itself | `components/admin/users/AdminUserDirectory.tsx:268` | nothing — it renders the shared options constant |
+
+Note the existing semantics, which are correct and must not be "fixed": setting a user to `'free'` **clears**
+the promotion rather than pinning them to Free (`app/actions/admin-users.ts:303-310`), and the promote-only
+rule means an override never lowers a paying account. An admin can therefore grant any tier's access to
+anyone; the only thing refused is taking away what someone paid for. That is the feature, not the hassle.
 
 **A10. `components/admin/users/AdminPromotionalCohorts.tsx:34-35`** — add the Audience option.
 
