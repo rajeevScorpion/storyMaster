@@ -122,12 +122,15 @@ four plans at four distinct ranks in the right order (free 1, audience 2, plus 3
 `unlimitedWatching` false on Free, true on the other three. A Free account on dev is now limited to the
 `pricing_free_daily_watch_quota` setting's value — 3 unless an admin changes it.
 
-**One thing blocks testing the upsell end to end: the Audience IN monthly version is published at ₹0.**
-Checkout refuses a zero-priced non-free plan outright (`This plan is not purchasable`,
-`app/actions/pricing-checkout.ts:163`), so the upsell button leads to a dead end. It is a safe dead end —
-no Razorpay call is attempted and no money path is involved — and it is catalogue data, not code, so it is
-a price away from working. Decision 15 said prices gate nothing, and they still gate nothing except this
-one walk-through.
+**Audience is priced and the upsell path is walkable** (owner, 2026-09-19). The ₹0 version is archived and
+one published IN monthly version remains, Razorpay, `provider_price_ref` null so checkout creates a fresh
+plan at the gross.
+
+**Check the amount before any real test: it is stored as `2000`, which renders as ₹20.00, not ₹200.**
+`price_minor` is paise, and the studio's field is labelled "Price (minor units)" and stores the raw number.
+The rest of the catalogue confirms the convention — Plus IN `85000` = ₹850, Studio IN `395000` = ₹3950. If
+₹200 was intended the value is `20000`. Nothing breaks either way: 2000 is above zero, so checkout no longer
+refuses it.
 
 **What is left in Phase 3:** nothing in code. What remains is the owner's: name the Audience price, then
 walk the quota as a real Free account on the preview.
@@ -196,11 +199,14 @@ ranks, free 1 / audience 2 / plus 3 / studio 4.
 **2. ~~Set `unlimitedWatching` false on Free~~ — done 2026-09-19.** False on Free, true on audience, plus and
 studio. **The quota is live on dev.**
 
-**2a. Name the Audience price.** The IN monthly version is published at **₹0**, and checkout refuses a
-zero-priced non-free plan (`This plan is not purchasable`). The upsell button therefore leads to a dead end
-— a safe one, no Razorpay call is attempted, but the conversion path cannot be walked until a price exists.
-This is the only thing standing between Phase 3 and an end-to-end test. Reconcile audit finding 11 in the
-same pass (dev Plus ₹850 vs prod ₹1,450).
+**2a. ~~Name the Audience price~~ — done 2026-09-19, but confirm the amount.** Published IN monthly at
+`price_minor` **2000**, which is **₹20.00**, not ₹200 — the field is paise. `20000` is ₹200. Reconcile audit
+finding 11 in the same pass (dev Plus ₹850 vs prod ₹1,450).
+
+**2c. Before the india-only beta flag ever comes off: Plus ROW monthly is published at $0.00.** Same
+zero-price trap Audience had — it would render as "Free" with an enabled button that throws
+`This plan is not purchasable`. Harmless today because `pricing_india_only_beta_enabled` is on and ROW is
+blocked, so this is a go-live item, not a now item.
 
 **2b. Walk the quota as a real Free account on the preview.** Open three distinct stories, confirm the
 third asks before it goes, confirm the fourth is refused and shows the upsell, re-open one of the three and
