@@ -24,6 +24,7 @@ import type {
   PricingWalletPageData,
 } from '@/lib/types/pricing';
 import { COINS_PER_BEAT } from '@/lib/types/pricing';
+import { buildPlanFeatures, getPlanDescription } from '@/lib/pricing/plan-copy.shared';
 
 declare global {
   interface Window {
@@ -79,52 +80,6 @@ function formatBeatCount(value: number) {
 
 function beatsToCoins(value: number) {
   return Number((value * COINS_PER_BEAT).toFixed(2));
-}
-
-function buildPlanFeatures(
-  offer: PricingPlanOfferCard,
-  walletData: Pick<PricingWalletPageData, 'freePlusCharacterSheetsEnabled' | 'creatorCharacterSheetsEnabled'> | null
-): string[] {
-  if (offer.planKey === 'free') {
-    return [
-      'Ready the moment you create your account',
-      `${offer.storyLengthCap} beats per story`,
-      'Hosted sharing with Kissago branding',
-    ];
-  }
-
-  if (offer.planKey === 'plus') {
-    return [
-      'Everything in Free',
-      `${offer.storyLengthCap} beats per story`,
-      'Made for recurring family story creation',
-      walletData?.freePlusCharacterSheetsEnabled
-        ? 'Enhanced character consistency with compact character sheets'
-        : 'More room for recurring stories and returning characters',
-    ];
-  }
-
-  return [
-    'Everything in Plus',
-    `${offer.storyLengthCap} beats per story`,
-    offer.canAccessDownloads ? 'Downloads included' : 'Downloads ready as this plan expands',
-    offer.canAccessUnbrandedExports ? 'Unbranded exports included' : 'Export-friendly creator workflow',
-    walletData?.creatorCharacterSheetsEnabled
-      ? 'Creator Settings with optional 1K character sheets'
-      : 'Creator-focused tools for a higher-control workflow',
-  ];
-}
-
-function getPlanDescription(offer: PricingPlanOfferCard): string {
-  if (offer.planKey === 'free') {
-    return 'Start creating and sharing short stories right away.';
-  }
-
-  if (offer.planKey === 'plus') {
-    return 'Keep family stories growing with more room to create.';
-  }
-
-  return 'Create with export-ready tools and richer control.';
 }
 
 function getPlanRateLabel(
@@ -779,7 +734,10 @@ export default function WalletPage() {
               </div>
             )}
 
-            <div className="grid gap-4 lg:grid-cols-3">
+            {/* Column count follows the catalogue: a fourth tier used to wrap alone onto a second
+                row. Both class strings are written out in full because Tailwind scans source
+                text -- an interpolated `lg:grid-cols-${n}` would be purged. */}
+            <div className={`grid gap-4 ${offers.length >= 4 ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
               {offers.map((offer) => {
                 const selectedPrice = getSelectedPlanPriceMinor(offer, selectedPlanInterval);
                 const selectedProvider = getSelectedPlanProvider(offer, selectedPlanInterval);
@@ -796,7 +754,7 @@ export default function WalletPage() {
                   selectedProvider !== 'razorpay' ||
                   !razorpayReady ||
                   checkoutBusyKey !== null;
-                const features = buildPlanFeatures(offer, walletData);
+                const features = buildPlanFeatures(offer, walletData, offers);
                 const description = getPlanDescription(offer);
                 const rateLabel = getPlanRateLabel(offer, selectedPrice, selectedPlanInterval);
                 const taxPreview = walletData?.taxPreview ?? null;
