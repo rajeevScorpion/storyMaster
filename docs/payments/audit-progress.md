@@ -103,7 +103,7 @@ any tier from the backend without hassle.**
 
 | Unit | Commit | Status |
 |---|---|---|
-| Migration 129 — quota table, `consume_watch_slot`, the two Audience CHECKs | `e5c0b3d`, race fix `40ff401` | **applied on dev** 2026-09-19; not on prod |
+| Migration 129 — quota table, `consume_watch_slot`, the two Audience CHECKs | `e5c0b3d`, race fix `40ff401` | **applied and walked on dev** 2026-09-19 (8/8 PASS); not on prod |
 | Migration 130 — `provider_mode` on the subscription-checkout RPC | `aaaf71b` | **applied on dev** 2026-09-19; not on prod |
 | C — Audience tier: wallet copy, plan-card layout | this session | **code done**; the catalogue half is owner work, below |
 | A — `'audience'` as a plan key, the capability tidy-up | `04c0ce4` | done, reviewed |
@@ -115,6 +115,14 @@ any tier from the backend without hassle.**
 **129 and 130 are both applied on dev**, neither on prod, both verified against the database rather than
 assumed — 129's table/RLS/privileges/CHECKs and the advisory-lock race fix in the deployed body; 130's ledger
 row, all four `provider_mode` scopings, and the removal of the now-redundant reuse check.
+
+**`consume_watch_slot`'s behavioural walk passed on dev, 2026-09-19** — all 8 checks in
+`docs/payments/verify-129-watch-quota.sql`, run by the owner in the SQL editor. First watch counts a slot;
+a same-day replay is free, counts nothing and reports `is_replay`; the limit bites on the 4th *distinct*
+story; the refused watch gives its slot back (`used=3`, and 3 rows written for the day, not 4); a replay is
+still free once the day is full; the next IST day starts clean. That closes the last outstanding Phase 3
+database check. The cross-device race is still unexercised — it needs two concurrent sessions, and the
+procedure is at the bottom of that file.
 
 **Unit C's code is done; its catalogue half is not, and the catalogue half is what switches the quota on.**
 See "Owner actions waiting". Until `unlimitedWatching` is set false on Free, every plan reads as unlimited
@@ -177,10 +185,9 @@ dev are limited to **3 distinct stories a day**, IST — that number is `FALLBAC
 `lib/pricing/watch-quota.ts` and is not admin-editable until Unit E. Replays stay free all day, and admin
 accounts are never metered.
 
-**3. Run the `consume_watch_slot` walk on dev.** Paste `docs/payments/verify-129-watch-quota.sql` into the
-Supabase SQL editor. It is wrapped in BEGIN/ROLLBACK, prints PASS/FAIL per step, and leaves nothing behind.
-A session cannot run it: the Supabase MCP is read-only and the function writes. The two-tab race check is
-described at the bottom of that file and is the one thing the script itself cannot prove.
+**3. ~~Run the `consume_watch_slot` walk on dev~~ — done 2026-09-19, 8/8 PASS.** Only the two-tab race check
+at the bottom of `docs/payments/verify-129-watch-quota.sql` is left, and it is optional: the advisory lock it
+would exercise is already in the deployed function body, confirmed by reading `prosrc`.
 
 **4. Prod, when the time comes:** 129 and 130 both, plus the COOP/COEP checkout-frame fix and the
 old-Razorpay-account cleanup already recorded under Phase 1. 130 matters **before the first live checkout**,
