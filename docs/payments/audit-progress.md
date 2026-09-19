@@ -104,109 +104,97 @@ any tier from the backend without hassle.**
 | Unit | Commit | Status |
 |---|---|---|
 | Migration 129 — quota table, `consume_watch_slot`, the two Audience CHECKs | `e5c0b3d`, race fix `40ff401` | **applied on dev** 2026-09-19; not on prod |
-| Migration 130 — `provider_mode` on the subscription-checkout RPC | this session | written, **not applied anywhere** |
+| Migration 130 — `provider_mode` on the subscription-checkout RPC | `aaaf71b` | **applied on dev** 2026-09-19; not on prod |
+| C — Audience tier: wallet copy, plan-card layout | this session | **code done**; the catalogue half is owner work, below |
 | A — `'audience'` as a plan key, the capability tidy-up | `04c0ce4` | done, reviewed |
 | B — quota ledger, enforcement, the `unlimitedWatching` capability | `e7cea4d`, defect fix below | done, reviewed |
 | C, D, E | — | not started |
 
 ### Start here next session
 
-**Migration 129 is applied on dev** (2026-09-19, ledger row confirmed) and **not on prod**. Verified against
-the dev database directly: `user_daily_watch_slots` exists with RLS on and no policies,
-`consume_watch_slot` is SECURITY DEFINER with `search_path=public` and execute revoked from `anon`/
-`authenticated` (only `postgres` and `service_role` hold it), both widened CHECKs accept `audience`, and the
-deployed function body contains the `pg_advisory_xact_lock` race fix and the give-the-slot-back branch — so
-what is on dev is `40ff401`, not the original `e5c0b3d`.
+**129 and 130 are both applied on dev**, neither on prod, both verified against the database rather than
+assumed — 129's table/RLS/privileges/CHECKs and the advisory-lock race fix in the deployed body; 130's ledger
+row, all four `provider_mode` scopings, and the removal of the now-redundant reuse check.
 
-**The behavioural walk of `consume_watch_slot` has NOT been run.** The Supabase MCP connection is read-only,
-so the two-call replay check in 129's header (and the four-story/limit-3 sequence) could not be executed from
-a session. Run it by hand in the SQL editor on dev; it is the one Phase 3 check still outstanding.
+**Unit C's code is done; its catalogue half is not, and the catalogue half is what switches the quota on.**
+See "Owner actions waiting". Until `unlimitedWatching` is set false on Free, every plan reads as unlimited
+(the capability defaults true by design) and the quota does nothing even with 129 applied — which is exactly
+the state dev is in now: no plan row carries the flag at all.
 
-**Four defects are fixed** (see the commits on `payments`, and the sections below):
+**Next: Unit D** (the real quota UX — Unit B left a one-line placeholder deliberately, and the refusal
+surface is the upsell), then **E** (the admin quota setting; until it lands, `watch-quota.ts` carries
+`FALLBACK_FREE_DAILY_WATCH_QUOTA = 3` with a comment saying to delete it). D should not invent a number:
+until E exists the limit is that constant, so "N of 3 left today" has to read the same source the server
+does, not a literal.
 
-1. Unit B's quota refusal crossed the server/client boundary as a thrown `Error` message, which a production
-   build redacts. Now returned as data — `LoadStorylineWithBeatsResult` in `lib/types/story.ts`.
-2. Every `payment.dispute.*` event was handled identically, so a dispute the merchant WON stayed `disputed`
-   with a `pending` reversal row forever.
-3. `billing_begin_subscription_checkout` matched a user's subscription without `provider_mode`, so a
-   test-mode subscription blocked that person's first live purchase. Migration **130**, not yet applied.
-4. The terms, /docs and FAQ page seeds still said self-serve deletion did not exist.
-
-**Next: Unit C** (Audience catalogue row + flipping `unlimitedWatching` off for Free), then **D** (the real
-quota UX — Unit B left a one-line placeholder deliberately), then **E** (the admin quota setting; until it
-lands, `watch-quota.ts` carries `FALLBACK_FREE_DAILY_WATCH_QUOTA = 3` with a comment saying to delete it).
-
-Gates at the end of this session: `npx tsc --noEmit` clean, `npm run lint` clean, **1,748 tests** across 153
+Gates at the end of this session: `npx tsc --noEmit` clean, `npm run lint` clean, **1,766 tests** across 154
 files, `npm run build` succeeds. Run them yourself before trusting any report.
+
+### Unit C — what the code does now
+
+- **The wallet's plan copy moved to `lib/pricing/plan-copy.shared.ts`** so it could be unit-tested without
+  mounting `WalletPage` (16 tests). It was three `if`s ending in a bare `return`, which meant *any* plan key
+  that was not free or plus got Studio's feature list — Audience would have advertised creator tools,
+  downloads and unbranded exports it does not have. Every tier now has an explicit arm and the fallthrough
+  says only what the offer itself carries.
+- **"Everything in X" is computed, not written.** Plus said the literal `'Everything in Free'`, which
+  Audience sitting between them makes wrong — and hardcoding `'Everything in Audience'` would be wrong again
+  in a market where Audience is not published. It now names the nearest lower tier actually on offer.
+- **The unlimited-watching line appears on the lowest tier that grants it, and only while some tier on offer
+  lacks it.** Read off `offer.unlimitedWatching`, never off the rank (the constraint in §4). Two consequences
+  worth knowing: before Free is set to false nothing advertises it at all (correct — it is not a feature
+  until something is limited), and if an admin ever turns it off for Audience the line moves to Plus on its
+  own. A test pins each.
+- **The plan grid follows the catalogue.** It was `lg:grid-cols-3`, so a fourth tier wrapped alone onto a
+  second row.
+
+Not done here, deliberately: **no quota messaging on the Free card.** Saying "3 stories a day" would hardcode
+the number Unit E exists to make configurable, and Unit D owns how the limit is communicated.
 
 ### Owner actions waiting
 
-- **Apply migration 130 on dev** (not prod). It replaces `billing_begin_subscription_checkout` so the
-  subscription and open-order lookups are scoped to `provider_mode`. Nothing in the app changes shape — the
-  RPC's signature and return columns are identical — so it can be applied at any time, and until it runs a
-  tester holding a test-mode subscription is still refused a live one. Verify with the query in the file's
-  header. Prod needs it **before its first live checkout**, alongside the COOP/COEP checkout-frame fix and
-  the old-Razorpay-account cleanup already recorded under Phase 1.
-- **Run the `consume_watch_slot` walk on dev by hand** — 129's header carries the two-call replay check. A
-  session cannot do it: the Supabase MCP is read-only and the function writes.
-- **When creating the Audience plan in the studio:** set it to `tier_rank` 2 and move Plus to 3, Studio to 4.
-  The column has no unique constraint and the default would collide with Plus, which would stop Plus
-  presenting as an upgrade from Audience. Verify: `select plan_key, tier_rank from public.pricing_plans
-  order by tier_rank` — four rows, four distinct ranks.
-- **Audience launch prices** whenever convenient; they gate nothing (decision 15).
-- **Reseed the `terms` and `documentation` managed pages when deletion goes live, not before.** The seed
-  content in `lib/managed-pages/registry.ts` is fixed, but the registry is only a seed: the live copy is the
-  `managed_pages` row, and an admin has to press Reset to seed (or edit the row) for it to change. On dev the
-  `terms` row still carries the old sentence and is a published, acceptance-requiring document at `1.0.0`, so
-  republishing it is a legal-document change, not a typo fix. **Sequence matters:** `account_deletion_enabled`
-  ships off and 125-127 are not on prod, so today prod's terms page is *correct* — saying deletion is
-  self-serve before the flow is enabled would be the new contradiction. Reseed at the same time as the flag
-  goes on. (The FAQ row on dev did not carry the stale sentence; only `terms` and `documentation` did. Prod
-  could not be checked from this session — production reads are blocked here — so check it directly.)
+**1. Finish Unit C in the pricing studio. Do it in this order — the order is the point.**
 
-**Four defects were found by reviewing rather than by the suite**, which is the pattern this project keeps
-seeing. The fourth is Unit B's thrown-error marker, fixed 2026-09-19 and described under "Start here" above
-— the executing agent flagged it as unverifiable rather than asserting it worked, which is how it got
-caught. The other three:
+`pricing_plans.tier_rank` has no unique constraint, and dev currently holds free=1, **plus=2, studio=3**.
+Unit A fixed the *new-plan form* to default Audience to 2, but that does not move the rows already there, so
+creating Audience first would collide with the live Plus row. Nothing rejects the collision; what breaks is
+`WalletPage`'s `isUpgrade = offer.tierRank > currentTierRank`, so Plus would stop presenting as an upgrade
+from Audience — the exact conversion path the tier exists to feed.
 
-1. **The quota function's race was not safe** (my error, in `e5c0b3d`). The unique index stops the same
-   storyline counting twice, but two devices opening *different* storylines are different rows, and under
-   READ COMMITTED each transaction counts only committed rows — so both would have been allowed past the
-   last slot. Fixed with a `pg_advisory_xact_lock` per `(user, day)`. The migration was never applied, so
-   nothing downstream was affected.
-2. **`tier_rank` collides when Audience is created** (my error, in the plan's A3). The column has no unique
-   constraint, dev holds plus=2, and the new-plan default gives Audience 2 as well. Because the wallet
-   computes "is this an upgrade" by comparing ranks, Plus would have stopped showing as an upgrade from
-   Audience. Renumbering the existing rows is now a required step in Unit C, not a tidy-up.
-3. **The audit's method had a blind spot** — a `Record<PlanKey, …>` with bare identifier keys contains no
-   `'plus'`/`'studio'` string literal, so six such sites never appeared in the 47. `tsc` caught all six when
-   the union widened. One of them is a genuine fourth per-plan capability matrix (reference upload limits)
-   and another is a second copy of the tier-rank scale. Recorded in the audit's "Method correction".
+1. Move **Studio to tier_rank 4**.
+2. Move **Plus to tier_rank 3**.
+3. Create the **Audience** plan (the form offers tier 2, now free). **Monthly only** (decision 13).
+4. Publish a monthly version with a price. Prices are catalogue data and changeable after launch
+   (decision 15) — reconcile dev Plus ₹850 against prod ₹1,450 while you are in here (audit finding 11).
+5. Verify: `select plan_key, tier_rank from public.pricing_plans order by tier_rank` — four rows, four
+   distinct ranks, in the order free, audience, plus, studio.
 
-**129 is applied on dev** (2026-09-19). Promoting a user to Audience no longer raises `23514`.
+**2. Then switch the quota on — this is the live moment.** Set `unlimitedWatching` **false on Free** and
+leave it **true on audience, plus and studio** (set them explicitly rather than relying on the default; the
+default is true precisely so that shipping the capability could not quota anyone, and an explicit value is
+what stops a later change of mind from reaching paying accounts). The instant Free is false, Free accounts on
+dev are limited to **3 distinct stories a day**, IST — that number is `FALLBACK_FREE_DAILY_WATCH_QUOTA` in
+`lib/pricing/watch-quota.ts` and is not admin-editable until Unit E. Replays stay free all day, and admin
+accounts are never metered.
 
-Two things in the plan are worth reading before executing further:
+**3. Run the `consume_watch_slot` walk on dev.** Paste `docs/payments/verify-129-watch-quota.sql` into the
+Supabase SQL editor. It is wrapped in BEGIN/ROLLBACK, prints PASS/FAIL per step, and leaves nothing behind.
+A session cannot run it: the Supabase MCP is read-only and the function writes. The two-tab race check is
+described at the bottom of that file and is the one thing the script itself cannot prove.
 
-- The plan corrects **two claims in `phase-3-hardcoding-audit.md` that were wrong** — the storyline page does
-  *not* fetch beats (the choke point is the `loadStorylineWithBeats` server action, one caller), and the tier
-  rank does *not* break (`free < audience < plus < studio` is sound, under a stated constraint). Both
-  corrections are marked in the audit and both change where code goes.
-- Migration 129 is small: widen two CHECK constraints that hardcode the plan triple in SQL — one of which
-  blocks admin promotion to Audience entirely — plus the quota table and an atomic `consume_watch_slot`
-  function that makes the two-device race safe by construction rather than by care.
+**4. Prod, when the time comes:** 129 and 130 both, plus the COOP/COEP checkout-frame fix and the
+old-Razorpay-account cleanup already recorded under Phase 1. 130 matters **before the first live checkout**,
+or a tester holding a test-mode subscription is refused a live one.
 
-**What these answers remove from Phase 3:** all timezone infrastructure, the per-plan shape migration, and
-all annual billing work. What remains is the tier itself, the quota, and the capability tidy-up.
-
-**Read `phase-3-brief.md` next** — it is deliberately a brief, not a plan, and it says why.
-Scope is the pack's `05_PHASE_3_PLANS_ENTITLEMENTS_CONSUMPTION.md`: an entitlement model replacing plan-name
-conditionals, the new Audience tier, annual billing, and the Free daily watch quota. The brief carries the
-facts verified today — including that adding a fourth plan key touches **47 hardcoded references in 22 files**,
-that there is **no user timezone infrastructure at all**, and that `storyline_views` is unique per *lifetime*,
-not per day, so it cannot be the quota ledger as it stands. It also lists the five owner decisions needed
-before any code.
-
-Note the numbering clash: `billing-plan-2026-09-17.md` calls support tooling "Phase 3". **The pack wins.**
+**5. Reseeding the Terms and /docs pages is now a note in the product, not just here.** The
+`account_deletion_enabled` toggle at `/admin/settings/billing-operations` carries a "Before you turn this on"
+line, shown only while the flag is off, telling whoever flips it to reset those two managed pages to seed in
+the same sitting. Why it is tied to the flag rather than to a deploy: the registry is only a *seed*, the live
+copy is the `managed_pages` row, and the old wording ("self-serve deletion does not exist") is **correct**
+while the flag is off. Reseeding early would create the contradiction rather than fix it. On dev the `terms`
+and `documentation` rows still carry the old sentence; the FAQ row did not. Terms is a published,
+acceptance-requiring document at `1.0.0`, so treat it as a version change. Prod could not be checked from a
+session — production reads are blocked — so check it directly.
 
 ### Open, and genuinely the owner's call
 
