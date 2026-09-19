@@ -16,8 +16,29 @@
 -- What it CANNOT prove: the cross-device race. Every call below runs in one transaction, so they
 -- all share one advisory lock and one snapshot. Racing needs two concurrent sessions -- see the note
 -- at the bottom.
+--
+-- RLS: change nothing. user_daily_watch_slots has RLS enabled and deliberately NO policies, which
+-- denies every role that is subject to it -- but the table is owned by postgres with FORCE ROW
+-- LEVEL SECURITY off, and the SQL editor connects as postgres, so the owner bypasses it. The
+-- function is SECURITY DEFINER owned by postgres as well, so its own reads and writes are outside
+-- RLS whoever calls it. Do not disable RLS and do not add a policy to make this run.
+--
+-- What DOES matter is the role: 129 revokes EXECUTE from anon and authenticated on purpose. The
+-- preflight below fails loudly rather than leaving that to be discovered halfway down.
 
 BEGIN;
+
+DO $preflight$
+BEGIN
+  IF NOT has_function_privilege(
+    current_user, 'public.consume_watch_slot(uuid, date, uuid, integer)', 'EXECUTE'
+  ) THEN
+    RAISE EXCEPTION
+      'Role % cannot execute consume_watch_slot. Run this in the Supabase SQL editor (it connects as postgres); 129 revokes execute from anon and authenticated by design.',
+      current_user;
+  END IF;
+END
+$preflight$;
 
 CREATE TEMP TABLE wq_probe (
   step int,
@@ -93,7 +114,10 @@ SELECT
 FROM wq_probe
 ORDER BY step;
 
--- Rows actually written for the synthetic day: must be 3, never 4.
+-- Rows actually written for the synthetic day: must be 3, never 4. This is the one statement that
+-- reads the table directly rather than through the function, so it is the only one RLS could touch.
+-- A 0 here while the steps above all PASS means you are connected as a role that IS subject to RLS
+-- -- not a quota bug, and still not a reason to change RLS.
 SELECT count(*) AS rows_for_day_1, 3 AS expected
 FROM public.user_daily_watch_slots
 WHERE local_day = DATE '2099-01-01';
