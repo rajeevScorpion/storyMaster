@@ -3,7 +3,7 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-19 — Phase 3 code-complete; quota live on dev)
+## Next session starts here (updated 2026-09-19 — Phase 3 done; Phase 4 planned, awaiting 5 decisions)
 
 **Phase 2 is complete: every unit built, reviewed, and its migrations applied on dev.** Nothing is merged to
 `dev` or `main`; everything is on branch `payments`. Prod is untouched and stays that way until the whole
@@ -114,31 +114,40 @@ any tier from the backend without hassle.**
 
 ### Start here next session
 
-**Phase 3 is code-complete. Units A-E are all built, and the quota is live on dev.** 129 and 130 are
-applied and verified there, neither on prod. The `consume_watch_slot` walk passed 8/8 on 2026-09-19.
+**Read `docs/payments/phase-4-plan.md` first.** Phase 3 is done; Phase 4 is planned and not started.
 
-**The catalogue is created and the switch is thrown** (owner, 2026-09-19), verified against the database:
-four plans at four distinct ranks in the right order (free 1, audience 2, plus 3, studio 4), and
-`unlimitedWatching` false on Free, true on the other three. A Free account on dev is now limited to the
-`pricing_free_daily_watch_quota` setting's value — 3 unless an admin changes it.
+**Phase 3, closed.** Units A-E built, reviewed and committed. Migrations 129 and 130 applied and verified
+on dev, neither on prod. 129's behavioural walk passed 8/8. The catalogue is created and the quota is
+**live on dev**: four plans at four distinct ranks, `unlimitedWatching` false on Free and true on the other
+three, Audience at ₹200/month IN. ROW prices are deliberately unsettled (owner: a future decision).
 
-**Audience is priced and the upsell path is walkable** (owner, 2026-09-19). The ₹0 version is archived and
-one published IN monthly version remains, Razorpay, `provider_price_ref` null so checkout creates a fresh
-plan at the gross.
+**Phase 4 needs five owner decisions before most of it can start.** They are §2 of the plan, and the master
+directive requires the stop — all five touch refunds, clawback, or provider configuration:
 
-**₹200/month, confirmed on the database:** `price_minor` 20000, one published IN monthly version, the ₹0 and
-₹20 attempts both archived. Worth knowing for the next price anyone sets: the studio's field is
-"Price (minor units)" and stores the raw number, so INR values are **paise** — ₹200 is `20000`, and a first
-pass at `2000` published as ₹20. Plus IN `85000` = ₹850 and Studio IN `395000` = ₹3950 are the reference
-points.
+| | Decision | Blocks |
+|---|---|---|
+| D1 | Who may refund, and full-only or partial? | Unit C |
+| D2 | Does a refund claw back coins, and what if already spent? | Unit C |
+| D3 | "Cancel immediately" — keep the paid-for remainder or end access now? | Unit C |
+| D4 | Hard-block or informed-confirm when archiving a plan with active subscribers? | Unit E |
+| D5 | Do incident alerts push anywhere, or is a dashboard enough? | Unit F |
 
-**What is left in Phase 3:** nothing in code. What remains is the owner's: name the Audience price, then
-walk the quota as a real Free account on the preview.
+**Three units need none of them and can start cold:** B (the read-only billing panel on the admin user
+record), D (quota inspection), F (the incident dashboard). Unit A is the migration and is also unblocked.
+**Unit B is the one that pays for itself fastest** — reads only, no money risk, and it is what removes the
+SQL from routine support. If Phase 4 has to stop early, stopping after B leaves real value and nothing
+half-built.
 
-Gates at the end of this session: `npx tsc --noEmit` clean, `npm run lint` clean, **1,775 tests** across 155
-files, `npm run build` succeeds. Run them yourself before trusting any report.
+**One thing to settle before Unit B is verified, not after:** `billing_payments` has **0 rows on dev**, and
+so do `billing_refunds`, `billing_profiles` and `billing_documents`. A panel built against that database
+renders empty everywhere that matters, and "it did not crash" is not evidence. The honest fix is the
+**Phase 2 §6 money walk on the preview**, which is already an outstanding owner action — doing it *before*
+Phase 4 turns it from a chore into this phase's test data. Plan §6 has the alternative and why it is worse.
 
-### Units D and E — what the code does now
+Gates at the end of the Phase 3 session: `npx tsc --noEmit` clean, `npm run lint` clean, **1,775 tests**
+across 155 files, `npm run build` succeeds. Run them yourself before trusting any report.
+
+### Units D and E — what the code does now### Units D and E — what the code does now
 
 **E — the number is an admin setting.** `pricing_free_daily_watch_quota` joined the pricing runtime
 settings (default `'3'`) and appears in the studio on its own, because that panel renders from
