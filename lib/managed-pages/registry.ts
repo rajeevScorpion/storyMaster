@@ -270,7 +270,7 @@ Kissago's features depend on third-party AI, cloud, and payment providers (see t
 
 ## 10. Suspension and Termination
 
-Kissago may restrict access, unpublish storylines, remove content, or suspend or terminate an account if use appears harmful, unlawful, infringing, abusive, or disruptive, or to comply with law. You may stop using Kissago at any time; see the **Safety, Community & Grievance Policy** for how account-deletion requests are currently handled, since self-serve deletion is not yet available.
+Kissago may restrict access, unpublish storylines, remove content, or suspend or terminate an account if use appears harmful, unlawful, infringing, abusive, or disruptive, or to comply with law. You may stop using Kissago at any time, and you can delete your own account from the account menu or at /account/delete. See the **Account Deletion / Data Retention** page for what deletion removes, what stays visible afterwards, and the records Kissago is legally required to keep.
 
 ## 11. Disclaimers
 
@@ -445,7 +445,6 @@ This admin-only page is a starter index for Kissago operations and rollout notes
 
 ## Known Limitations
 
-- No self-serve account deletion flow yet.
 - No self-serve subscription cancellation or plan-switching flow yet.
 - No full docs platform, versioned docs, or markdown-backed docs tree yet.
 `),
@@ -492,7 +491,7 @@ Published storylines can be exported as MP4 video in the browser when the global
 
 ## Can I delete my account?
 
-Full account deletion is not self-serve yet. Send requests to {{SUPPORT_EMAIL}}.
+Yes. Delete it from the account menu, or at /account/delete. You will re-enter your password (or, on a Google-only account, have signed in recently) and type a confirmation phrase, because deletion cannot be undone once it runs. Stories you already published stay in the gallery under the same author name, and billing records are kept for 8 years with your contact details removed — see the **Account Deletion / Data Retention** page. For anything deletion does not cover, such as a data-access or correction request, write to {{SUPPORT_EMAIL}}.
 `),
   },
   {
