@@ -28,3 +28,40 @@ export function istLocalDay(date: Date): string {
   const day = String(ist.getUTCDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
+
+/**
+ * Payments Phase 3, Unit D: the quota as a reader sees it, plus where to go to lift it.
+ *
+ * Lives here rather than in the `'use server'` action so a client component can import the type
+ * (CLAUDE.md, "Put shared constants and types in a plain module").
+ */
+export interface WatchQuotaView {
+  /** No limit applies -- an admin, an exempt plan, or a database without migration 129. */
+  unlimited: boolean;
+  /** Distinct storylines opened today. */
+  used: number;
+  /** Today's allowance. */
+  limit: number;
+  /** This storyline was already opened today, so opening it again is free (owner decision 3). */
+  isReplay: boolean;
+  /** The cheapest plan that actually grants unlimited watching, resolved from the catalogue rather
+   * than named as a literal. Null when the reader is exempt, or when no published plan grants it. */
+  upsell: { planKey: string; name: string } | null;
+}
+
+/** Opens left today. Never negative: a limit lowered by an admin below what someone has already
+ * spent would otherwise read as a negative allowance. */
+export function watchSlotsRemaining(view: Pick<WatchQuotaView, 'unlimited' | 'used' | 'limit'>): number {
+  if (view.unlimited) return Number.POSITIVE_INFINITY;
+  return Math.max(0, view.limit - view.used);
+}
+
+/**
+ * Whether opening this storyline would spend the reader's LAST slot, which is the only moment
+ * decision 2 asks for a confirmation. A replay never warns (decision 3): it spends nothing, so
+ * there is nothing to confirm.
+ */
+export function isLastWatchSlot(view: WatchQuotaView): boolean {
+  if (view.unlimited || view.isReplay) return false;
+  return watchSlotsRemaining(view) === 1;
+}
