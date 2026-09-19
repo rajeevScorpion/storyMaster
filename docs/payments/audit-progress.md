@@ -3,7 +3,7 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-19 — Phase 3 Units A and B done; C, D, E next)
+## Next session starts here (updated 2026-09-19 — Phase 3 code-complete; quota live on dev)
 
 **Phase 2 is complete: every unit built, reviewed, and its migrations applied on dev.** Nothing is merged to
 `dev` or `main`; everything is on branch `payments`. Prod is untouched and stays that way until the whole
@@ -105,38 +105,67 @@ any tier from the backend without hassle.**
 |---|---|---|
 | Migration 129 — quota table, `consume_watch_slot`, the two Audience CHECKs | `e5c0b3d`, race fix `40ff401` | **applied and walked on dev** 2026-09-19 (8/8 PASS); not on prod |
 | Migration 130 — `provider_mode` on the subscription-checkout RPC | `aaaf71b` | **applied on dev** 2026-09-19; not on prod |
-| C — Audience tier: wallet copy, plan-card layout | this session | **code done**; the catalogue half is owner work, below |
+| C — Audience tier: wallet copy, plan-card layout | `97b1c0f` | done; catalogue created on dev 2026-09-19 |
+| D — the quota's reader surfaces: upsell, last-slot confirm | `717f9bc` | done |
+| E — `pricing_free_daily_watch_quota` as an admin setting | `db410ef` | done |
 | A — `'audience'` as a plan key, the capability tidy-up | `04c0ce4` | done, reviewed |
 | B — quota ledger, enforcement, the `unlimitedWatching` capability | `e7cea4d`, defect fix below | done, reviewed |
 | C, D, E | — | not started |
 
 ### Start here next session
 
-**129 and 130 are both applied on dev**, neither on prod, both verified against the database rather than
-assumed — 129's table/RLS/privileges/CHECKs and the advisory-lock race fix in the deployed body; 130's ledger
-row, all four `provider_mode` scopings, and the removal of the now-redundant reuse check.
+**Phase 3 is code-complete. Units A-E are all built, and the quota is live on dev.** 129 and 130 are
+applied and verified there, neither on prod. The `consume_watch_slot` walk passed 8/8 on 2026-09-19.
 
-**`consume_watch_slot`'s behavioural walk passed on dev, 2026-09-19** — all 8 checks in
-`docs/payments/verify-129-watch-quota.sql`, run by the owner in the SQL editor. First watch counts a slot;
-a same-day replay is free, counts nothing and reports `is_replay`; the limit bites on the 4th *distinct*
-story; the refused watch gives its slot back (`used=3`, and 3 rows written for the day, not 4); a replay is
-still free once the day is full; the next IST day starts clean. That closes the last outstanding Phase 3
-database check. The cross-device race is still unexercised — it needs two concurrent sessions, and the
-procedure is at the bottom of that file.
+**The catalogue is created and the switch is thrown** (owner, 2026-09-19), verified against the database:
+four plans at four distinct ranks in the right order (free 1, audience 2, plus 3, studio 4), and
+`unlimitedWatching` false on Free, true on the other three. A Free account on dev is now limited to the
+`pricing_free_daily_watch_quota` setting's value — 3 unless an admin changes it.
 
-**Unit C's code is done; its catalogue half is not, and the catalogue half is what switches the quota on.**
-See "Owner actions waiting". Until `unlimitedWatching` is set false on Free, every plan reads as unlimited
-(the capability defaults true by design) and the quota does nothing even with 129 applied — which is exactly
-the state dev is in now: no plan row carries the flag at all.
+**One thing blocks testing the upsell end to end: the Audience IN monthly version is published at ₹0.**
+Checkout refuses a zero-priced non-free plan outright (`This plan is not purchasable`,
+`app/actions/pricing-checkout.ts:163`), so the upsell button leads to a dead end. It is a safe dead end —
+no Razorpay call is attempted and no money path is involved — and it is catalogue data, not code, so it is
+a price away from working. Decision 15 said prices gate nothing, and they still gate nothing except this
+one walk-through.
 
-**Next: Unit D** (the real quota UX — Unit B left a one-line placeholder deliberately, and the refusal
-surface is the upsell), then **E** (the admin quota setting; until it lands, `watch-quota.ts` carries
-`FALLBACK_FREE_DAILY_WATCH_QUOTA = 3` with a comment saying to delete it). D should not invent a number:
-until E exists the limit is that constant, so "N of 3 left today" has to read the same source the server
-does, not a literal.
+**What is left in Phase 3:** nothing in code. What remains is the owner's: name the Audience price, then
+walk the quota as a real Free account on the preview.
 
-Gates at the end of this session: `npx tsc --noEmit` clean, `npm run lint` clean, **1,766 tests** across 154
+Gates at the end of this session: `npx tsc --noEmit` clean, `npm run lint` clean, **1,775 tests** across 155
 files, `npm run build` succeeds. Run them yourself before trusting any report.
+
+### Units D and E — what the code does now
+
+**E — the number is an admin setting.** `pricing_free_daily_watch_quota` joined the pricing runtime
+settings (default `'3'`) and appears in the studio on its own, because that panel renders from
+`PRICING_RUNTIME_SETTING_DEFINITIONS`. `FALLBACK_FREE_DAILY_WATCH_QUOTA` is gone. The capability and the
+number now resolve together — `resolveUnlimitedWatchingForUser` became `resolveWatchQuotaPolicyForUser` and
+returns both from one `loadPricingState`, so the limit costs nothing beyond the exemption check.
+
+A **non-positive limit reads as unrestricted, not as a total block.** Zero is what a misconfigured row looks
+like, not an admin asking for "no watching at all", and locking every reader out on a bad setting is the
+worse failure — the same inversion as the absent-migration latch beside it.
+
+**D — the reader surfaces.** Two of them, both in `components/story/WatchQuotaNotice.tsx`:
+
+- **The refusal**, replacing Unit B's one-line placeholder. It names the plan that actually lifts the limit,
+  resolved from the catalogue by tier rank in `app/actions/watch-quota.ts` — never written as the literal
+  "Audience". If Audience is unpublished in a market, or an admin turns its capability off, the offer moves
+  to whatever really grants it; if nothing does, no offer is shown rather than a dead one.
+- **The last-slot confirmation**, and only that one. It appears when opening a storyline would spend the
+  final slot, never on a replay (decision 3) — a replay spends nothing, and warning there would train
+  readers to dismiss the one prompt that matters.
+
+**Why the peek is a separate call, and why it runs *before* the load rather than beside it:**
+`loadStorylineWithBeats` spends the slot, so there is no way to ask "use your last one on this?" after the
+call that would already have used it. `peekWatchQuota` answers without spending. It short-circuits
+server-side for an admin or an exempt plan before it ever reads the slots table, so a reader with no limit
+pays for one cheap call and nothing more. Every failure path in it reports unrestricted: a quota lookup that
+errors must not stop someone reading, and the server still enforces the real limit either way.
+
+Slots remaining clamps at zero, so a limit an admin lowers below what someone has already spent cannot
+render as a negative allowance.
 
 ### Unit C — what the code does now
 
@@ -161,29 +190,22 @@ the number Unit E exists to make configurable, and Unit D owns how the limit is 
 
 ### Owner actions waiting
 
-**1. Finish Unit C in the pricing studio. Do it in this order — the order is the point.**
+**1. ~~Finish Unit C in the pricing studio~~ — done 2026-09-19.** Verified on dev: four plans, four distinct
+ranks, free 1 / audience 2 / plus 3 / studio 4.
 
-`pricing_plans.tier_rank` has no unique constraint, and dev currently holds free=1, **plus=2, studio=3**.
-Unit A fixed the *new-plan form* to default Audience to 2, but that does not move the rows already there, so
-creating Audience first would collide with the live Plus row. Nothing rejects the collision; what breaks is
-`WalletPage`'s `isUpgrade = offer.tierRank > currentTierRank`, so Plus would stop presenting as an upgrade
-from Audience — the exact conversion path the tier exists to feed.
+**2. ~~Set `unlimitedWatching` false on Free~~ — done 2026-09-19.** False on Free, true on audience, plus and
+studio. **The quota is live on dev.**
 
-1. Move **Studio to tier_rank 4**.
-2. Move **Plus to tier_rank 3**.
-3. Create the **Audience** plan (the form offers tier 2, now free). **Monthly only** (decision 13).
-4. Publish a monthly version with a price. Prices are catalogue data and changeable after launch
-   (decision 15) — reconcile dev Plus ₹850 against prod ₹1,450 while you are in here (audit finding 11).
-5. Verify: `select plan_key, tier_rank from public.pricing_plans order by tier_rank` — four rows, four
-   distinct ranks, in the order free, audience, plus, studio.
+**2a. Name the Audience price.** The IN monthly version is published at **₹0**, and checkout refuses a
+zero-priced non-free plan (`This plan is not purchasable`). The upsell button therefore leads to a dead end
+— a safe one, no Razorpay call is attempted, but the conversion path cannot be walked until a price exists.
+This is the only thing standing between Phase 3 and an end-to-end test. Reconcile audit finding 11 in the
+same pass (dev Plus ₹850 vs prod ₹1,450).
 
-**2. Then switch the quota on — this is the live moment.** Set `unlimitedWatching` **false on Free** and
-leave it **true on audience, plus and studio** (set them explicitly rather than relying on the default; the
-default is true precisely so that shipping the capability could not quota anyone, and an explicit value is
-what stops a later change of mind from reaching paying accounts). The instant Free is false, Free accounts on
-dev are limited to **3 distinct stories a day**, IST — that number is `FALLBACK_FREE_DAILY_WATCH_QUOTA` in
-`lib/pricing/watch-quota.ts` and is not admin-editable until Unit E. Replays stay free all day, and admin
-accounts are never metered.
+**2b. Walk the quota as a real Free account on the preview.** Open three distinct stories, confirm the
+third asks before it goes, confirm the fourth is refused and shows the upsell, re-open one of the three and
+confirm it is free and never warns. Confirm an admin account is never metered. The database behaviour is
+already proven (8/8 above); this is the UI half.
 
 **3. ~~Run the `consume_watch_slot` walk on dev~~ — done 2026-09-19, 8/8 PASS.** Only the two-tab race check
 at the bottom of `docs/payments/verify-129-watch-quota.sql` is left, and it is optional: the advisory lock it
@@ -325,7 +347,7 @@ session at natural checkpoints.
 | 0 Discovery | **done 2026-09-17** — `phase-0-discovery-2026-09-17.md`; new streams `research/09`, `research/10` |
 | 1 Money correctness | **code complete, not yet sandbox-verified** — `phase-1-plan.md`. Unit A `1392121`, Unit B `fabea84`, Opus review fixes `6685db5`. 124 applied on dev 2026-09-17. Checkout-frame fix `cd5cd0c`. Next: sandbox runbook (plan §6), in progress. Phase 1 closes only after §6 passes |
 | 2 Durable billing ledger | **done 2026-09-18** — every unit reviewed; migrations 125-128 applied on dev, none on prod. `phase-2-plan.md` §6 database half verified; the money walk and a throwaway deletion still owner-pending |
-| 3 Plans, entitlements, consumption | **in progress 2026-09-18** — `phase-3-plan.md`. Units A (`04c0ce4`) and B (`e7cea4d`) done and reviewed; C, D, E not started. Migration 129 written, unapplied everywhere. One open defect in B, described at the top of this file |
+| 3 Plans, entitlements, consumption | **code-complete 2026-09-19** — `phase-3-plan.md`. A `04c0ce4`, B `e7cea4d` (+ defect fix `7b5669b`), C `97b1c0f`, D `717f9bc`, E `db410ef`. Migrations 129 and 130 applied and verified on dev, neither on prod; 129 walked 8/8. Catalogue created and the quota switched on for dev. Outstanding: the Audience price is ₹0, so the upsell cannot be walked end to end |
 | 4–8 | not started |
 
 **Delegation:** Opus plans/reviews, Sonnet executes; **at most 2 agents at once**; ask the owner for session usage at each phase boundary.
