@@ -106,28 +106,38 @@ BEGIN
     FROM public.consume_watch_slot(v_user, DATE '2099-01-02', v_story[4], v_limit);
 END $$;
 
-SELECT
-  step,
-  note,
-  allowed,
-  used,
-  is_replay,
-  expected,
-  CASE WHEN format('allowed=%s used=%s replay=%s',
-                   CASE WHEN allowed THEN 't' ELSE 'f' END,
-                   used,
-                   CASE WHEN is_replay THEN 't' ELSE 'f' END) = expected
-       THEN 'PASS' ELSE 'FAIL' END AS verdict
-FROM wq_probe
-ORDER BY step;
+-- ONE result set on purpose: the SQL editor renders only the LAST statement's results, so a
+-- separate follow-up query would silently hide everything above it. Step 8 is the row count, folded
+-- in as a row rather than left as its own statement.
+--
+-- Step 8 is the one that reads the table directly rather than through the function, so it is the
+-- only line RLS could touch. rows=0 there while steps 1-7 PASS means you are connected as a role
+-- that IS subject to RLS -- not a quota bug, and still not a reason to change RLS.
+SELECT step, note, observed, expected,
+       CASE WHEN observed = expected THEN 'PASS' ELSE 'FAIL' END AS verdict
+FROM (
+  SELECT
+    step,
+    note,
+    format('allowed=%s used=%s replay=%s',
+           CASE WHEN allowed THEN 't' ELSE 'f' END,
+           used,
+           CASE WHEN is_replay THEN 't' ELSE 'f' END) AS observed,
+    expected
+  FROM wq_probe
 
--- Rows actually written for the synthetic day: must be 3, never 4. This is the one statement that
--- reads the table directly rather than through the function, so it is the only one RLS could touch.
--- A 0 here while the steps above all PASS means you are connected as a role that IS subject to RLS
--- -- not a quota bug, and still not a reason to change RLS.
-SELECT count(*) AS rows_for_day_1, 3 AS expected
-FROM public.user_daily_watch_slots
-WHERE local_day = DATE '2099-01-01';
+  UNION ALL
+
+  -- Four watches were attempted on day 1 and one was refused. rows=4 would mean the refused slot
+  -- was kept: the give-back in the function is what this row exists to catch.
+  SELECT
+    8,
+    'rows written for day 1 -- the refused slot must be given back',
+    format('rows=%s', (SELECT count(*) FROM public.user_daily_watch_slots
+                        WHERE local_day = DATE '2099-01-01')),
+    'rows=3'
+) checks
+ORDER BY step;
 
 ROLLBACK;
 
