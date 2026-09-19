@@ -126,11 +126,11 @@ four plans at four distinct ranks in the right order (free 1, audience 2, plus 3
 one published IN monthly version remains, Razorpay, `provider_price_ref` null so checkout creates a fresh
 plan at the gross.
 
-**Check the amount before any real test: it is stored as `2000`, which renders as ₹20.00, not ₹200.**
-`price_minor` is paise, and the studio's field is labelled "Price (minor units)" and stores the raw number.
-The rest of the catalogue confirms the convention — Plus IN `85000` = ₹850, Studio IN `395000` = ₹3950. If
-₹200 was intended the value is `20000`. Nothing breaks either way: 2000 is above zero, so checkout no longer
-refuses it.
+**₹200/month, confirmed on the database:** `price_minor` 20000, one published IN monthly version, the ₹0 and
+₹20 attempts both archived. Worth knowing for the next price anyone sets: the studio's field is
+"Price (minor units)" and stores the raw number, so INR values are **paise** — ₹200 is `20000`, and a first
+pass at `2000` published as ₹20. Plus IN `85000` = ₹850 and Studio IN `395000` = ₹3950 are the reference
+points.
 
 **What is left in Phase 3:** nothing in code. What remains is the owner's: name the Audience price, then
 walk the quota as a real Free account on the preview.
@@ -199,9 +199,8 @@ ranks, free 1 / audience 2 / plus 3 / studio 4.
 **2. ~~Set `unlimitedWatching` false on Free~~ — done 2026-09-19.** False on Free, true on audience, plus and
 studio. **The quota is live on dev.**
 
-**2a. ~~Name the Audience price~~ — done 2026-09-19, but confirm the amount.** Published IN monthly at
-`price_minor` **2000**, which is **₹20.00**, not ₹200 — the field is paise. `20000` is ₹200. Reconcile audit
-finding 11 in the same pass (dev Plus ₹850 vs prod ₹1,450).
+**2a. ~~Name the Audience price~~ — done 2026-09-19: ₹200/month** (`price_minor` 20000), verified. Audit
+finding 11 is still open in the same area (dev Plus ₹850 vs prod ₹1,450).
 
 **2c. Before the india-only beta flag ever comes off: Plus ROW monthly is published at $0.00.** Same
 zero-price trap Audience had — it would render as "Free" with an enabled button that throws
