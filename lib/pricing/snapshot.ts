@@ -73,6 +73,7 @@ export function buildPricingRuntimeControls(
     routingProviderIn: getProviderControl(rows, 'pricing_routing_provider_in'),
     routingProviderRow: getProviderControl(rows, 'pricing_routing_provider_row'),
     indiaOnlyBetaEnabled: getBooleanControl(rows, 'pricing_india_only_beta_enabled'),
+    freeDailyWatchQuota: getIntegerControl(rows, 'pricing_free_daily_watch_quota'),
   };
 }
 

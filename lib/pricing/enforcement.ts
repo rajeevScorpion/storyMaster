@@ -624,17 +624,36 @@ export async function resolveEntitlementPlanKeyForUser(userId: string): Promise<
  * EffectivePricingSnapshot.unlimitedWatching's own fail-open default -- a pricing-system hiccup
  * must never be what switches a watch limit on.
  */
-export async function resolveUnlimitedWatchingForUser(userId: string): Promise<boolean> {
+export interface WatchQuotaPolicy {
+  /** The plan's `unlimitedWatching` capability, read off the resolved snapshot -- never derived
+   * from the tier rank (docs/payments/phase-3-plan.md §4). */
+  unlimited: boolean;
+  /** `pricing_free_daily_watch_quota` (Unit E). Meaningless when `unlimited`. */
+  dailyQuota: number;
+}
+
+/**
+ * Both halves of the watch-quota decision from one load of the pricing state: whether this account
+ * is exempt, and the limit if it is not. Resolved together because the caller needs both on every
+ * watch and `loadPricingState` already carries both -- asking twice would load it twice.
+ *
+ * Fails OPEN, like every other reference to this capability: a pricing system that cannot answer
+ * must not lock every reader out of the product. See lib/pricing/watch-quota.ts.
+ */
+export async function resolveWatchQuotaPolicyForUser(userId: string): Promise<WatchQuotaPolicy> {
   try {
     const supabase = createAdminClient();
     const state = await loadPricingState(supabase, userId);
-    return state.snapshot.unlimitedWatching;
+    return {
+      unlimited: state.snapshot.unlimitedWatching,
+      dailyQuota: state.controls.freeDailyWatchQuota,
+    };
   } catch (error) {
     console.error(
-      'resolveUnlimitedWatchingForUser failed, defaulting to unlimited (fail-open):',
+      'resolveWatchQuotaPolicyForUser failed, defaulting to unlimited (fail-open):',
       error instanceof Error ? error.message : error
     );
-    return true;
+    return { unlimited: true, dailyQuota: 0 };
   }
 }
 

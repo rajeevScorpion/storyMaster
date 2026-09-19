@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
-import { isAdminUserId, resolveUnlimitedWatchingForUser } from '@/lib/pricing/enforcement';
+import { isAdminUserId, resolveWatchQuotaPolicyForUser } from '@/lib/pricing/enforcement';
 import { istLocalDay } from '@/lib/pricing/watch-quota.shared';
 
 /**
@@ -36,15 +36,6 @@ interface ConsumeWatchSlotRpcRow {
   is_replay: boolean;
 }
 
-/**
- * Unit E (docs/payments/phase-3-plan.md §6, deferred -- not built by this unit) is where the
- * quota number becomes an admin-editable runtime setting (`pricing_free_daily_watch_quota` on
- * `PricingRuntimeControls`, default '3'). That field does not exist yet, so this constant stands
- * in with the same default Unit E's own plan text records. Replace this with
- * `controls.freeDailyWatchQuota` when Unit E lands -- do not let it linger once that field exists.
- */
-const FALLBACK_FREE_DAILY_WATCH_QUOTA = 3;
-
 let missingRpcLatched = false;
 
 /** Test-only escape hatch, mirroring lib/billing/ledger.ts's resetLedgerSchemaLatchForTests --
@@ -69,7 +60,8 @@ function isMissingConsumeWatchSlotRpcError(error: { code?: string } | null | und
  * Order of checks, cheapest and most permissive first (§5, B3):
  * 1. Admin accounts are never metered and never write to the ledger (Phase 0 decision 7).
  * 2. A plan carrying the `unlimitedWatching` capability is treated the same way. This is read off
- *    the resolved snapshot, never derived from the tier rank.
+ *    the resolved snapshot, never derived from the tier rank. The same load supplies the limit
+ *    (`pricing_free_daily_watch_quota`, Unit E), so the policy costs one lookup, not two.
  * 3. Otherwise, `consume_watch_slot` (migration 129) is the source of truth: it is race-safe
  *    across devices and free-on-replay by construction (see the migration's own comments).
  *
@@ -87,12 +79,24 @@ export async function consumeWatchSlot(input: ConsumeWatchSlotInput): Promise<Wa
     return { allowed: true, used: 0, limit: 0, isReplay: false, unlimited: true };
   }
 
-  const unlimited = await resolveUnlimitedWatchingForUser(userId);
-  if (unlimited) {
+  const policy = await resolveWatchQuotaPolicyForUser(userId);
+  if (policy.unlimited) {
     return { allowed: true, used: 0, limit: 0, isReplay: false, unlimited: true };
   }
 
-  const limit = FALLBACK_FREE_DAILY_WATCH_QUOTA;
+  const limit = policy.dailyQuota;
+
+  // A limit of zero would mean "no watching at all", which no admin setting this number is asking
+  // for -- it is what a misconfigured or unparseable row looks like. Treat it as unrestricted
+  // rather than locking every non-exempt reader out of the product, the same way an absent
+  // migration does below.
+  if (!Number.isInteger(limit) || limit <= 0) {
+    console.warn(
+      `[watch-quota] pricing_free_daily_watch_quota resolved to ${String(limit)}; allowing the ` +
+      'watch rather than refusing every reader. Set a positive integer in the pricing studio.'
+    );
+    return { allowed: true, used: 0, limit: 0, isReplay: false, unlimited: true };
+  }
 
   if (missingRpcLatched) {
     return { allowed: true, used: 0, limit, isReplay: false, unlimited: false };
@@ -132,5 +136,70 @@ export async function consumeWatchSlot(input: ConsumeWatchSlotInput): Promise<Wa
     limit,
     isReplay: row.is_replay,
     unlimited: false,
+  };
+}
+
+export interface WatchQuotaStatus {
+  /** No quota applies: an admin account, or a plan carrying `unlimitedWatching`. */
+  unlimited: boolean;
+  /** Distinct storylines already opened today. 0 when `unlimited`. */
+  used: number;
+  /** Today's allowance. 0 when `unlimited`. */
+  limit: number;
+  /** This storyline was already opened today, so watching it again costs nothing. Decision 3 says
+   * a replay must never warn, which is the whole reason this is reported separately from `used`. */
+  isReplay: boolean;
+}
+
+/**
+ * Payments Phase 3, Unit D: what the reader has left, WITHOUT spending anything.
+ *
+ * Deliberately separate from `consumeWatchSlot` rather than a flag on it. The UI needs to know
+ * before it commits the reader -- to show "2 of 3 left today", and to ask before the last slot
+ * goes -- and a call that answers by spending could not be used for either. Every branch here is
+ * a read.
+ *
+ * Fails open in the same three places `consumeWatchSlot` does (admin, capability, absent
+ * migration), so a database without 129 reports "unlimited" rather than an alarming zero.
+ */
+export async function peekWatchQuota(input: ConsumeWatchSlotInput): Promise<WatchQuotaStatus> {
+  const { userId, storylineId } = input;
+
+  if (isAdminUserId(userId)) {
+    return { unlimited: true, used: 0, limit: 0, isReplay: false };
+  }
+
+  const policy = await resolveWatchQuotaPolicyForUser(userId);
+  if (policy.unlimited || !Number.isInteger(policy.dailyQuota) || policy.dailyQuota <= 0) {
+    return { unlimited: true, used: 0, limit: 0, isReplay: false };
+  }
+
+  const supabase = createAdminClient();
+  const localDay = istLocalDay(new Date());
+
+  const { data, error } = await supabase
+    .from('user_daily_watch_slots')
+    .select('storyline_id')
+    .eq('user_id', userId)
+    .eq('local_day', localDay);
+
+  if (error) {
+    // 42P01 is the table itself being absent -- migration 129 has not run. Same inverted rule as
+    // the RPC probe below: report unrestricted rather than showing a reader a limit that is not
+    // being enforced. Any other error is reported the same way for the same reason; this is a
+    // display path, and a wrong number here is worse than no number.
+    console.warn(
+      '[watch-quota] peekWatchQuota could not read the slots for today, reporting unlimited:',
+      error.message
+    );
+    return { unlimited: true, used: 0, limit: 0, isReplay: false };
+  }
+
+  const rows = (data as { storyline_id: string }[] | null) ?? [];
+  return {
+    unlimited: false,
+    used: rows.length,
+    limit: policy.dailyQuota,
+    isReplay: rows.some((row) => row.storyline_id === storylineId),
   };
 }

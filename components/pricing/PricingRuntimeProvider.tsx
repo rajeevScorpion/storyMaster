@@ -88,6 +88,11 @@ const DEFAULT_PRICING_RUNTIME_CONTEXT: PricingRuntimeContext = {
     routingProviderIn: 'razorpay',
     routingProviderRow: 'stripe',
     indiaOnlyBetaEnabled: true,
+    // Mirrors PRICING_RUNTIME_SETTING_DEFINITIONS' defaultValue for
+    // pricing_free_daily_watch_quota. This is the value a client renders before the real controls
+    // arrive, so it must not read as unlimited -- showing a reader more slots than they have is
+    // worse than showing fewer.
+    freeDailyWatchQuota: 3,
   },
   actionCosts: {
     start_story_initial_beat: 1,

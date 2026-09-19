@@ -161,6 +161,7 @@ export const PRICING_RUNTIME_FLAG_KEYS = [
   'pricing_routing_provider_in',
   'pricing_routing_provider_row',
   'pricing_india_only_beta_enabled',
+  'pricing_free_daily_watch_quota',
 ] as const;
 export type PricingRuntimeFlagKey = (typeof PRICING_RUNTIME_FLAG_KEYS)[number];
 
@@ -283,6 +284,17 @@ export const PRICING_RUNTIME_SETTING_DEFINITIONS: readonly PricingRuntimeSetting
     disabledHelp: 'When this is off, Kissago uses the built-in timeout for temporary coin holds.',
   },
   {
+    key: 'pricing_free_daily_watch_quota',
+    kind: 'integer',
+    defaultEnabled: false,
+    defaultValue: '3',
+    label: 'Free Daily Watch Limit',
+    description: 'Sets how many different stories an account on a watch-limited plan can open in one day.',
+    enabledHelp:
+      'When this is on, Kissago uses the number below as the number of different stories a watch-limited account can open in one day, counted on the Indian calendar day. Re-opening a story already watched that day is always free and never counts again.',
+    disabledHelp: 'When this is off, Kissago uses its built-in daily watch limit.',
+  },
+  {
     key: 'pricing_migration_grant_beats',
     kind: 'integer',
     defaultEnabled: false,
@@ -397,6 +409,14 @@ export interface PricingRuntimeControls {
   routingProviderIn: BillingProvider;
   routingProviderRow: BillingProvider;
   indiaOnlyBetaEnabled: boolean;
+  /**
+   * Payments Phase 3, Unit E: how many DISTINCT storylines an account without the
+   * `unlimitedWatching` capability may open in one IST day. Re-watching one already seen that day
+   * is free and never counts again (owner decision 3), so this is a limit on breadth, not on time
+   * spent. Enforced in lib/pricing/watch-quota.ts; a plan carrying `unlimitedWatching` and any
+   * admin account never reach it.
+   */
+  freeDailyWatchQuota: number;
 }
 
 export interface EffectivePricingSnapshot {
