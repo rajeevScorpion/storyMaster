@@ -423,11 +423,27 @@ describe('processRazorpayWebhookEvent — refunds', () => {
   });
 });
 
-describe('processRazorpayWebhookEvent — disputes', () => {
+describe('processRazorpayWebhookEvent \u2014 disputes', () => {
+  // Razorpay debits the merchant only when a dispute is LOST
+  // (docs/payments/research/06-razorpay-capabilities.md section 4). Every dispute event used to be
+  // handled identically, so a dispute the merchant won left the payment `disputed` and its
+  // billing_refunds row `pending` for good, in a record kept eight years. These cover each way out.
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** The settled-dispute probe the open path runs before it writes anything. */
+  function noDisputeRecorded(
+    enqueue: (t: string, op: 'select' | 'update', r: { data?: unknown; error?: { message: string } | null }) => void
+  ) {
+    enqueue('billing_refunds', 'select', { data: null, error: null });
+  }
+
   it('marks the matched order disputed (no ledger payment matched)', async () => {
     const { supabase, enqueue, calls } = createFakeSupabase();
     enqueue('billing_payments', 'select', { data: null, error: null });
     enqueue('billing_orders', 'select', { data: fakeOrder({ status: 'paid', provider_payment_id: 'pay_1' }), error: null });
+    noDisputeRecorded(enqueue);
     enqueue('billing_orders', 'update', { data: null, error: null });
 
     const payload: RazorpayWebhookPayload = { event: 'payment.dispute.created', payload: { dispute: { entity: { id: 'disp_1', payment_id: 'pay_1' } } } };
@@ -454,6 +470,7 @@ describe('processRazorpayWebhookEvent — disputes', () => {
     const { supabase, enqueue } = createFakeSupabase();
     enqueue('billing_payments', 'select', { data: fakeLedgerPayment(), error: null });
     enqueue('billing_orders', 'select', { data: null, error: null });
+    noDisputeRecorded(enqueue);
     enqueue('billing_payments', 'update', { data: null, error: null });
     recordDisputeMock.mockResolvedValueOnce({ state: 'inserted', id: 'dispute-1' });
 
@@ -467,6 +484,146 @@ describe('processRazorpayWebhookEvent — disputes', () => {
     expect(recordDisputeMock).toHaveBeenCalledWith(
       expect.objectContaining({ paymentId: 'payment-1', providerRefundId: 'disp_1', amountMinor: 1180, netMinor: 1000, taxMinor: 180, status: 'pending' })
     );
+  });
+
+  it('settles a lost dispute as a processed reversal and marks the payment refunded', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'select', { data: fakeLedgerPayment(), error: null });
+    enqueue('billing_orders', 'select', { data: fakeOrder({ status: 'disputed', provider_payment_id: 'pay_1' }), error: null });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+    enqueue('billing_payments', 'update', { data: null, error: null });
+    recordDisputeMock.mockResolvedValueOnce({ state: 'already_recorded', id: 'dispute-1' });
+
+    const payload: RazorpayWebhookPayload = {
+      event: 'payment.dispute.lost',
+      payload: { dispute: { entity: { id: 'disp_1', payment_id: 'pay_1', amount: 1180, status: 'lost' } } },
+    };
+    const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+    expect(result.outcome).toBe('dispute_lost');
+    expect(calls.find((c) => c.table === 'billing_orders' && c.op === 'update')?.payload).toMatchObject({ status: 'refunded' });
+    expect(calls.find((c) => c.table === 'billing_payments' && c.op === 'update')?.payload).toMatchObject({ status: 'refunded' });
+    expect(recordDisputeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'processed', processedAt: expect.any(String) })
+    );
+  });
+
+  it('sizes a lost dispute that covers less than the whole payment as partially refunded', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'select', { data: fakeLedgerPayment(), error: null });
+    enqueue('billing_orders', 'select', { data: fakeOrder({ status: 'disputed', provider_payment_id: 'pay_1' }), error: null });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+    enqueue('billing_payments', 'update', { data: null, error: null });
+    recordDisputeMock.mockResolvedValueOnce({ state: 'inserted', id: 'dispute-1' });
+
+    const payload: RazorpayWebhookPayload = {
+      event: 'payment.dispute.lost',
+      payload: { dispute: { entity: { id: 'disp_1', payment_id: 'pay_1', amount: 590, status: 'lost' } } },
+    };
+    const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+    expect(result.outcome).toBe('dispute_lost');
+    expect(calls.find((c) => c.table === 'billing_payments' && c.op === 'update')?.payload).toMatchObject({ status: 'partially_refunded' });
+  });
+
+  it('releases a won dispute: the payment goes back to captured and the reversal is marked failed', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'select', { data: fakeLedgerPayment({ status: 'disputed' }), error: null });
+    enqueue('billing_orders', 'select', { data: fakeOrder({ status: 'disputed', provider_payment_id: 'pay_1' }), error: null });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+    enqueue('billing_payments', 'update', { data: null, error: null });
+    fetchRazorpayPaymentMock.mockResolvedValueOnce({
+      id: 'pay_1', order_id: 'order_rzp_1', status: 'captured', amount: 1180, currency: 'INR',
+      amount_refunded: 0, refund_status: null, invoice_id: null, captured: true,
+    });
+    recordDisputeMock.mockResolvedValueOnce({ state: 'already_recorded', id: 'dispute-1' });
+
+    const payload: RazorpayWebhookPayload = {
+      event: 'payment.dispute.won',
+      payload: { dispute: { entity: { id: 'disp_1', payment_id: 'pay_1', amount: 1180, status: 'won' } } },
+    };
+    const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+    expect(result.outcome).toBe('dispute_won');
+    expect(calls.find((c) => c.table === 'billing_orders' && c.op === 'update')?.payload).toMatchObject({ status: 'paid' });
+    expect(calls.find((c) => c.table === 'billing_payments' && c.op === 'update')?.payload).toMatchObject({ status: 'captured' });
+    // 'failed' is this vocabulary's "the reversal did not happen", not an error.
+    expect(recordDisputeMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed', processedAt: null }));
+  });
+
+  it('does not erase an ordinary partial refund when the dispute is won', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'select', { data: fakeLedgerPayment({ status: 'disputed' }), error: null });
+    enqueue('billing_orders', 'select', { data: fakeOrder({ status: 'disputed', provider_payment_id: 'pay_1' }), error: null });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+    enqueue('billing_payments', 'update', { data: null, error: null });
+    // The customer was refunded half separately; winning the chargeback does not undo that.
+    fetchRazorpayPaymentMock.mockResolvedValueOnce({
+      id: 'pay_1', order_id: 'order_rzp_1', status: 'captured', amount: 1180, currency: 'INR',
+      amount_refunded: 590, refund_status: 'partial', invoice_id: null, captured: true,
+    });
+    recordDisputeMock.mockResolvedValueOnce({ state: 'already_recorded', id: 'dispute-1' });
+
+    const payload: RazorpayWebhookPayload = {
+      event: 'payment.dispute.won',
+      payload: { dispute: { entity: { id: 'disp_1', payment_id: 'pay_1', status: 'won' } } },
+    };
+    await processRazorpayWebhookEvent({ supabase, payload });
+
+    expect(calls.find((c) => c.table === 'billing_payments' && c.op === 'update')?.payload).toMatchObject({ status: 'partially_refunded' });
+  });
+
+  it('writes nothing for a close, which carries no money outcome of its own', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'select', { data: fakeLedgerPayment(), error: null });
+    enqueue('billing_orders', 'select', { data: fakeOrder({ status: 'refunded', provider_payment_id: 'pay_1' }), error: null });
+
+    const payload: RazorpayWebhookPayload = {
+      event: 'payment.dispute.closed',
+      payload: { dispute: { entity: { id: 'disp_1', payment_id: 'pay_1', status: 'closed' } } },
+    };
+    const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+    expect(result.outcome).toBe('dispute_closed');
+    expect(result.relatedUserId).toBe('user-1');
+    expect(calls.some((c) => c.op === 'update')).toBe(false);
+    expect(recordDisputeMock).not.toHaveBeenCalled();
+  });
+
+  it('does not re-open a settled dispute when a created event is redelivered late', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'select', { data: fakeLedgerPayment({ status: 'refunded' }), error: null });
+    enqueue('billing_orders', 'select', { data: fakeOrder({ status: 'refunded', provider_payment_id: 'pay_1' }), error: null });
+    enqueue('billing_refunds', 'select', { data: { status: 'processed' }, error: null });
+
+    const payload: RazorpayWebhookPayload = {
+      event: 'payment.dispute.created',
+      payload: { dispute: { entity: { id: 'disp_1', payment_id: 'pay_1', amount: 1180 } } },
+    };
+    const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+    expect(result.outcome).toBe('dispute_already_settled');
+    expect(calls.some((c) => c.op === 'update')).toBe(false);
+    expect(recordDisputeMock).not.toHaveBeenCalled();
+  });
+
+  it('believes the dispute entity status over a less specific event name', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'select', { data: fakeLedgerPayment(), error: null });
+    enqueue('billing_orders', 'select', { data: fakeOrder({ status: 'disputed', provider_payment_id: 'pay_1' }), error: null });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+    enqueue('billing_payments', 'update', { data: null, error: null });
+    recordDisputeMock.mockResolvedValueOnce({ state: 'already_recorded', id: 'dispute-1' });
+
+    // Razorpay can close the entity while sending the outcome event; the outcome is the fact.
+    const payload: RazorpayWebhookPayload = {
+      event: 'payment.dispute.lost',
+      payload: { dispute: { entity: { id: 'disp_1', payment_id: 'pay_1', amount: 1180, status: 'closed' } } },
+    };
+    const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+    expect(result.outcome).toBe('dispute_lost');
+    expect(calls.find((c) => c.table === 'billing_payments' && c.op === 'update')?.payload).toMatchObject({ status: 'refunded' });
   });
 });
 

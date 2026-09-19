@@ -10,6 +10,7 @@ import {
 } from '@/lib/billing/razorpay-sync';
 import { recordDispute, recordRefund } from '@/lib/billing/ledger';
 import { splitRefundProportionally } from '@/lib/billing/tax.shared';
+import { resolveDisputeOutcome } from '@/lib/billing/dispute-status.shared';
 import type { DbBillingOrder, DbBillingPayment, DbBillingSubscription, DbPricingPlanVersion } from '@/lib/types/database';
 import type { BillingPaymentStatus, BillingRefundStatus } from '@/lib/types/pricing';
 
@@ -28,8 +29,11 @@ export interface RazorpayWebhookPayload {
      * when absent (an old/malformed payload), which is only accurate for a single full refund. */
     refund?: { entity?: { id?: string; payment_id?: string; amount?: number } };
     /** Same `amount` note as refund above -- a dispute normally covers the full payment amount, but
-     * Razorpay's own figure is preferred when present. */
-    dispute?: { entity?: { id?: string; payment_id?: string; amount?: number } };
+     * Razorpay's own figure is preferred when present. `status` is one of Razorpay's five dispute
+     * statuses and is what actually says whether the money moved -- see dispute-status.shared.ts.
+     * Optional because an older or partial payload may omit it, in which case the event name is
+     * read instead. */
+    dispute?: { entity?: { id?: string; payment_id?: string; amount?: number; status?: string } };
   };
 }
 
@@ -289,6 +293,11 @@ async function processRefundEvent(
 /**
  * Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit B): same billing_payments-first matching
  * as processRefundEvent, using recordDispute (a billing_refunds row with initiated_by='dispute').
+ *
+ * Phase 3 fix: this used to treat every `payment.dispute.*` event identically, so a dispute the
+ * merchant WON left the order and payment marked `disputed` and the refund row `pending` for good.
+ * Razorpay debits the merchant only when a dispute is LOST, so the outcome now decides what is
+ * written (see dispute-status.shared.ts).
  */
 async function processDisputeEvent(
   supabase: AdminClient,
@@ -308,20 +317,78 @@ async function processDisputeEvent(
     return processedUnmatched('dispute_unmatched');
   }
 
+  const relatedUserId = order?.user_id ?? payment?.user_id ?? null;
+  const outcomeKind = resolveDisputeOutcome(payload.event, payload.payload?.dispute?.entity?.status);
+
+  // A close carries no money information of its own and normally arrives AFTER the won/lost event
+  // that did. Writing anything here would either restate that outcome or, worse, overwrite it with
+  // a `pending` the close does not actually assert -- so the close is recorded in
+  // billing_webhook_events (every event is) and changes nothing else.
+  if (outcomeKind === 'closed') {
+    return { status: 'processed', outcome: 'dispute_closed', relatedUserId, relatedSubscriptionId: null };
+  }
+
+  const disputeProviderId = payload.payload?.dispute?.entity?.id ?? null;
+  const disputeAmountMinor = payload.payload?.dispute?.entity?.amount ?? payment?.gross_minor ?? 0;
+
+  // What the order and the ledger payment should say once this event is applied.
+  //  - open: contested, funds still with us, but the payment is not ordinarily spendable -- disputed.
+  //  - lost: the funds are gone. Sized against the payment, exactly as a refund is, because a
+  //    dispute can cover less than the whole payment.
+  //  - won: nothing was ever reversed by the dispute. The payment returns to what Razorpay says it
+  //    is today, which is NOT necessarily `captured`/`paid`: an ordinary partial refund may have
+  //    been issued alongside the dispute, and asserting `paid` would erase it.
+  let nextOrderStatus: string;
+  let nextPaymentStatus: BillingPaymentStatus;
+  let refundStatus: BillingRefundStatus;
+
+  if (outcomeKind === 'lost') {
+    const fullyReversed = payment ? disputeAmountMinor >= payment.gross_minor : true;
+    nextOrderStatus = fullyReversed ? 'refunded' : 'partially_refunded';
+    nextPaymentStatus = fullyReversed ? 'refunded' : 'partially_refunded';
+    refundStatus = 'processed';
+  } else if (outcomeKind === 'won') {
+    const providerPayment = await fetchRazorpayPayment(providerPaymentId);
+    if (providerPayment.amount_refunded <= 0) {
+      nextOrderStatus = 'paid';
+      nextPaymentStatus = 'captured';
+    } else {
+      const fullyRefunded = providerPayment.amount_refunded >= providerPayment.amount;
+      nextOrderStatus = fullyRefunded ? 'refunded' : 'partially_refunded';
+      nextPaymentStatus = fullyRefunded ? 'refunded' : 'partially_refunded';
+    }
+    // Not an error: `failed` is this vocabulary's word for "this reversal did not happen", which is
+    // exactly what winning a dispute means. There is no 'cancelled' in BILLING_REFUND_STATUSES.
+    refundStatus = 'failed';
+  } else {
+    nextOrderStatus = 'disputed';
+    nextPaymentStatus = 'disputed';
+    refundStatus = 'pending';
+  }
+
+  // Webhooks retry and can arrive out of order, so a late `created` can land after the `lost` that
+  // settled the dispute. Re-opening a settled dispute row -- and with it a settled payment -- on the
+  // strength of a redelivery would be a money error, so a still-`pending` event never overwrites a
+  // resolution already recorded.
+  if (refundStatus === 'pending' && disputeProviderId) {
+    const settled = await loadRecordedDisputeStatus(supabase, payment?.provider_mode ?? getRazorpayMode(), disputeProviderId);
+    if (settled === 'processed' || settled === 'failed') {
+      return { status: 'processed', outcome: 'dispute_already_settled', relatedUserId, relatedSubscriptionId: null };
+    }
+  }
+
   if (order) {
     const updateResult = await supabase
       .from('billing_orders')
-      .update({ status: 'disputed', updated_at: new Date().toISOString() })
+      .update({ status: nextOrderStatus, updated_at: new Date().toISOString() })
       .eq('id', order.id);
 
     throwIfQueryFailed(updateResult.error, 'Failed to update order for dispute webhook');
   }
 
-  let outcome = 'dispute_recorded';
-  const disputeProviderId = payload.payload?.dispute?.entity?.id ?? null;
+  let outcome = outcomeKind === 'open' ? 'dispute_recorded' : `dispute_${outcomeKind}`;
 
   if (payment && disputeProviderId) {
-    const disputeAmountMinor = payload.payload?.dispute?.entity?.amount ?? payment.gross_minor;
     const split = splitRefundProportionally(disputeAmountMinor, payment.net_minor, payment.gross_minor);
 
     const recordResult = await recordDispute({
@@ -335,24 +402,40 @@ async function processDisputeEvent(
       netMinor: split.netMinor,
       taxMinor: split.taxMinor,
       currencyCode: payment.currency_code,
-      status: 'pending',
+      status: refundStatus,
       actorUserRef: payment.user_id,
       rawPayload: payload as unknown as Record<string, unknown>,
+      processedAt: refundStatus === 'processed' ? new Date().toISOString() : null,
     });
 
     if (recordResult.state === 'unavailable') {
-      outcome = 'dispute_recorded_ledger_unavailable';
+      outcome = `${outcome}_ledger_unavailable`;
     } else {
-      await markLedgerPaymentStatus(supabase, payment.id, 'disputed');
+      await markLedgerPaymentStatus(supabase, payment.id, nextPaymentStatus);
     }
   }
 
-  return {
-    status: 'processed',
-    outcome,
-    relatedUserId: order?.user_id ?? payment?.user_id ?? null,
-    relatedSubscriptionId: null,
-  };
+  return { status: 'processed', outcome, relatedUserId, relatedSubscriptionId: null };
+}
+
+/** The status already recorded for this dispute, or null when nothing is recorded (or the Phase 2
+ * ledger tables are absent -- recordDispute's own latch reports that, so a failure here is simply
+ * "nothing known" and never blocks the webhook). */
+async function loadRecordedDisputeStatus(
+  supabase: AdminClient,
+  providerMode: string,
+  providerDisputeId: string
+): Promise<BillingRefundStatus | null> {
+  const result = await supabase
+    .from('billing_refunds')
+    .select('status')
+    .eq('provider', 'razorpay')
+    .eq('provider_mode', providerMode)
+    .eq('provider_refund_id', providerDisputeId)
+    .maybeSingle();
+
+  if (result.error) return null;
+  return ((result.data as { status?: BillingRefundStatus } | null)?.status) ?? null;
 }
 
 /** Best-effort status sync on the payment row itself -- the refund/dispute row just written is the
