@@ -25,6 +25,13 @@
 --
 -- What DOES matter is the role: 129 revokes EXECUTE from anon and authenticated on purpose. The
 -- preflight below fails loudly rather than leaving that to be discovered halfway down.
+--
+-- The editor will warn that wq_probe is "a table without Row Level Security" and offer to enable
+-- it. Choose **Run without RLS** -- that button only means "run my query as written", it does not
+-- turn RLS off anywhere. The linter is matching CREATE TABLE and missing the TEMP: a temp table
+-- lives in a session-private pg_temp schema no other connection can see, so an anon or
+-- authenticated client cannot reach it at all, policies or no policies. It is also ON COMMIT DROP
+-- inside a transaction that ends in ROLLBACK, so it exists for about a second.
 
 BEGIN;
 
