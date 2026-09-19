@@ -118,6 +118,16 @@ export default function OperationalFlagsPanel() {
                     {enabled ? flag.enabledHelp : flag.disabledHelp}
                   </p>
 
+                  {/* Shown only while the flag is off, which is exactly when someone is about to
+                      turn it on. Once it is on the step has either happened or been skipped, and a
+                      standing reminder would just become furniture. */}
+                  {!enabled && flag.beforeEnabling && (
+                    <p className="mt-2 rounded-lg border border-amber-400/25 bg-amber-400/5 px-3 py-2 text-xs leading-5 text-amber-200/90">
+                      <span className="font-medium">Before you turn this on: </span>
+                      {flag.beforeEnabling}
+                    </p>
+                  )}
+
                   <p className="mt-2 font-mono text-[11px] text-neutral-600">{flag.key}</p>
                 </div>
               );

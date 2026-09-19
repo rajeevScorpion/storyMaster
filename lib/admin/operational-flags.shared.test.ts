@@ -36,6 +36,23 @@ describe('operational flag registry', () => {
     }
   });
 
+  it("tells whoever flips the deletion flag to reseed the pages that contradict it", () => {
+    // The Terms and /docs seeds say self-serve deletion does not exist, which is true only while
+    // this flag is off. The live managed_pages rows are not updated by deploying -- someone has to
+    // reset them to seed -- so the reminder has to live where the decision is made.
+    const deletion = findOperationalFlag('account_deletion_enabled');
+    expect(deletion?.beforeEnabling).toMatch(/reseed/i);
+    expect(deletion?.beforeEnabling).toMatch(/terms/i);
+  });
+
+  it('never carries an empty beforeEnabling -- absent means "nothing to do", not "unwritten"', () => {
+    for (const flag of OPERATIONAL_FLAG_DEFINITIONS) {
+      if (flag.beforeEnabling !== undefined) {
+        expect(flag.beforeEnabling.length, `beforeEnabling for ${flag.key}`).toBeGreaterThan(0);
+      }
+    }
+  });
+
   it('never repeats a key', () => {
     const keys = OPERATIONAL_FLAG_DEFINITIONS.map((flag) => flag.key);
     expect(new Set(keys).size).toBe(keys.length);

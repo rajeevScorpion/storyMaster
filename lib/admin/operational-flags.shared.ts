@@ -26,6 +26,12 @@ export interface OperationalFlagDefinition {
   enabledHelp: string;
   /** What being off means. Never just "the opposite" — say what stops. */
   disabledHelp: string;
+  /**
+   * A step that has to happen alongside turning this on, shown only while the flag is off -- i.e.
+   * at the moment someone is about to flip it. For work the switch itself cannot do, so it would
+   * otherwise be remembered or not.
+   */
+  beforeEnabling?: string;
   /** The value `getFeatureFlag` falls back to when the row is absent. Every flag here fails closed. */
   defaultEnabled: false;
   group: 'billing';
@@ -40,6 +46,8 @@ export const OPERATIONAL_FLAG_DEFINITIONS: readonly OperationalFlagDefinition[] 
       'People can delete their own account. Access ends immediately, private work is removed, published stories stay in the gallery under the same author name, and billing records are kept 8 years with personal details stripped.',
     disabledHelp:
       'The deletion page and its menu entry are hidden, and the action refuses even if called directly. Admins can still delete an account on someone’s behalf.',
+    beforeEnabling:
+      'Reseed the Terms and /docs managed pages in the same sitting. Both still tell readers that self-serve deletion does not exist, which is true only while this is off. Managed Pages → Reset to seed. Terms is a published, acceptance-requiring document, so treat it as a version change, not a typo fix.',
     defaultEnabled: false,
     group: 'billing',
   },
