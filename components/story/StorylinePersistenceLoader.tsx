@@ -6,7 +6,6 @@ import { loadCachedStoryline, saveStorylineAndPrefetch } from '@/lib/persistence
 import type { StorylineManifestPayload } from '@/lib/persistence';
 import type { StorylineSeriesContext } from '@/lib/types/series';
 import { preloadStorylineMedia } from '@/lib/media/storyline-preload';
-import { WATCH_QUOTA_EXHAUSTED_MARKER } from '@/lib/pricing/watch-quota.shared';
 import OpenFlowLoader from './OpenFlowLoader';
 import StorylinePlayer from './StorylinePlayer';
 
@@ -81,6 +80,19 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
         setLoadMessage('Loading latest published version...');
         setLoadPhaseIndex(1);
         const loaded = await networkPromise;
+        if (loaded.status === 'watch_quota_exhausted') {
+          if (!active) return;
+          // The cache read races this call and can paint the story before the refusal arrives
+          // (the cachePromise.then handler above). Setting hasDisplayedPayload true -- not false --
+          // both clears anything already shown AND stops a cache resolution still in flight from
+          // painting it afterwards: that handler bails out whenever the flag is true, and it stays
+          // true for the rest of this effect run.
+          hasDisplayedPayload = true;
+          setPayload(null);
+          setError(null);
+          setWatchQuotaExhausted(true);
+          return;
+        }
         if (loaded.beats.length === 0) {
           throw new Error('This storyline is still preparing its pages. Please try again shortly.');
         }
@@ -116,22 +128,9 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
           currentPageIndex: 0,
         });
       } catch (loadError) {
-        if (loadError instanceof Error && loadError.message === WATCH_QUOTA_EXHAUSTED_MARKER) {
-          if (!active) return;
-          // The cache read races the network call above and can paint the story before this
-          // refusal arrives (loadCachedStoryline / the cachePromise.then handler below). Setting
-          // this true -- not false -- both clears anything already shown AND stops a cache
-          // resolution that is still in flight from painting it afterwards: the .then handler
-          // below bails out whenever hasDisplayedPayload is true, and it stays true from here on
-          // for the rest of this effect run. Every other error keeps today's behaviour below --
-          // only a quota refusal needs the already-displayed payload discarded, not merely
-          // declined.
-          hasDisplayedPayload = true;
-          setPayload(null);
-          setError(null);
-          setWatchQuotaExhausted(true);
-          return;
-        }
+        // Only genuine failures reach here -- a quota refusal is returned as data above, because a
+        // production build would not carry a marker on a thrown action's message this far
+        // (GOTCHAS.md). Keeping a displayed cached copy is right for these and wrong for a refusal.
         const cached = await cachePromise;
         if (active && !hasDisplayedPayload && !cached) {
           setError(loadError instanceof Error ? loadError.message : 'Unable to load storyline');

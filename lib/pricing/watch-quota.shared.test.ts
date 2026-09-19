@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { istLocalDay, WATCH_QUOTA_EXHAUSTED_MARKER } from './watch-quota.shared';
+import { istLocalDay } from './watch-quota.shared';
 
 describe('istLocalDay', () => {
   it('is still the same IST day one second before the IST midnight boundary', () => {
@@ -29,11 +29,5 @@ describe('istLocalDay', () => {
 
   it('rejects an invalid date', () => {
     expect(() => istLocalDay(new Date('not-a-date'))).toThrow();
-  });
-});
-
-describe('WATCH_QUOTA_EXHAUSTED_MARKER', () => {
-  it('is a fixed, non-empty protocol string', () => {
-    expect(WATCH_QUOTA_EXHAUSTED_MARKER).toBe('WATCH_QUOTA_EXHAUSTED');
   });
 });

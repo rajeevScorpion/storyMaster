@@ -28,15 +28,3 @@ export function istLocalDay(date: Date): string {
   const day = String(ist.getUTCDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
-
-/**
- * Payments Phase 3, Unit B (§5, B4/B5): the marker `loadStorylineWithBeats`
- * (app/actions/exploration.ts) throws when the watch quota refuses a read, and the only thing
- * `StorylinePersistenceLoader.tsx` matches against to tell a quota refusal apart from any other
- * load failure (a network hiccup, a missing storyline, ...). Matched by exact `Error.message`
- * equality, never a substring/`.includes()` check -- a fixed protocol value, not prose that might
- * be reworded later. Lives here (not inlined as a string literal in both files) because both the
- * server action and the client component need the identical value, which is exactly what a
- * `.shared.ts` module is for.
- */
-export const WATCH_QUOTA_EXHAUSTED_MARKER = 'WATCH_QUOTA_EXHAUSTED';

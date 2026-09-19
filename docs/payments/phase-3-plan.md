@@ -207,38 +207,45 @@ and the `069_narration_accent.sql` outage that motivated the rule). Structurally
 `provider_price_ref_gross_minor` does at `lib/types/database.ts:631-635`.
 
 **B4. `app/actions/exploration.ts`, inside `loadStorylineWithBeats`** — after the auth guard at `:462-463`
-and before the storyline fetch at `:469`. On refusal, throw an error carrying a recognisable marker (a
-`WATCH_QUOTA_EXHAUSTED` code, not a message match) so the loader can tell it from a network failure.
+and before the storyline fetch at `:469`. On refusal **return** `{ status: 'watch_quota_exhausted' }`; the
+action's return type is the discriminated `LoadStorylineWithBeatsResult` (`lib/types/story.ts`), and its
+success arm carries `status: 'ok'`. Genuine failures — not authenticated, storyline not found, a network
+fault — keep throwing, and must: the loader's cached-copy fallback is right for those and wrong for a
+refusal, which is exactly why the two cannot share a channel.
 
 Place it **after** auth so signed-out callers still get `Not authenticated`, and **before** the fetch so a
 refused watch costs one indexed query rather than the whole payload.
 
-> **OPEN DEFECT — fix this before anything else in Phase 3.** Unit B shipped the refusal as a *thrown*
-> `Error` whose `message` the loader matches by exact equality. `GOTCHAS.md:484-486` says plainly: *"Next.js
-> recommends returning expected errors from server functions; don't rely on a thrown action's message
-> reaching the browser in production."* Production builds redact server-action error messages to a generic
-> string plus a digest, so the match fails everywhere except a local dev server — **including the Vercel
-> preview**, which is a production build.
+> **DEFECT, FOUND AND FIXED (2026-09-19).** Unit B first shipped the refusal as a *thrown* `Error` whose
+> `message` the loader matched by exact equality. `GOTCHAS.md:484-486` says plainly: *"Next.js recommends
+> returning expected errors from server functions; don't rely on a thrown action's message reaching the
+> browser in production."* Production builds redact server-action error messages to a generic string plus a
+> digest, so the match succeeded only on a local dev server and failed everywhere deployed — **the Vercel
+> preview included**, which is a production build.
 >
-> The failure is not a visible error, which is what makes it dangerous. When the match misses, control falls
-> to the generic `catch`, which sets an error only when there is no cached copy. **A reader with a cached
-> copy is therefore shown the story the server just refused.** The beats in that payload came from the
-> cache, not the refused call, so the refusal is real but invisible.
+> What made it dangerous is that it failed *silently*. With the match missed, control fell to the generic
+> `catch`, which sets an error only when nothing is on screen. **A reader holding a cached copy was
+> therefore shown the story the server had just refused** — the beats came from the cache, not from the
+> refused call, so the refusal was real and invisible.
 >
-> Nothing is live today: migration 129 is unapplied everywhere, so the missing-RPC latch allows every watch
-> and the quota is entirely inert. **Do not treat the quota as working on the preview until this is fixed.**
+> Nothing was ever live: migration 129 is unapplied everywhere, so the missing-RPC latch allowed every watch
+> and the quota was entirely inert. No environment was ever bypassable.
 >
-> The fix is the pattern GOTCHAS names: have `loadStorylineWithBeats` **return** the refusal as data
-> rather than throw it — a discriminated result the loader switches on. One caller, so the change is
-> contained. Delete `WATCH_QUOTA_EXHAUSTED_MARKER` with it; a marker that cannot cross the boundary is
-> worse than none, because it reads as though it handles the case.
+> **The fix** is the pattern GOTCHAS names: `loadStorylineWithBeats` now **returns** the refusal as data (B4
+> above), and the loader switches on it inside the `try` rather than pattern-matching a caught error. One
+> caller, so the change stayed contained. `WATCH_QUOTA_EXHAUSTED_MARKER` is deleted along with its test — a
+> marker that cannot cross the boundary is worse than none, because it reads as though it handles the case.
+> `app/actions/exploration.test.ts` pins the channel: the refusal must *resolve*, and "not authenticated"
+> and "storyline not found" must still *reject*. That last pair is the guard — the day someone tidies this
+> back into a throw, it is what fails.
 
 **B5. `components/story/StorylinePersistenceLoader.tsx`** — the refusal path, and the subtle half of this
-unit. At `:115-120` the catch currently keeps a displayed cached payload and only sets an error when nothing
-was shown. For a quota refusal that is wrong: the cache may already have painted the story (`:57-73`). On
-`WATCH_QUOTA_EXHAUSTED` the loader must **clear `payload`** and render the upsell, whether or not the cache
-won the race. Everything else in that catch keeps its current behaviour — a network failure with a cached
-copy must still show the cached copy.
+unit. The catch keeps a displayed cached payload and only sets an error when nothing was shown. For a quota
+refusal that is wrong: the cache may already have painted the story (`:57-73`). On
+`status === 'watch_quota_exhausted'` the loader must **clear `payload`** and render the upsell, whether or
+not the cache won the race — and set `hasDisplayedPayload = true` on the way, which is what stops a cache
+read still in flight from painting the story *after* the refusal. Everything else in the catch keeps its
+current behaviour — a network failure with a cached copy must still show the cached copy.
 
 **B6. `recordView` is not touched.** It stays the fire-and-forget analytics it is
 (`components/story/StorylinePlayer.tsx:415-419`).

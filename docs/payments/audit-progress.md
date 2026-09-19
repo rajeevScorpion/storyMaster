@@ -3,7 +3,7 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-18 — Phase 2 done; Phase 3 planned, awaiting approval)
+## Next session starts here (updated 2026-09-19 — Phase 3 Units A and B done; C, D, E next)
 
 **Phase 2 is complete: every unit built, reviewed, and its migrations applied on dev.** Nothing is merged to
 `dev` or `main`; everything is on branch `payments`. Prod is untouched and stays that way until the whole
@@ -105,25 +105,30 @@ any tier from the backend without hassle.**
 |---|---|---|
 | Migration 129 — quota table, `consume_watch_slot`, the two Audience CHECKs | `e5c0b3d`, race fix `40ff401` | written, **not applied anywhere** |
 | A — `'audience'` as a plan key, the capability tidy-up | `04c0ce4` | done, reviewed |
-| B — quota ledger, enforcement, the `unlimitedWatching` capability | `e7cea4d` | done, reviewed — **one open defect, below** |
+| B — quota ledger, enforcement, the `unlimitedWatching` capability | `e7cea4d`, defect fix below | done, reviewed |
 | C, D, E | — | not started |
 
 ### Start here next session
 
-**1. Fix the open defect in Unit B before anything else.** It is written up in full in `phase-3-plan.md`
-§5, in the block above B5. In short: the quota refusal is thrown as an `Error` and matched by message on the
-client, which `GOTCHAS.md:484-486` says explicitly does not survive to the browser in production. It works
-on a local dev server and fails on the Vercel preview, and it fails *silently* — a reader holding a cached
-copy is shown the story the server just refused. The fix is to return the refusal as data instead of
-throwing; one caller, contained change.
+**Unit B's open defect is fixed** (2026-09-19). `loadStorylineWithBeats` now returns the watch-quota refusal
+as data — `LoadStorylineWithBeatsResult` in `lib/types/story.ts`, with `status: 'ok'` on the success arm —
+and `StorylinePersistenceLoader` switches on it inside the `try` instead of matching a caught error's
+message. `WATCH_QUOTA_EXHAUSTED_MARKER` is deleted. `app/actions/exploration.test.ts` (5 tests) pins the
+channel: the refusal must *resolve*, and "not authenticated" and "storyline not found" must still *reject* —
+that second pair is what fails if anyone turns it back into a throw. Genuine failures still throw, which
+they must: the loader's cached-copy fallback is right for those and wrong for a refusal. Write-up in
+`phase-3-plan.md` §5, above B5.
 
-**Nothing is live**: 129 is unapplied everywhere, so the missing-RPC latch allows every watch and the quota
-is inert. There is no bypass in any running environment today. **Do not judge the quota on the preview until
-this is fixed** — it will look like it does not work, and the reason will not be the quota.
+**Nothing was ever live**: 129 is unapplied everywhere, so the missing-RPC latch allows every watch and the
+quota is inert. There was never a bypass in any running environment. The quota now behaves the same on the
+preview as it does locally, but it stays inert until 129 is applied — by design.
 
-**2. Then Unit C** (Audience catalogue row + flipping `unlimitedWatching` off for Free), **D** (the real
-quota UX — Unit B left a one-line placeholder deliberately), **E** (the admin quota setting; until it lands,
-`watch-quota.ts` carries `FALLBACK_FREE_DAILY_WATCH_QUOTA = 3` with a comment saying to delete it).
+**Next: Unit C** (Audience catalogue row + flipping `unlimitedWatching` off for Free), then **D** (the real
+quota UX — Unit B left a one-line placeholder deliberately), then **E** (the admin quota setting; until it
+lands, `watch-quota.ts` carries `FALLBACK_FREE_DAILY_WATCH_QUOTA = 3` with a comment saying to delete it).
+
+Gates at the end of this session: `npx tsc --noEmit` clean, `npm run lint` clean, **1,729 tests** across 152
+files, `npm run build` succeeds. Run them yourself before trusting any report.
 
 ### Owner actions waiting
 
@@ -136,8 +141,9 @@ quota UX — Unit B left a one-line placeholder deliberately), **E** (the admin 
 - **Audience launch prices** whenever convenient; they gate nothing (decision 15).
 
 **Four defects were found by reviewing rather than by the suite**, which is the pattern this project keeps
-seeing. The fourth is Unit B's thrown-error marker, described under "Start here" above — the executing agent
-flagged it as unverifiable rather than asserting it worked, which is how it got caught. The other three:
+seeing. The fourth is Unit B's thrown-error marker, fixed 2026-09-19 and described under "Start here" above
+— the executing agent flagged it as unverifiable rather than asserting it worked, which is how it got
+caught. The other three:
 
 1. **The quota function's race was not safe** (my error, in `e5c0b3d`). The unique index stops the same
    storyline counting twice, but two devices opening *different* storylines are different rows, and under
