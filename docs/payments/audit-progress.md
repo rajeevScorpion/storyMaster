@@ -103,42 +103,66 @@ any tier from the backend without hassle.**
 
 | Unit | Commit | Status |
 |---|---|---|
-| Migration 129 — quota table, `consume_watch_slot`, the two Audience CHECKs | `e5c0b3d`, race fix `40ff401` | written, **not applied anywhere** |
+| Migration 129 — quota table, `consume_watch_slot`, the two Audience CHECKs | `e5c0b3d`, race fix `40ff401` | **applied on dev** 2026-09-19; not on prod |
+| Migration 130 — `provider_mode` on the subscription-checkout RPC | this session | written, **not applied anywhere** |
 | A — `'audience'` as a plan key, the capability tidy-up | `04c0ce4` | done, reviewed |
 | B — quota ledger, enforcement, the `unlimitedWatching` capability | `e7cea4d`, defect fix below | done, reviewed |
 | C, D, E | — | not started |
 
 ### Start here next session
 
-**Unit B's open defect is fixed** (2026-09-19). `loadStorylineWithBeats` now returns the watch-quota refusal
-as data — `LoadStorylineWithBeatsResult` in `lib/types/story.ts`, with `status: 'ok'` on the success arm —
-and `StorylinePersistenceLoader` switches on it inside the `try` instead of matching a caught error's
-message. `WATCH_QUOTA_EXHAUSTED_MARKER` is deleted. `app/actions/exploration.test.ts` (5 tests) pins the
-channel: the refusal must *resolve*, and "not authenticated" and "storyline not found" must still *reject* —
-that second pair is what fails if anyone turns it back into a throw. Genuine failures still throw, which
-they must: the loader's cached-copy fallback is right for those and wrong for a refusal. Write-up in
-`phase-3-plan.md` §5, above B5.
+**Migration 129 is applied on dev** (2026-09-19, ledger row confirmed) and **not on prod**. Verified against
+the dev database directly: `user_daily_watch_slots` exists with RLS on and no policies,
+`consume_watch_slot` is SECURITY DEFINER with `search_path=public` and execute revoked from `anon`/
+`authenticated` (only `postgres` and `service_role` hold it), both widened CHECKs accept `audience`, and the
+deployed function body contains the `pg_advisory_xact_lock` race fix and the give-the-slot-back branch — so
+what is on dev is `40ff401`, not the original `e5c0b3d`.
 
-**Nothing was ever live**: 129 is unapplied everywhere, so the missing-RPC latch allows every watch and the
-quota is inert. There was never a bypass in any running environment. The quota now behaves the same on the
-preview as it does locally, but it stays inert until 129 is applied — by design.
+**The behavioural walk of `consume_watch_slot` has NOT been run.** The Supabase MCP connection is read-only,
+so the two-call replay check in 129's header (and the four-story/limit-3 sequence) could not be executed from
+a session. Run it by hand in the SQL editor on dev; it is the one Phase 3 check still outstanding.
+
+**Four defects are fixed** (see the commits on `payments`, and the sections below):
+
+1. Unit B's quota refusal crossed the server/client boundary as a thrown `Error` message, which a production
+   build redacts. Now returned as data — `LoadStorylineWithBeatsResult` in `lib/types/story.ts`.
+2. Every `payment.dispute.*` event was handled identically, so a dispute the merchant WON stayed `disputed`
+   with a `pending` reversal row forever.
+3. `billing_begin_subscription_checkout` matched a user's subscription without `provider_mode`, so a
+   test-mode subscription blocked that person's first live purchase. Migration **130**, not yet applied.
+4. The terms, /docs and FAQ page seeds still said self-serve deletion did not exist.
 
 **Next: Unit C** (Audience catalogue row + flipping `unlimitedWatching` off for Free), then **D** (the real
 quota UX — Unit B left a one-line placeholder deliberately), then **E** (the admin quota setting; until it
 lands, `watch-quota.ts` carries `FALLBACK_FREE_DAILY_WATCH_QUOTA = 3` with a comment saying to delete it).
 
-Gates at the end of this session: `npx tsc --noEmit` clean, `npm run lint` clean, **1,729 tests** across 152
+Gates at the end of this session: `npx tsc --noEmit` clean, `npm run lint` clean, **1,748 tests** across 153
 files, `npm run build` succeeds. Run them yourself before trusting any report.
 
 ### Owner actions waiting
 
-- **Apply migration 129 on dev** (not prod). Until it runs, an admin promoting anyone to Audience gets a
-  `23514`, and the quota does nothing.
+- **Apply migration 130 on dev** (not prod). It replaces `billing_begin_subscription_checkout` so the
+  subscription and open-order lookups are scoped to `provider_mode`. Nothing in the app changes shape — the
+  RPC's signature and return columns are identical — so it can be applied at any time, and until it runs a
+  tester holding a test-mode subscription is still refused a live one. Verify with the query in the file's
+  header. Prod needs it **before its first live checkout**, alongside the COOP/COEP checkout-frame fix and
+  the old-Razorpay-account cleanup already recorded under Phase 1.
+- **Run the `consume_watch_slot` walk on dev by hand** — 129's header carries the two-call replay check. A
+  session cannot do it: the Supabase MCP is read-only and the function writes.
 - **When creating the Audience plan in the studio:** set it to `tier_rank` 2 and move Plus to 3, Studio to 4.
   The column has no unique constraint and the default would collide with Plus, which would stop Plus
   presenting as an upgrade from Audience. Verify: `select plan_key, tier_rank from public.pricing_plans
   order by tier_rank` — four rows, four distinct ranks.
 - **Audience launch prices** whenever convenient; they gate nothing (decision 15).
+- **Reseed the `terms` and `documentation` managed pages when deletion goes live, not before.** The seed
+  content in `lib/managed-pages/registry.ts` is fixed, but the registry is only a seed: the live copy is the
+  `managed_pages` row, and an admin has to press Reset to seed (or edit the row) for it to change. On dev the
+  `terms` row still carries the old sentence and is a published, acceptance-requiring document at `1.0.0`, so
+  republishing it is a legal-document change, not a typo fix. **Sequence matters:** `account_deletion_enabled`
+  ships off and 125-127 are not on prod, so today prod's terms page is *correct* — saying deletion is
+  self-serve before the flow is enabled would be the new contradiction. Reseed at the same time as the flag
+  goes on. (The FAQ row on dev did not carry the stale sentence; only `terms` and `documentation` did. Prod
+  could not be checked from this session — production reads are blocked here — so check it directly.)
 
 **Four defects were found by reviewing rather than by the suite**, which is the pattern this project keeps
 seeing. The fourth is Unit B's thrown-error marker, fixed 2026-09-19 and described under "Start here" above
@@ -159,9 +183,7 @@ caught. The other three:
    the union widened. One of them is a genuine fourth per-plan capability matrix (reference upload limits)
    and another is a second copy of the tier-rank scale. Recorded in the audit's "Method correction".
 
-**Do this when applying 129 on dev:** it is the first migration of Phase 3 and nothing reads it yet, so it
-can be applied at any time. Unit A is live in code without it — an admin promoting someone to Audience
-before 129 runs will get a `23514` from the database.
+**129 is applied on dev** (2026-09-19). Promoting a user to Audience no longer raises `23514`.
 
 Two things in the plan are worth reading before executing further:
 
@@ -188,17 +210,49 @@ Note the numbering clash: `billing-plan-2026-09-17.md` calls support tooling "Ph
 
 ### Open, and genuinely the owner's call
 
-- **Unit C's deletion behaviour**, unchanged since it was built: `billing_profiles` moved CASCADE→SET NULL in
-  127, going beyond the plan's text; `beat_revisions`, `timeline_rewrite_events` and `episode_journal_events`
-  still cascade, so a kept story loses its edit and series history when its author goes; Google-only accounts
-  re-authenticate by a 15-minute-old sign-in rather than a fresh OAuth round trip; and the terms, help-legal
-  and FAQ pages still say self-serve deletion does not exist, which now contradicts the flow.
-- **Every `payment.dispute.*` event is treated identically**, so `won` and `closed` leave the payment marked
-  `disputed` for good and the `billing_refunds` row `pending` forever, in a record kept eight years.
+These are decisions, not defects — each one has a defensible answer either way, which is why none of them was
+taken on your behalf.
+
+- **What a deleted author's story keeps.** `beat_revisions`, `timeline_rewrite_events` and
+  `episode_journal_events` still CASCADE, so a story that survives its author loses its edit and series
+  history. That is either correct (the person's data goes) or a defect (the kept work is mutilated), and
+  which one it is depends on how you read the retention promise. `billing_profiles` moved CASCADE→SET NULL in
+  127, going beyond the plan's text, and is worth a second look in the same pass.
+- **Google-only re-authentication** accepts a 15-minute-old sign-in rather than a fresh OAuth round trip
+  before an irreversible deletion. A security-posture call.
 - **Phase 1 never closed**: runbook steps 4-9 (`phase-1-plan.md` §6) are still owner-pending. The top-up test
   passed.
 - **Audit finding 11 is still open**: dev Plus is ₹850 and prod ₹1,450, and subscription coins cost more per
   coin than top-up coins in both. A launch price has to be named.
+
+### Defects fixed 2026-09-19
+
+- **The watch-quota refusal crossed the boundary as a thrown error.** Now returned as data; write-up in
+  `phase-3-plan.md` §5, above B5, and `app/actions/exploration.test.ts` pins the channel — the refusal must
+  *resolve* while "not authenticated" and "storyline not found" must still *reject*.
+- **Every `payment.dispute.*` event was handled identically**, so `won` and `closed` left the payment
+  `disputed` and the `billing_refunds` row `pending` for good, in a record kept eight years. Razorpay debits
+  the merchant only when a dispute is **lost** (research 06 §4), so the outcome now decides what is written:
+  lost settles the reversal as `processed` and sizes the payment `refunded`/`partially_refunded`; won marks
+  the reversal `failed` (this vocabulary's "it did not happen") and returns the payment to whatever Razorpay
+  says it is now — deliberately not a hardcoded `captured`, so an ordinary partial refund issued alongside
+  the dispute is not erased. `lib/billing/dispute-status.shared.ts` reads the outcome from the dispute
+  entity's own `status`, falling back to the event name.
+  **A close writes nothing at all.** It is terminal but says nothing about which way the dispute went, and it
+  normally arrives *after* the won/lost event that did — so collapsing it into either would write a wrong
+  money fact, and passing `pending` through would have *overwritten* the settlement. The same reasoning
+  covers a redelivered `created`: a still-pending event never overwrites a resolution already recorded
+  (`dispute_already_settled`). Webhooks retry, so this is not hypothetical.
+  **Still not done, and still a policy question: no coin clawback.** A lost dispute reverses the money and
+  leaves the granted coins alone (research 06 §4, and F5 in research 01). Whether to revoke unspent
+  `beats_remaining`, flag the account, or do nothing is a business call, so nothing was invented here.
+- **`billing_begin_subscription_checkout` ignored `provider_mode`** when deciding a user already had a
+  subscription, so a tester's test-mode subscription would refuse their first live purchase with
+  `subscription_exists`. Migration **130** scopes all four cross-row queries to the mode the checkout is
+  running in; the rollback twin restores 124's text exactly (verified line by line, not by eye). Not applied
+  anywhere yet.
+- **The terms, /docs and FAQ page seeds** said self-serve deletion did not exist. Seed text fixed; the live
+  `managed_pages` rows still need a reseed, and the sequencing is under "Owner actions waiting" above.
 
 **Working rules:** Opus plans and reviews, Sonnet agents execute (at most 2 at once, and the owner asked for
 **one at a time** in long sessions so a crash cannot lose two units); review diffs rather than agent reports;
@@ -250,10 +304,10 @@ includes the checkout-frame fix.
   still matches) and old subscriptions still `active` (they block that user's new subscription and fail every
   reconcile run). Dev had 2 plan IDs and 1 active subscription (the test user's); the owner cleared both by
   SQL. **Prod needs the same check before its first checkout on the new account.**
-- **Starting a subscription is refused if the user has any open Razorpay subscription, in either mode** (the
-  `subscription_exists` check in 124's checkout RPC ignores `provider_mode`). At go-live, a tester's test-mode
-  subscription on prod would block their live purchase. Fix in a later migration, or close test subscriptions
-  at cutover.
+- ~~**Starting a subscription is refused if the user has any open Razorpay subscription, in either mode**~~
+  — **fixed 2026-09-19 in migration 130**, which scopes the `subscription_exists` check and the three
+  open-order queries around it to `provider_mode`. Not applied anywhere yet; prod needs it before its first
+  live checkout, or a tester's test-mode subscription will refuse their live purchase.
 
 **Step 2 — plan Phase 2** (durable payment/refund/document records, billing profile, retention-safe deletion) from
 `prompt-packs/…/04_PHASE_2_DURABLE_BILLING_LEDGER.md`. Write `docs/payments/phase-2-plan.md` to the same

@@ -524,6 +524,17 @@ Related traps from the same build:
   `snapshot.entitlementPlanKey` is what feature gates read. Resolution is promote-only
   (`max(billing, override)`). A promoted user still pays catalog price and can still hit
   `insufficient_balance`.
+- **Every billing lookup that reaches across a user's rows must be scoped by `provider_mode`.** Test and live
+  Razorpay data share the same tables. 124's checkout RPC matched an existing subscription on
+  `(user_id, provider)` alone, so a tester's test-mode subscription refused their own first live purchase
+  with `subscription_exists` — the people who test are the people who buy first. Migration 130 scopes it.
+  `provider_mode` is on `billing_orders` and `billing_subscriptions`; treat an unscoped one as a bug.
+- **A `payment.dispute.closed` event carries no money outcome — never collapse it into won or lost.** Razorpay
+  debits the merchant *only* when a dispute is lost, and `closed` normally arrives **after** the `won`/`lost`
+  event that settled it. Treating all `payment.dispute.*` alike left won disputes marked `disputed` with a
+  `pending` reversal row for good, in a record kept eight years. Read the outcome from the dispute entity's
+  own `status` (`lib/billing/dispute-status.shared.ts`), and remember webhooks retry out of order: a
+  still-`pending` event must never overwrite a settlement already recorded.
 
 ---
 
