@@ -56,6 +56,19 @@ async function ensureBillingAdminActionsEnabled(): Promise<void> {
   }
 }
 
+/**
+ * Whether the kill switch is on, for the admin UI to read at render time.
+ *
+ * This exists so the panel can tell someone the switch is off *before* they pick a payment and type
+ * a refund reason, rather than after. It is display only and deliberately not a substitute for
+ * anything: every mutating action above re-checks the flag server-side on its own, because a client
+ * that renders an enabled button proves nothing about what the server will accept.
+ */
+export async function getBillingAdminActionsEnabled(): Promise<boolean> {
+  await verifyAdmin();
+  return getFeatureFlag(BILLING_ADMIN_ACTIONS_FLAG_KEY, false);
+}
+
 function assertUuid(value: string, label = 'id'): string {
   const normalized = String(value ?? '').trim().toLowerCase();
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(normalized)) {
