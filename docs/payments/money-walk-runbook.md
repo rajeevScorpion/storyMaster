@@ -22,7 +22,8 @@ delegated to an agent.
 
 Run this on a **Preview deployment**, never locally and never on production.
 
-- Preview URL: `https://kissago-git-<branch>-rajeevscorpions-projects.vercel.app`
+- **Preview URL for this work: `https://kissago-git-payments-rajeevscorpions-projects.vercel.app`**
+  The `payments` branch was pushed 2026-09-20 and deploys cleanly (earlier builds on it are READY).
 - Preview uses **Preview-scoped env vars** and the **dev database** — which is what you want.
 - Preview addresses are public with no Vercel login in front, so **Razorpay's webhooks can reach
   them directly.** This is the whole reason not to do this on localhost: on localhost no webhook
@@ -38,7 +39,27 @@ real webhooks — everything this walk is verifying — without real money.
 Confirm the Preview environment's Razorpay env vars are the **test** ones before you begin. A changed
 env var only reaches new builds, so if you change anything, redeploy before starting.
 
-### 0.3 The switches
+### 0.3 Point the Razorpay webhook at this Preview — do this first
+
+**This is the step most likely to be missed, and skipping it invalidates the most important half of
+the walk.** The webhook has never been proven end to end in this project; if it is not pointed here,
+steps 2, 5 and 6 all quietly test nothing.
+
+In the Razorpay dashboard (**Test mode**) → Settings → Webhooks, add or edit an endpoint:
+
+```
+https://kissago-git-payments-rajeevscorpions-projects.vercel.app/api/billing/razorpay/webhook
+```
+
+- Subscribe at minimum to: `payment.captured`, `payment.failed`, `refund.processed`,
+  `subscription.charged`, `subscription.activated`, `subscription.halted`, `subscription.cancelled`,
+  and the `payment.dispute.*` events.
+- The webhook **secret** must match the Preview environment's Razorpay webhook-secret env var. A
+  mismatch shows up as signature failures, not as silence — check `billing_webhook_events.status`.
+- Preview addresses are public with no Vercel login in front, which is exactly why Razorpay can reach
+  them. Nothing extra is needed to expose it.
+
+### 0.4 The switches
 
 | Flag | Where | Set to |
 |---|---|---|
@@ -47,7 +68,7 @@ env var only reaches new builds, so if you change anything, redeploy before star
 | `billing_document_issuing_enabled` | same | **off** — document issuing is Phase 6 |
 | `billing_admin_actions_enabled` | same | **off for now.** Only turn it on at step 7, and only if migration 132 is applied |
 
-### 0.4 Prerequisites
+### 0.5 Prerequisites
 
 - **Migration 132 applied on dev** if you intend to do step 7 (the in-app refund). If it is not
   applied, skip step 7 and refund from the Razorpay dashboard instead (step 5) — that still produces
@@ -55,7 +76,7 @@ env var only reaches new builds, so if you change anything, redeploy before star
 - A throwaway account you are willing to delete, if you also want to close the deletion test in §8.
 - The Razorpay dashboard open in another tab, on **Test mode**.
 
-### 0.5 Write down the baseline
+### 0.6 Write down the baseline
 
 Before spending anything, record the current counts so you can tell what the walk actually created:
 
@@ -226,7 +247,7 @@ The daily cron is the safety net for every missed webhook. Vercel only runs cron
 on a Preview you trigger it by hand.
 
 ```bash
-curl -X POST "https://kissago-git-<branch>-rajeevscorpions-projects.vercel.app/api/batch/reconcile" \
+curl -X POST "https://kissago-git-payments-rajeevscorpions-projects.vercel.app/api/batch/reconcile" \
   -H "Authorization: Bearer $CRON_SECRET"
 ```
 
