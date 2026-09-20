@@ -30,6 +30,37 @@ export function istLocalDay(date: Date): string {
 }
 
 /**
+ * Payments Phase 4, Unit D: the IST calendar day containing `date`, as a window a support reader
+ * can act on -- "which day is being reported" (`localDay`, same value `istLocalDay` would give)
+ * plus the two UTC instants that bound it, so "hit the limit" can be answered without anyone
+ * having to derive the +05:30 offset by hand (owner decision 11: IST for everyone).
+ */
+export interface IstDayWindow {
+  /** "YYYY-MM-DD", the IST calendar day containing `date`. */
+  localDay: string;
+  /** ISO UTC instant this IST day began (inclusive). */
+  startsAtUtc: string;
+  /** ISO UTC instant this IST day ends and the next one begins (exclusive). */
+  rollsOverAtUtc: string;
+}
+
+export function istDayWindow(date: Date): IstDayWindow {
+  const localDay = istLocalDay(date);
+  const istMs = date.getTime() + IST_OFFSET_MINUTES * 60 * 1000;
+  const ist = new Date(istMs);
+  // Midnight of the shifted calendar day, expressed back in real UTC by undoing the shift -- IST
+  // has no DST, so a constant offset is correct year-round (see file header).
+  const dayStartIstAsUtcMs = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate());
+  const dayStartUtcMs = dayStartIstAsUtcMs - IST_OFFSET_MINUTES * 60 * 1000;
+  const dayEndUtcMs = dayStartUtcMs + 24 * 60 * 60 * 1000;
+  return {
+    localDay,
+    startsAtUtc: new Date(dayStartUtcMs).toISOString(),
+    rollsOverAtUtc: new Date(dayEndUtcMs).toISOString(),
+  };
+}
+
+/**
  * Payments Phase 3, Unit D: the quota as a reader sees it, plus where to go to lift it.
  *
  * Lives here rather than in the `'use server'` action so a client component can import the type

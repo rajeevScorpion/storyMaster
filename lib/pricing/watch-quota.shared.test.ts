@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { istLocalDay } from './watch-quota.shared';
+import { istDayWindow, istLocalDay } from './watch-quota.shared';
 
 describe('istLocalDay', () => {
   it('is still the same IST day one second before the IST midnight boundary', () => {
@@ -29,5 +29,30 @@ describe('istLocalDay', () => {
 
   it('rejects an invalid date', () => {
     expect(() => istLocalDay(new Date('not-a-date'))).toThrow();
+  });
+});
+
+describe('istDayWindow', () => {
+  it('reports the same local day istLocalDay would, plus the UTC instants bounding it', () => {
+    // 2026-09-18T23:59:59+05:30 == 2026-09-18T18:29:59Z -- still the 18th, which started at
+    // 2026-09-17T18:30Z and rolls over one second later.
+    const window = istDayWindow(new Date('2026-09-18T18:29:59.000Z'));
+    expect(window.localDay).toBe('2026-09-18');
+    expect(window.startsAtUtc).toBe('2026-09-17T18:30:00.000Z');
+    expect(window.rollsOverAtUtc).toBe('2026-09-18T18:30:00.000Z');
+  });
+
+  it('rolls the window over exactly at the IST midnight boundary', () => {
+    // 2026-09-19T00:00:00+05:30 == 2026-09-18T18:30:00Z -- the instant the 19th begins.
+    const window = istDayWindow(new Date('2026-09-18T18:30:00.000Z'));
+    expect(window.localDay).toBe('2026-09-19');
+    expect(window.startsAtUtc).toBe('2026-09-18T18:30:00.000Z');
+    expect(window.rollsOverAtUtc).toBe('2026-09-19T18:30:00.000Z');
+  });
+
+  it('spans exactly 24 hours regardless of which day it is', () => {
+    const window = istDayWindow(new Date('2026-01-04T18:30:00.000Z'));
+    const spanMs = new Date(window.rollsOverAtUtc).getTime() - new Date(window.startsAtUtc).getTime();
+    expect(spanMs).toBe(24 * 60 * 60 * 1000);
   });
 });

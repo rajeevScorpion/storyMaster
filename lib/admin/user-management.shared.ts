@@ -1,5 +1,6 @@
 import { COINS_PER_BEAT, type PlanKey } from '@/lib/types/pricing';
 import { normalizeEntitlementPlanKey } from '@/lib/pricing/entitlement-tier.shared';
+import type { AdminWatchQuotaView } from '@/lib/pricing/watch-quota-admin.shared';
 
 export const ADMIN_USER_PAGE_SIZES = [25, 50, 100] as const;
 export const DEFAULT_ADMIN_USER_PAGE_SIZE = ADMIN_USER_PAGE_SIZES[0];
@@ -112,6 +113,8 @@ export interface AdminUserDetailData {
   auditEvents: AdminUserAuditItem[];
   recentStories: AdminUserRecentStory[];
   billing: AdminUserBillingData;
+  /** Payments Phase 4, Unit D: "why did this Free user hit the daily watch limit". */
+  watchQuota: AdminWatchQuotaView;
 }
 
 // --- Billing panel (Payments Phase 4, Unit B) ------------------------------------------------

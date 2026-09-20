@@ -13,6 +13,7 @@ import {
   Clock3,
   Coins,
   CreditCard,
+  Eye,
   ExternalLink,
   FileText,
   Film,
@@ -48,6 +49,7 @@ import {
   type AdminBillingWebhookEvent,
   type AdminUserDetailData,
 } from '@/lib/admin/user-management.shared';
+import type { AdminWatchQuotaWhy } from '@/lib/pricing/watch-quota-admin.shared';
 import UserAvatar from './UserAvatar';
 import {
   StatusBadge,
@@ -495,6 +497,65 @@ export default function AdminUserDetail({
         ) : <EmptyText>No stories or reels created yet.</EmptyText>}
       </TimelineCard>
 
+      <TimelineCard title="Watch quota" icon={Eye}>
+        {data.watchQuota.status === 'unavailable' ? (
+          <EmptyText>
+            <span className="inline-flex items-center gap-1.5 text-amber-400/70">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              Not available on this environment yet -- the watch-quota migration (129) has not been
+              applied here.
+            </span>
+          </EmptyText>
+        ) : (
+          <div className="space-y-4">
+            <p className="rounded-xl border border-white/10 bg-neutral-950/40 p-3 text-sm text-neutral-300">
+              {describeWatchQuotaWhy(data.watchQuota.why)}
+            </p>
+            <p className="text-xs text-neutral-500">
+              Reporting IST day <span className="text-neutral-300">{data.watchQuota.istDay.localDay}</span>
+              {' '}&mdash; rolls over at {formatDateTime(data.watchQuota.istDay.rollsOverAtUtc)}.
+            </p>
+
+            <div>
+              <h3 className="text-xs uppercase tracking-[0.12em] text-neutral-600">Opened today</h3>
+              {data.watchQuota.todaySlots.length > 0 ? (
+                <ul className="mt-2 space-y-1.5">
+                  {data.watchQuota.todaySlots.map((slot) => (
+                    <li key={slot.storylineId} className="flex items-center justify-between gap-4 text-sm">
+                      <span className="truncate text-neutral-300">
+                        {slot.storylineTitle ?? slot.storylineId}
+                      </span>
+                      <span className="shrink-0 text-xs text-neutral-600">
+                        {formatDateTime(slot.createdAt)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-sm text-neutral-600">Nothing opened yet today.</p>
+              )}
+            </div>
+
+            <div>
+              <h3 className="text-xs uppercase tracking-[0.12em] text-neutral-600">
+                Last {data.watchQuota.recentDayCounts.length} IST days
+              </h3>
+              <div className="mt-2 grid grid-cols-7 gap-1.5">
+                {data.watchQuota.recentDayCounts.map((day) => (
+                  <div
+                    key={day.localDay}
+                    className="rounded-lg border border-white/10 bg-neutral-950/40 px-1.5 py-1.5 text-center"
+                  >
+                    <p className="text-[10px] text-neutral-600">{day.localDay.slice(5)}</p>
+                    <p className="text-sm font-medium text-neutral-200">{day.count}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </TimelineCard>
+
       <div>
         <h2 className="text-lg font-serif text-neutral-100">Billing</h2>
         <p className="mt-1 text-sm text-neutral-500">
@@ -871,6 +932,17 @@ function ProfileField({ label, value }: { label: string; value: string | null })
       <dd className="mt-1 text-sm text-neutral-300">{value ?? '—'}</dd>
     </div>
   );
+}
+
+function describeWatchQuotaWhy(why: AdminWatchQuotaWhy | null): string {
+  if (!why) return '';
+  if (why.reason === 'admin_account') {
+    return 'This is the admin account -- never metered, and no ledger row is ever written for it.';
+  }
+  if (why.reason === 'unlimited_plan') {
+    return `This account's plan (${why.planKey}) grants unlimited watching -- no daily limit applies.`;
+  }
+  return `A daily limit of ${why.limit} applies. Used ${why.used} today; ${why.remaining} remaining.`;
 }
 
 function auditLabel(actionType: string): string {

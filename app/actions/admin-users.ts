@@ -8,6 +8,7 @@ import {
   resolveEffectiveEntitlementTier,
 } from '@/lib/pricing/entitlement-tier.shared';
 import { isMissingBillingSchemaError } from '@/lib/billing/schema-availability.shared';
+import { inspectWatchQuotaForAdmin } from '@/lib/pricing/watch-quota-admin';
 import type { PlanKey } from '@/lib/types/pricing';
 import {
   beatsToCoins,
@@ -505,6 +506,7 @@ async function getAdminUserDetailInternal(userId: string): Promise<AdminUserDeta
     documentsResult,
     profileResult,
     webhookEventsResult,
+    watchQuota,
   ] = await Promise.all([
     admin.rpc('admin_list_users', {
       p_search: null,
@@ -590,6 +592,11 @@ async function getAdminUserDetailInternal(userId: string): Promise<AdminUserDeta
       .eq('related_user_id', userId)
       .order('received_at', { ascending: false })
       .limit(25),
+    // Payments Phase 4, Unit D: quota inspection. Unlike the billing reads above (which resolve
+    // with { data, error } and are degraded below), this one is a plain async function that
+    // handles its own migration-129-missing case internally and throws only on a genuine error --
+    // same as every other read this loader does not expect to fail.
+    inspectWatchQuotaForAdmin(userId),
   ]);
 
   throwAdminUserQueryError(overviewResult.error, 'load user overview');
@@ -677,6 +684,7 @@ async function getAdminUserDetailInternal(userId: string): Promise<AdminUserDeta
     ),
     recentStories: ((storiesResult.data ?? []) as StoryRow[]).map(mapRecentStory),
     billing,
+    watchQuota,
   };
 }
 

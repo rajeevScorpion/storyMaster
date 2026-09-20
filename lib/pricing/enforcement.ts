@@ -630,6 +630,27 @@ export interface WatchQuotaPolicy {
   unlimited: boolean;
   /** `pricing_free_daily_watch_quota` (Unit E). Meaningless when `unlimited`. */
   dailyQuota: number;
+  /** The billing plan `unlimitedWatching` was actually read off (lib/pricing/snapshot.ts's
+   * `planKey`, never entitlementPlanKey or the tier rank). Absent only on
+   * `resolveWatchQuotaPolicyForUser`'s fail-open catch below, where there is no snapshot to read
+   * it from. Populated on every real resolution, including `resolveWatchQuotaPolicyForUserStrict`. */
+  planKey?: PlanKey;
+}
+
+/**
+ * The actual read behind the watch-quota policy, shared by both resolvers below so the fail-open
+ * reader path (`resolveWatchQuotaPolicyForUser`) and the fail-closed admin path
+ * (`resolveWatchQuotaPolicyForUserStrict`) can never disagree on how the decision is made -- only
+ * on what happens when it cannot be made at all.
+ */
+async function loadWatchQuotaPolicy(userId: string): Promise<Required<WatchQuotaPolicy>> {
+  const supabase = createAdminClient();
+  const state = await loadPricingState(supabase, userId);
+  return {
+    unlimited: state.snapshot.unlimitedWatching,
+    dailyQuota: state.controls.freeDailyWatchQuota,
+    planKey: state.snapshot.planKey,
+  };
 }
 
 /**
@@ -642,12 +663,7 @@ export interface WatchQuotaPolicy {
  */
 export async function resolveWatchQuotaPolicyForUser(userId: string): Promise<WatchQuotaPolicy> {
   try {
-    const supabase = createAdminClient();
-    const state = await loadPricingState(supabase, userId);
-    return {
-      unlimited: state.snapshot.unlimitedWatching,
-      dailyQuota: state.controls.freeDailyWatchQuota,
-    };
+    return await loadWatchQuotaPolicy(userId);
   } catch (error) {
     console.error(
       'resolveWatchQuotaPolicyForUser failed, defaulting to unlimited (fail-open):',
@@ -655,6 +671,20 @@ export async function resolveWatchQuotaPolicyForUser(userId: string): Promise<Wa
     );
     return { unlimited: true, dailyQuota: 0 };
   }
+}
+
+/**
+ * Payments Phase 4, Unit D: the same resolution as `resolveWatchQuotaPolicyForUser`, for the admin
+ * quota-inspection panel. That reader-facing function fails OPEN on any error, which is correct for
+ * a reader (never show a limit that isn't being enforced) and wrong for an admin, who would then be
+ * told "this account is unmetered" when the truth is "the pricing state could not be read". This
+ * function does not catch anything -- a caller that needs to tell an admin "unavailable" rather than
+ * a false "unlimited" must catch the rejection itself (docs/payments/phase-4-plan.md, Unit D).
+ */
+export async function resolveWatchQuotaPolicyForUserStrict(
+  userId: string
+): Promise<Required<WatchQuotaPolicy>> {
+  return loadWatchQuotaPolicy(userId);
 }
 
 export async function getPricingPolicyContextForUser(userId: string | null): Promise<{
