@@ -3,7 +3,53 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-19 — Phase 3 done; Phase 4 planned, awaiting 5 decisions)
+## Next session starts here (updated 2026-09-20 — Phase 4's unblocked half is built; C and E wait on D1-D4)
+
+**Phase 4 units A, B, D and F are built, diff-reviewed and committed on `payments`.** They are the
+read-only half: the admin billing panel, quota inspection, the incident dashboard, and the migration
+that widens the audit CHECK for Unit C's future actions. **Units C and E are not started and must not
+be**, per the plan's own stop: C can move money out of the business and E can break a live subscriber.
+
+| Unit | Commit | Note |
+|---|---|---|
+| A — migration 131 | `27a9fcd` | **not applied anywhere.** Nothing needs it yet; it only widens a CHECK for Unit C |
+| B — billing panel | `3bf3de5` | seven sections on the admin user record |
+| D — quota inspection | `05cb6d3` + fix `56abc41` | "why did this user hit the limit", IST day shown |
+| F — incident dashboard | `c6f1725` + fix `89dbabf` | `/admin/pricing/billing-incidents` |
+
+Gates run on the final tree, not taken from the agents: tsc clean, lint clean, **1,847 tests / 158
+files**, `build:verify` compiled with both new routes.
+
+**Two defects found by reading the diffs, both the same class** — a support surface stating a false
+*reason* for having no data, which every gate passes happily. Unit F blamed a missing migration when
+the real cause was an unconfigured Razorpay; Unit D's strict resolver took the entire admin user page
+down (moderation controls included) instead of degrading its own section. Both fixed. This keeps the
+project's running score intact: every agentic phase here has had defects the suite passed over.
+
+**The honest limit on all of it:** nothing has been seen working against real data. `billing_payments`,
+`billing_refunds`, `billing_documents`, `billing_profiles` and `user_daily_watch_slots` are all still
+**0 rows on dev**, and every Phase 4 surface is behind `verifyAdmin`, which the signed-out e2e smoke
+cannot reach. The money walk below is what closes that, and it is owner-only.
+
+**Production check that was worth doing:** prod's ledger holds **nothing >= 124**, and a direct probe
+confirms `billing_payments` is 42P01 and `billing_subscriptions.provider_mode` is 42703 — both in the
+classifier the new panels degrade on. So on `main` today every billing section, the quota section and
+three of four incident sections would render "unavailable" **by design**. Do not mistake that for
+breakage during promotion.
+
+### Do next
+
+1. **Answer Phase 4's D1-D4** (`phase-4-plan.md` §2): refund amount policy, coin clawback on refund,
+   cancel-immediately semantics, and whether archiving a plan with live subscribers is a hard block or
+   an informed confirmation. Nothing else in Phase 4 can proceed. D5 (alerts) is already resolved in
+   practice — Unit F ships as a dashboard with no push, keeping the 2026-09-14 notifications deferral.
+2. **Apply migration 131 on dev** when convenient. No code fails without it.
+3. **The §6 money walk** — still the highest-value outstanding action, now doubly so: it is what would
+   let anyone confirm the new panels render real rows correctly.
+
+---
+
+## Previous entry (2026-09-19 — Phase 3 done; Phase 4 planned, awaiting 5 decisions)
 
 **Phase 2 is complete: every unit built, reviewed, and its migrations applied on dev.** Nothing is merged to
 `dev` or `main`; everything is on branch `payments`. Prod is untouched and stays that way until the whole
@@ -362,7 +408,8 @@ session at natural checkpoints.
 | 1 Money correctness | **code complete, not yet sandbox-verified** — `phase-1-plan.md`. Unit A `1392121`, Unit B `fabea84`, Opus review fixes `6685db5`. 124 applied on dev 2026-09-17. Checkout-frame fix `cd5cd0c`. Next: sandbox runbook (plan §6), in progress. Phase 1 closes only after §6 passes |
 | 2 Durable billing ledger | **done 2026-09-18** — every unit reviewed; migrations 125-128 applied on dev, none on prod. `phase-2-plan.md` §6 database half verified; the money walk and a throwaway deletion still owner-pending |
 | 3 Plans, entitlements, consumption | **code-complete 2026-09-19** — `phase-3-plan.md`. A `04c0ce4`, B `e7cea4d` (+ defect fix `7b5669b`), C `97b1c0f`, D `717f9bc`, E `db410ef`. Migrations 129 and 130 applied and verified on dev, neither on prod; 129 walked 8/8. Catalogue created and the quota switched on for dev. Outstanding: the Audience price is ₹0, so the upsell cannot be walked end to end |
-| 4–8 | not started |
+| 4 Admin, support ops, incident tooling | **unblocked half built 2026-09-20** — `phase-4-plan.md`. A `27a9fcd`, B `3bf3de5`, D `05cb6d3`+`56abc41`, F `c6f1725`+`89dbabf`. Migration 131 written, **applied nowhere**. **C and E deliberately not started** — blocked on owner decisions D1-D4. Nothing verified against real money data; dev's payment/refund/document/profile/watch-slot tables are all empty |
+| 5–8 | not started |
 
 **Delegation:** Opus plans/reviews, Sonnet executes; **at most 2 agents at once**; ask the owner for session usage at each phase boundary.
 

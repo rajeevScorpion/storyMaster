@@ -1,8 +1,49 @@
 # Phase 4 — admin billing, support operations and incident tooling
 
-**Status: plan, awaiting owner decisions. No code written.**
+**Status (2026-09-20): the four unblocked units are built. C and E remain blocked on D1–D4.**
 Source of scope: `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/06_PHASE_4_ADMIN_SUPPORT_OPERATIONS.md`.
 Written 2026-09-19, after Phase 3 went code-complete and the watch quota went live on dev.
+Units A, B, D and F executed 2026-09-20 in the order §10 prescribes.
+
+| Unit | Commit | State |
+|---|---|---|
+| A — migration 131, widened audit CHECK | `27a9fcd` | done. **Not applied on any environment** — the owner applies by hand |
+| B — read-only billing panel | `3bf3de5` | done, diff-reviewed |
+| D — quota inspection | `05cb6d3` + review fix `56abc41` | done, diff-reviewed |
+| F — incident dashboard | `c6f1725` + review fix `89dbabf` | done, diff-reviewed |
+| C — safe admin actions | — | **not started; blocked on D1–D3** |
+| E — catalogue guardrails | — | **not started; blocked on D4** |
+
+**Two defects were found by reading the diffs, both the same class — a surface telling a support
+person something untrue about why it had no data:**
+
+1. Unit F scopes three of its four sections to a Razorpay mode, so an unconfigured provider rendered
+   the *missing-migration* message. That sends whoever reads it to the database when the answer is an
+   unset env var. Sections now carry the reason.
+2. Unit D's strict policy resolver — added precisely so an admin is never shown a false "unmetered" —
+   was awaited unguarded inside `getAdminUserDetailInternal`'s `Promise.all`. An unreadable pricing
+   state therefore blanked the **whole** admin user page, moderation controls included, and the
+   distinction the resolver existed to draw never reached the screen. It degrades the section now,
+   with its own reason, kept distinct from the un-migrated case.
+
+**Verified on the final tree, not taken from the agents' reports:** `npx tsc --noEmit` clean,
+`npm run lint` clean with zero warnings, **1,847 tests across 158 files**, `npm run build:verify`
+compiled with `/admin/pricing/billing-incidents` and `/admin/users/[id]` both present.
+
+**The fail-closed path was verified against production itself**, since that is where it actually
+runs: `select id from public.billing_payments` returns **42P01** (table absent) and
+`billing_subscriptions.provider_mode` returns **42703** (column absent) — both in the classifier the
+three units degrade on. Production has *no* payments migration (the ledger holds nothing ≥ 124), so
+when this reaches `main` **every** billing section, the quota section and three of four incident
+sections render "unavailable" by design, not by breakage. That is the correct behaviour and it should
+not be mistaken for a bug during promotion.
+
+**Not verified, and it cannot be from here:** no section that depends on real money data has been
+seen populated. See §6 — `billing_payments`, `billing_refunds`, `billing_documents`,
+`billing_profiles` and `user_daily_watch_slots` are all still 0 rows on dev, so the panels are proven
+against query shape and unit tests, not against rows. The money walk remains the thing that closes
+this. Nothing has been clicked through in a browser either: `npm run test:e2e` is signed-out only, and
+every surface in this phase is behind `verifyAdmin`.
 
 The pack calls this a **live-money gate**, and the sentence that defines the phase is:
 
@@ -306,11 +347,11 @@ is lost is a money movement with no record, in a system that must keep eight yea
 row **before** the provider call, with the outcome patched in after — so a crash mid-flight leaves evidence
 that an attempt happened, rather than silence.
 
-### Unit A — migration 131 (unblocked)
+### Unit A — migration 131 (BUILT, `27a9fcd`)
 
 Widen `admin_user_audit_events_action_type_check` per §4. Copy 096's `DO` block. Rollback does not narrow.
 
-### Unit B — the read-only billing panel (unblocked, highest value)
+### Unit B — the read-only billing panel (BUILT, `3bf3de5`)
 
 `AdminUserDetailData` (`lib/admin/user-management.shared.ts:109-114`) has exactly four fields today:
 `user`, `walletActivity`, `auditEvents`, `recentStories`. `getAdminUserDetailInternal`
@@ -362,7 +403,7 @@ the action initiates. Never report success on the strength of the local write.
 
 Every mutating action here is behind the §7 kill switch and a `ConfirmDialog` with `tone="danger"`.
 
-### Unit D — quota inspection (unblocked)
+### Unit D — quota inspection (BUILT, `05cb6d3` + `56abc41`)
 
 "Why did this Free user hit the limit" is one read of `user_daily_watch_slots` for the user's current IST
 day, joined to storyline titles, plus the resolved policy: is this account exempt, and what limit applied.
@@ -387,7 +428,7 @@ D4 decides whether the count hard-blocks or merely informs.
 *Not ruled out by this pass: a database-side trigger or constraint enforcing something. Nothing in
 application code does. Check the schema before concluding there is no guard at all.*
 
-### Unit F — incident dashboard (shaped by D5)
+### Unit F — incident dashboard (BUILT, `c6f1725` + `89dbabf`)
 
 **This needs new server actions; it cannot read existing helpers.** `lib/billing/razorpay-reconcile.ts`
 exports only `reconcileRazorpayBilling()` and its result interface — four counts of items *processed*. The

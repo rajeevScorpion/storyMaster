@@ -754,7 +754,15 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
 
 **Billing and cost**
 - **Payments are not safe for real money yet.** Work is in progress on branch `payments`; the living handoff is
-  `docs/payments/audit-progress.md` (audit, Phase 0 discovery, phase status, owner decisions).
+  `docs/payments/audit-progress.md` (audit, Phase 0 discovery, phase status, owner decisions). Nothing is merged
+  to `dev` or `main`. As of 2026-09-20: Phases 1-3 are code-complete and Phase 4's read-only half is built;
+  **migrations 124-130 are applied on dev and none on prod**, and **131 is written and applied nowhere**. The
+  payments migrations are tracked in that handoff rather than in the table above, which stops at 124 on purpose
+  while the branch is unmerged — `schema_migration_ledger` is the authority for either.
+- **No payment has ever flowed through the Phase 2 ledger.** `billing_payments` is empty on dev, along with
+  refunds, documents, billing profiles and watch slots. Every admin billing surface built in Phase 4 is therefore
+  correct by construction and unproven against real rows. The owner-only money walk in `phase-2-plan.md` §6 is
+  what closes this, and several later phases are waiting on it.
 - The Story Bible LLM call is **unbilled** — it consumes tokens without a coin charge.
 - The full `ImageModelSnapshot` — including both `providerCost*Usd` fields — still reaches the client inside
   `beat.imageGenerationMetadata.imageModelSnapshot`. The picker leak was fixed by splitting
