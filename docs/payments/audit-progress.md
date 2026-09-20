@@ -37,6 +37,29 @@ classifier the new panels degrade on. So on `main` today every billing section, 
 three of four incident sections would render "unavailable" **by design**. Do not mistake that for
 breakage during promotion.
 
+### In flight as of 2026-09-20 (if this session died, read this first)
+
+**Units C and E were dispatched after decisions 11-14 landed.** If they are not in `git log`, they
+did not finish — re-dispatch from `phase-4-plan.md` §9 plus decisions 11-14. If they are, **their
+diffs had not yet been reviewed when this was written**, and every agentic unit on this project so
+far has contained at least one defect the full suite passed over. Review before trusting.
+
+What each was told, so the work is reproducible:
+
+- **Unit C** — one full-refund action (D11) refusing above ~20% used and over a per-account refund
+  cap (D12); clawback **before** the provider call with an explicit compensating restore if Razorpay
+  then fails; **one** cancel action meaning cancel-the-renewal (D13); re-sync/reprocess reaching the
+  existing recovery implementations rather than new ones; audit row written **before** the provider
+  call with the outcome patched in after; the webhook stays the record and success is never reported
+  on the strength of the local write. Needs **migration 132** — a clawback function on
+  **advisory-lock salt 85** (83 and 84 are taken, verified). Ships behind a new kill switch,
+  `defaultEnabled: false`, **deliberately not enabled**.
+- **Unit E** — informed confirmation carrying the live subscriber count (D14), including disclosing
+  the version `publishPricingPlanVersion` silently archives as a side effect. Not a hard block.
+
+**Migration 132 will need applying by hand on dev** once Unit C lands. Until then Unit C's refund
+action refuses rather than refunding money it cannot claw back — that refusal is deliberate.
+
 ### Do next
 
 1. **Answer Phase 4's D1-D4** (`phase-4-plan.md` §2): refund amount policy, coin clawback on refund,
