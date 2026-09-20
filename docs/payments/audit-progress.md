@@ -62,9 +62,11 @@ compiled successfully.
 ### Do next, in order
 
 1. **Apply migration 132 on dev** by hand.
-2. **Build Unit C's UI** — `ConfirmDialog` with `tone="danger"` per action in `AdminUserDetail.tsx`,
+2. **Build Unit C's UI** (`getBillingAdminActionsEnabled` already exists for it, commit `bd05baa`;
+   the page wiring and the component work are NOT done) — `ConfirmDialog` with `tone="danger"` per action in `AdminUserDetail.tsx`,
    showing the amount, what gets clawed back, and what the user keeps.
-3. **The §6 money walk** on the preview. This is now the highest-value action in the whole project:
+3. **The §6 money walk** on the preview — **step-by-step runbook: `money-walk-runbook.md`**, written
+   2026-09-20. This is now the highest-value action in the whole project:
    `billing_payments`, `billing_refunds`, `billing_documents`, `billing_profiles` and
    `user_daily_watch_slots` are **all still 0 rows on dev**, so every Phase 4 surface is correct by
    construction and unproven against real rows. It is owner-only.
