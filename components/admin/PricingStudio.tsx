@@ -24,6 +24,8 @@ import {
   archivePricingTopupPack,
   expirePricingReservations,
   getPricingAdminState,
+  getPricingPlanSubscriberImpact,
+  getPricingPlanVersionSubscriberImpact,
   publishPricingPlanVersion,
   publishPricingTopupPack,
   reconcilePricingSubscription,
@@ -50,6 +52,13 @@ import AdminToggle from '@/components/admin/AdminToggle';
 import AdminPageHeader from '@/components/admin/AdminPageHeader';
 import AdminHubCard from '@/components/admin/AdminHubCard';
 import FilterDropdown from '@/components/ui/FilterDropdown';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import {
+  describeArchivePlanVersionConfirmation,
+  describeDeactivatePlanConfirmation,
+  describePublishPlanVersionConfirmation,
+  type SubscriberImpactCount,
+} from '@/lib/pricing/catalog-guardrails.shared';
 import { INDIA_GST_STATE_CODES } from '@/lib/billing/india-states.shared';
 import { LEGAL_GSTIN } from '@/lib/legal/business-config';
 import {
@@ -118,6 +127,23 @@ type TopupEditorState = {
   coinAmount: number;
   providerProductRef: string;
   providerPriceRef: string;
+};
+
+/**
+ * Payments Phase 4, Unit E: the "informed confirmation" owner decision 14 asks for in front of every
+ * archive/deactivate/publish-that-archives catalogue action. Storing action/onSuccess/successMessage
+ * as `unknown`-typed here erases the per-call result type, since one dialog and one piece of state
+ * back every button below -- confirmMutation() is the type-safe entry point that fills this in.
+ */
+type PricingConfirmState = {
+  key: string;
+  title: string;
+  message: string;
+  tone: 'default' | 'danger';
+  confirmLabel: string;
+  action: () => Promise<unknown>;
+  onSuccess: (result: unknown) => void | Promise<void>;
+  successMessage: string | ((result: unknown) => string);
 };
 
 type TopupCatalogEntry = {
@@ -759,6 +785,7 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
   const [message, setMessage] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [inlineMutationFeedback, setInlineMutationFeedback] = useState<Record<string, InlineMutationFeedback>>({});
+  const [confirmState, setConfirmState] = useState<PricingConfirmState | null>(null);
 
   const [selectedPlanKey, setSelectedPlanKey] = useState<PlanKey>('free');
   const [selectedPlanMarket, setSelectedPlanMarket] = useState<PricingMarketKey>('ROW');
@@ -1026,6 +1053,168 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
       const next = { ...current };
       delete next[key];
       return next;
+    });
+  }
+
+  /**
+   * Opens the shared confirmation in front of an archive/deactivate/publish-that-archives action.
+   * Generic over the mutation's own result type; PricingConfirmState itself stores it erased to
+   * `unknown` since one dialog backs every button below.
+   */
+  function confirmMutation<T>(options: {
+    key: string;
+    title: string;
+    message: string;
+    tone?: 'default' | 'danger';
+    confirmLabel?: string;
+    action: () => Promise<T>;
+    onSuccess: (result: T) => void | Promise<void>;
+    successMessage: string | ((result: T) => string);
+  }) {
+    setConfirmState({
+      key: options.key,
+      title: options.title,
+      message: options.message,
+      tone: options.tone ?? 'danger',
+      confirmLabel: options.confirmLabel ?? 'Confirm',
+      action: options.action as () => Promise<unknown>,
+      onSuccess: options.onSuccess as (result: unknown) => void | Promise<void>,
+      successMessage: options.successMessage as string | ((result: unknown) => string),
+    });
+  }
+
+  async function runConfirmedMutation() {
+    if (!confirmState) return;
+    const { key, action, onSuccess, successMessage } = confirmState;
+    await runMutation(key, action, onSuccess, successMessage);
+    setConfirmState(null);
+  }
+
+  /**
+   * Fetches a live-subscriber count before a confirmation opens, so the dialog shows a real number
+   * instead of a placeholder. A failed read (missing migration on this environment, or anything
+   * else) resolves to null rather than throwing -- the count is informational only (owner decision
+   * 14), never a reason to block the admin from proceeding. Uses its own busyKey so the triggering
+   * button shows a spinner during the brief fetch, distinct from the mutation's own busy key.
+   */
+  async function withSubscriberImpact(
+    countingKey: string,
+    fetchImpact: () => Promise<{ liveSubscriberCount: SubscriberImpactCount }>
+  ): Promise<SubscriberImpactCount> {
+    setBusyKey(countingKey);
+    try {
+      const impact = await fetchImpact();
+      return impact.liveSubscriberCount;
+    } catch {
+      return null;
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  function buildPlanDraftPayload() {
+    return {
+      planKey: selectedPlanKey,
+      name: planEditor.name,
+      tierRank: planEditor.tierRank,
+      isActive: planEditor.isActive,
+      isPublic: planEditor.isPublic,
+      description: planEditor.description,
+      featureFlags: {
+        canAccessDownloads: planEditor.canAccessDownloads,
+        canAccessUnbrandedExports: planEditor.canAccessUnbrandedExports,
+        creatorControls: planEditor.creatorControls,
+        unlimitedWatching: planEditor.unlimitedWatching,
+        videoExportPreset: {
+          verticalResolution: planEditor.videoExportVerticalResolution,
+          watermarkMode: planEditor.videoExportWatermarkMode,
+          watermarkPosition: planEditor.videoExportWatermarkPosition,
+          watermarkSize: planEditor.videoExportWatermarkSize,
+        },
+      },
+      provider: planEditor.provider || null,
+      billingInterval: selectedPlanInterval,
+      currencyCode: planEditor.currencyCode,
+      pricingMarketKey: selectedPlanMarket,
+      priceMinor: planEditor.priceMinor,
+      monthlyIncludedBeats: coinsToBeats(planEditor.monthlyIncludedCoins),
+      carryForwardCapMultiplier: planEditor.carryForwardCapMultiplier,
+      storyLengthCap: planEditor.storyLengthCap,
+      gracePeriodDays: planEditor.gracePeriodDays,
+      providerProductRef: planEditor.providerProductRef,
+      providerPriceRef: planEditor.providerPriceRef,
+    };
+  }
+
+  /**
+   * Save Draft also carries upsertPricingPlanBase's is_active write (Unit E finding: it "writes
+   * is_active with no guard at all"). Only the transition that actually deactivates a currently
+   * active plan needs a confirmation -- an ordinary price/copy edit, or a save that leaves the plan
+   * active, is not the "deactivate" action this unit guards.
+   */
+  async function handleSavePlanDraftClick() {
+    const persistedPlan = state?.plans.find((item) => item.plan.plan_key === selectedPlanKey)?.plan ?? null;
+    const willDeactivate = Boolean(persistedPlan?.is_active) && !planEditor.isActive;
+    const successMessage = `${selectedPlanKey} draft saved`;
+
+    if (!willDeactivate || !persistedPlan) {
+      void runMutation('plan:save', () => savePricingPlanDraft(buildPlanDraftPayload()), hydrateState, successMessage);
+      return;
+    }
+
+    const count = await withSubscriberImpact('plan:save:count', () => getPricingPlanSubscriberImpact(persistedPlan.id));
+    confirmMutation({
+      key: 'plan:save',
+      title: 'Deactivate this plan?',
+      message: describeDeactivatePlanConfirmation(count),
+      confirmLabel: 'Save and deactivate',
+      action: () => savePricingPlanDraft(buildPlanDraftPayload()),
+      onSuccess: hydrateState,
+      successMessage,
+    });
+  }
+
+  async function handleArchivePlanVersionClick() {
+    const target = currentPlanDraft ?? currentPlanPublished;
+    if (!target) return;
+    const count = await withSubscriberImpact('plan:archive:count', () => getPricingPlanVersionSubscriberImpact(target.id));
+    confirmMutation({
+      key: 'plan:archive',
+      title: 'Archive this plan version?',
+      message: describeArchivePlanVersionConfirmation(count),
+      confirmLabel: 'Archive',
+      action: () => archivePricingPlanVersion(target.id),
+      onSuccess: hydrateState,
+      successMessage: `${selectedPlanKey} variant archived`,
+    });
+  }
+
+  /**
+   * publishPricingPlanVersion silently archives the currently published version of the same
+   * plan/interval/market (Unit E finding). When one exists, that archival -- and its own subscriber
+   * count -- is what the confirmation discloses. When there is none, publishing has no such side
+   * effect and proceeds as it always did.
+   */
+  async function handlePublishPlanVersionClick() {
+    if (!currentPlanDraft) return;
+    const draft = currentPlanDraft;
+    const successMessage = `${selectedPlanKey} draft published`;
+
+    if (!currentPlanPublished) {
+      void runMutation('plan:publish', () => publishPricingPlanVersion(draft.id), hydrateState, successMessage);
+      return;
+    }
+
+    const published = currentPlanPublished;
+    const count = await withSubscriberImpact('plan:publish:count', () => getPricingPlanVersionSubscriberImpact(published.id));
+    confirmMutation({
+      key: 'plan:publish',
+      title: 'Publish this draft?',
+      message: describePublishPlanVersionConfirmation(formatPlanVariantValue(published), count),
+      confirmLabel: 'Publish and archive current',
+      action: () => publishPricingPlanVersion(draft.id),
+      onSuccess: hydrateState,
+      successMessage,
     });
   }
 
@@ -1356,74 +1545,25 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
 
             <div className="mt-5 flex flex-wrap gap-3">
               <ActionButton
-                busy={busyKey === 'plan:save'}
+                busy={busyKey === 'plan:save' || busyKey === 'plan:save:count'}
                 label="Save Draft"
                 icon={Save}
-                onClick={() => void runMutation(
-                  'plan:save',
-                  () => savePricingPlanDraft({
-                    planKey: selectedPlanKey,
-                    name: planEditor.name,
-                    tierRank: planEditor.tierRank,
-                    isActive: planEditor.isActive,
-                    isPublic: planEditor.isPublic,
-                    description: planEditor.description,
-                    featureFlags: {
-                      canAccessDownloads: planEditor.canAccessDownloads,
-                      canAccessUnbrandedExports: planEditor.canAccessUnbrandedExports,
-                      creatorControls: planEditor.creatorControls,
-                      unlimitedWatching: planEditor.unlimitedWatching,
-                      videoExportPreset: {
-                        verticalResolution: planEditor.videoExportVerticalResolution,
-                        watermarkMode: planEditor.videoExportWatermarkMode,
-                        watermarkPosition: planEditor.videoExportWatermarkPosition,
-                        watermarkSize: planEditor.videoExportWatermarkSize,
-                      },
-                    },
-                    provider: planEditor.provider || null,
-                    billingInterval: selectedPlanInterval,
-                    currencyCode: planEditor.currencyCode,
-                    pricingMarketKey: selectedPlanMarket,
-                    priceMinor: planEditor.priceMinor,
-                    monthlyIncludedBeats: coinsToBeats(planEditor.monthlyIncludedCoins),
-                    carryForwardCapMultiplier: planEditor.carryForwardCapMultiplier,
-                    storyLengthCap: planEditor.storyLengthCap,
-                    gracePeriodDays: planEditor.gracePeriodDays,
-                    providerProductRef: planEditor.providerProductRef,
-                    providerPriceRef: planEditor.providerPriceRef,
-                  }),
-                  hydrateState,
-                  `${selectedPlanKey} draft saved`
-                )}
+                onClick={() => void handleSavePlanDraftClick()}
               />
               <ActionButton
-                busy={busyKey === 'plan:publish'}
+                busy={busyKey === 'plan:publish' || busyKey === 'plan:publish:count'}
                 disabled={!currentPlanDraft}
                 label="Publish Draft"
                 icon={CheckCircle}
-                onClick={() => currentPlanDraft && void runMutation(
-                  'plan:publish',
-                  () => publishPricingPlanVersion(currentPlanDraft.id),
-                  hydrateState,
-                  `${selectedPlanKey} draft published`
-                )}
+                onClick={() => void handlePublishPlanVersionClick()}
               />
               <ActionButton
-                busy={busyKey === 'plan:archive'}
+                busy={busyKey === 'plan:archive' || busyKey === 'plan:archive:count'}
                 disabled={!currentPlanDraft && !currentPlanPublished}
                 label="Archive Current"
                 icon={Archive}
                 tone="secondary"
-                onClick={() => {
-                  const target = currentPlanDraft ?? currentPlanPublished;
-                  if (!target) return;
-                  void runMutation(
-                    'plan:archive',
-                    () => archivePricingPlanVersion(target.id),
-                    hydrateState,
-                    `${selectedPlanKey} variant archived`
-                  );
-                }}
+                onClick={() => void handleArchivePlanVersionClick()}
               />
             </div>
           </div>
@@ -1479,17 +1619,20 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
               label="Archive Legacy Packs"
               icon={Archive}
               tone="secondary"
-              onClick={() => void runMutation(
-                `topup:legacy:${selectedTopupMarket}`,
-                () => archiveLegacyTopupPacks(selectedTopupMarket),
-                (result) => {
+              onClick={() => confirmMutation({
+                key: `topup:legacy:${selectedTopupMarket}`,
+                title: 'Archive legacy top-up packs?',
+                message: `This archives every legacy top-up pack still active for ${selectedTopupMarket}. It cannot be undone from here.`,
+                confirmLabel: 'Archive',
+                action: () => archiveLegacyTopupPacks(selectedTopupMarket),
+                onSuccess: (result) => {
                   hydrateState(result.state);
                   setIsCreatingTopup(false);
                 },
-                (result) => result.archivedCount > 0
+                successMessage: (result) => result.archivedCount > 0
                   ? `Archived ${result.archivedCount} legacy pack variants for ${selectedTopupMarket}`
-                  : `No legacy packs were active for ${selectedTopupMarket}`
-              )}
+                  : `No legacy packs were active for ${selectedTopupMarket}`,
+              })}
             />
           </div>
 
@@ -1561,12 +1704,15 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                 onClick={() => {
                   const target = currentTopupDraft ?? currentTopupPublished;
                   if (!target) return;
-                  void runMutation(
-                    'topup:archive',
-                    () => archivePricingTopupPack(target.id),
-                    hydrateState,
-                    'Top-up variant archived'
-                  );
+                  confirmMutation({
+                    key: 'topup:archive',
+                    title: 'Archive this top-up pack?',
+                    message: 'This removes it from new purchases. It cannot be undone from here.',
+                    confirmLabel: 'Archive',
+                    action: () => archivePricingTopupPack(target.id),
+                    onSuccess: hydrateState,
+                    successMessage: 'Top-up variant archived',
+                  });
                 }}
               />
             </div>
@@ -1924,15 +2070,18 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                 onClick={() => {
                   const promotionId = promotionEditor.id;
                   if (!promotionId) return;
-                  void runMutation(
-                    'promotion:archive',
-                    () => archivePricingPromotion(promotionId),
-                    (next) => {
+                  confirmMutation({
+                    key: 'promotion:archive',
+                    title: 'Archive this promotion?',
+                    message: 'This stops the promotion from applying to any new grant. It cannot be undone from here.',
+                    confirmLabel: 'Archive',
+                    action: () => archivePricingPromotion(promotionId),
+                    onSuccess: (next) => {
                       hydrateState(next);
                       setPromotionEditor(defaultPromotionEditor());
                     },
-                    'Promotion archived'
-                  );
+                    successMessage: 'Promotion archived',
+                  });
                 }}
               />
             </div>
@@ -2124,15 +2273,22 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                 label="Archive Rule"
                 icon={Archive}
                 tone="secondary"
-                onClick={() => taxRuleEditor.id && void runMutation(
-                  'tax-rule:archive',
-                  () => archivePricingTaxRule(taxRuleEditor.id!).then(unwrapTaxRuleMutation),
-                  (result) => {
-                    setTaxRules(result.rules);
-                    setTaxRuleEditor(defaultTaxRuleEditor());
-                  },
-                  'Tax rule archived'
-                )}
+                onClick={() => {
+                  const ruleId = taxRuleEditor.id;
+                  if (!ruleId) return;
+                  confirmMutation({
+                    key: 'tax-rule:archive',
+                    title: 'Archive this tax rule?',
+                    message: 'Archiving the last published rule for a market and kind does not fall back to charging the bare price -- checkout refuses until a rule is published again. It cannot be undone from here.',
+                    confirmLabel: 'Archive',
+                    action: () => archivePricingTaxRule(ruleId).then(unwrapTaxRuleMutation),
+                    onSuccess: (result) => {
+                      setTaxRules(result.rules);
+                      setTaxRuleEditor(defaultTaxRuleEditor());
+                    },
+                    successMessage: 'Tax rule archived',
+                  });
+                }}
               />
             </div>
           </div>
@@ -2333,6 +2489,16 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
       </SectionCard>
       )}
 
+      <ConfirmDialog
+        open={confirmState !== null}
+        title={confirmState?.title ?? ''}
+        message={confirmState?.message ?? ''}
+        tone={confirmState?.tone ?? 'danger'}
+        confirmLabel={confirmState?.confirmLabel ?? 'Confirm'}
+        busy={confirmState !== null && busyKey === confirmState.key}
+        onCancel={() => setConfirmState(null)}
+        onConfirm={() => void runConfirmedMutation()}
+      />
     </div>
   );
 }

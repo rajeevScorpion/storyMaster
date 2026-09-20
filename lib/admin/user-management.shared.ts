@@ -856,33 +856,49 @@ export function mapAdminBillingWebhookEvent(row: RawBillingWebhookEventRow): Adm
 }
 
 /**
+ * The primitive admin_list_users's own subscription predicate reduces to (083_admin_user_management.sql):
+ * active/trialing/authenticated with an unexpired (or absent) period end, OR pending/halted still
+ * inside its grace period. Factored out of selectActiveBillingSubscriptionForPlanKey so a second
+ * caller (Payments Phase 4, Unit E's catalogue-guardrail subscriber count) can ask the identical
+ * question about rows that were never assembled into a full AdminBillingSubscription -- see
+ * lib/pricing/catalog-guardrails.shared.ts. Do not write a second version of this; import it.
+ */
+export function isLiveBillingSubscriptionStatus(
+  status: string,
+  currentPeriodEnd: string | null,
+  gracePeriodEndsAt: string | null,
+  now: Date = new Date()
+): boolean {
+  const nowMs = now.getTime();
+  const normalizedStatus = status.toLowerCase();
+
+  if (normalizedStatus === 'active' || normalizedStatus === 'trialing' || normalizedStatus === 'authenticated') {
+    if (!currentPeriodEnd) return true;
+    const endMs = new Date(currentPeriodEnd).getTime();
+    return !Number.isFinite(endMs) || endMs > nowMs;
+  }
+  if (normalizedStatus === 'pending' || normalizedStatus === 'halted') {
+    if (!gracePeriodEndsAt) return false;
+    const graceMs = new Date(gracePeriodEndsAt).getTime();
+    return Number.isFinite(graceMs) && graceMs > nowMs;
+  }
+  return false;
+}
+
+/**
  * Reproduces admin_list_users's own subscription predicate (083_admin_user_management.sql) in JS,
  * over rows this loader already fetched, so the plan-key disagreement check asks the same question
- * the RPC did rather than a looser one: active/trialing/authenticated with an unexpired (or absent)
- * period end, OR pending/halted still inside its grace period. Ties break the same way too --
- * current_period_end DESC NULLS LAST, then updated_at DESC. Nulls sort last in a DESC order, which
- * is the same as treating them as -Infinity here.
+ * the RPC did rather than a looser one -- see isLiveBillingSubscriptionStatus. Ties break the same
+ * way too -- current_period_end DESC NULLS LAST, then updated_at DESC. Nulls sort last in a DESC
+ * order, which is the same as treating them as -Infinity here.
  */
 export function selectActiveBillingSubscriptionForPlanKey(
   subscriptions: readonly AdminBillingSubscription[],
   now: Date = new Date()
 ): AdminBillingSubscription | null {
-  const nowMs = now.getTime();
-
-  const candidates = subscriptions.filter((subscription) => {
-    const status = subscription.status.toLowerCase();
-    if (status === 'active' || status === 'trialing' || status === 'authenticated') {
-      if (!subscription.currentPeriodEnd) return true;
-      const endMs = new Date(subscription.currentPeriodEnd).getTime();
-      return !Number.isFinite(endMs) || endMs > nowMs;
-    }
-    if (status === 'pending' || status === 'halted') {
-      if (!subscription.gracePeriodEndsAt) return false;
-      const graceMs = new Date(subscription.gracePeriodEndsAt).getTime();
-      return Number.isFinite(graceMs) && graceMs > nowMs;
-    }
-    return false;
-  });
+  const candidates = subscriptions.filter((subscription) =>
+    isLiveBillingSubscriptionStatus(subscription.status, subscription.currentPeriodEnd, subscription.gracePeriodEndsAt, now)
+  );
 
   if (candidates.length === 0) return null;
 
