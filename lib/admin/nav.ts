@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react';
 import {
+  AlertTriangle,
   BookOpen,
   BookOpenText,
   BookUser,
@@ -340,6 +341,14 @@ const PRICING_CHILD_GROUP: AdminNavChildGroup = {
       icon: Wrench,
       description: 'Repair test wallet, checkout, and reservation issues.',
       staticSummary: 'Repair wallet, checkout, and reservations',
+    },
+    {
+      id: 'billing-incidents',
+      label: 'Billing incidents',
+      href: '/admin/pricing/billing-incidents',
+      icon: AlertTriangle,
+      description: 'Failed webhooks, stuck checkouts, and subscriptions past their renewal boundary.',
+      staticSummary: 'Failed webhooks, stuck checkouts, and overdue subscriptions',
     },
     {
       id: 'audit',

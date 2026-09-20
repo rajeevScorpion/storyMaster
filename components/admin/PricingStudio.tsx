@@ -198,7 +198,7 @@ const INPUT_CLASS = 'w-full rounded-lg border border-white/10 bg-neutral-800 px-
 // live operations, and change history each get their own titled box.
 const WORKSHOP_CARD_GROUPS: { label: string; ids: string[] }[] = [
   { label: 'Catalog', ids: ['plans', 'top-up-packs', 'promotions', 'tax-rules'] },
-  { label: 'Operations', ids: ['action-costs', 'runtime-controls', 'recovery-tools'] },
+  { label: 'Operations', ids: ['action-costs', 'runtime-controls', 'recovery-tools', 'billing-incidents'] },
   { label: 'History', ids: ['audit'] },
 ];
 

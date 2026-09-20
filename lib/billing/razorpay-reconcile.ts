@@ -10,16 +10,23 @@ import {
   syncSubscriptionFromProvider,
 } from '@/lib/billing/razorpay-sync';
 import { processRazorpayWebhookEvent, type RazorpayWebhookPayload } from '@/lib/billing/razorpay-webhook';
+import {
+  MIN_AGE_MS,
+  CHECKOUT_MAX_AGE_MS,
+  TOPUP_MAX_AGE_MS,
+  STUCK_SUBSCRIPTION_CHECKOUT_STATUSES,
+  STUCK_TOPUP_STATUSES,
+  RECONCILABLE_SUBSCRIPTION_STATUSES,
+  SUBSCRIPTION_CHECKOUT_ORDER_TYPE,
+  TOPUP_CHECKOUT_ORDER_TYPE,
+  webhookIncidentOrFilter,
+  subscriptionBoundaryOrFilter,
+} from '@/lib/billing/billing-incidents.shared';
 import type { DbBillingOrder, DbBillingSubscription, DbBillingWebhookEvent, DbPricingPlanVersion } from '@/lib/types/database';
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
 const BUDGET_MS = 45_000;
-const MIN_AGE_MS = 10 * 60 * 1000;
-const CHECKOUT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const TOPUP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const STALE_SUBSCRIPTION_WEBHOOK_MS = 2 * 24 * 60 * 60 * 1000;
-const STALE_WEBHOOK_EVENT_MS = 15 * 60 * 1000;
 
 export interface ReconcileRazorpayBillingResult {
   checkouts: number;
@@ -94,9 +101,9 @@ async function reconcileSubscriptionCheckouts(
     .select('*')
     .eq('provider', 'razorpay')
     .eq('provider_mode', mode)
-    .eq('order_type', 'subscription_checkout')
+    .eq('order_type', SUBSCRIPTION_CHECKOUT_ORDER_TYPE)
     // Abandoned/superseded checkouts are included: their Razorpay subscription may still have been paid.
-    .in('status', ['created', 'abandoned', 'superseded'])
+    .in('status', STUCK_SUBSCRIPTION_CHECKOUT_STATUSES)
     .not('provider_checkout_session_id', 'is', null)
     .lte('created_at', new Date(now - MIN_AGE_MS).toISOString())
     .gte('created_at', new Date(now - CHECKOUT_MAX_AGE_MS).toISOString())
@@ -174,16 +181,13 @@ async function reconcileSubscriptions(
   mode: RazorpayMode,
   deadline: number
 ): Promise<number> {
-  const nowIso = new Date().toISOString();
-  const staleWebhookIso = new Date(Date.now() - STALE_SUBSCRIPTION_WEBHOOK_MS).toISOString();
-
   const result = await supabase
     .from('billing_subscriptions')
     .select('*')
     .eq('provider', 'razorpay')
     .eq('provider_mode', mode)
-    .in('status', ['authenticated', 'active', 'pending', 'halted'])
-    .or(`first_charge_confirmed_at.is.null,current_period_end.lt.${nowIso},last_webhook_at.lt.${staleWebhookIso}`)
+    .in('status', RECONCILABLE_SUBSCRIPTION_STATUSES)
+    .or(subscriptionBoundaryOrFilter(Date.now()))
     .order('updated_at', { ascending: true })
     .limit(100);
 
@@ -237,8 +241,8 @@ async function reconcileTopups(
     .select('*')
     .eq('provider', 'razorpay')
     .eq('provider_mode', mode)
-    .eq('order_type', 'topup_checkout')
-    .in('status', ['created', 'attempted', 'failed'])
+    .eq('order_type', TOPUP_CHECKOUT_ORDER_TYPE)
+    .in('status', STUCK_TOPUP_STATUSES)
     .gte('created_at', new Date(now - TOPUP_MAX_AGE_MS).toISOString())
     .lte('created_at', new Date(now - MIN_AGE_MS).toISOString())
     .order('created_at', { ascending: true })
@@ -269,7 +273,7 @@ async function reconcileTopups(
     .update({ status: 'abandoned', updated_at: new Date().toISOString() })
     .eq('provider', 'razorpay')
     .eq('provider_mode', mode)
-    .eq('order_type', 'topup_checkout')
+    .eq('order_type', TOPUP_CHECKOUT_ORDER_TYPE)
     .eq('status', 'created')
     .lt('created_at', new Date(now - TOPUP_MAX_AGE_MS).toISOString());
 
@@ -281,13 +285,11 @@ async function reconcileTopups(
 }
 
 async function reconcileWebhooks(supabase: AdminClient, deadline: number): Promise<number> {
-  const staleReceivedIso = new Date(Date.now() - STALE_WEBHOOK_EVENT_MS).toISOString();
-
   const result = await supabase
     .from('billing_webhook_events')
     .select('*')
     .eq('provider', 'razorpay')
-    .or(`and(status.eq.failed,attempt_count.lt.10),and(status.eq.received,received_at.lt.${staleReceivedIso})`)
+    .or(webhookIncidentOrFilter(Date.now()))
     .order('received_at', { ascending: true })
     .limit(50);
 
