@@ -70,8 +70,9 @@ function SectionShell({
 
       {section.status === 'unavailable' ? (
         <p className="rounded-xl border border-white/10 bg-neutral-900/60 p-4 text-sm text-neutral-500">
-          Unavailable on this environment — the table or column this section reads isn&apos;t present here yet. This is
-          expected on a database that hasn&apos;t had every migration applied; it is not an error.
+          {section.unavailableReason === 'provider_config'
+            ? 'Unavailable on this environment — Razorpay is not configured here, so there is no provider mode to scope this section to. Set the Razorpay keys to read it. This is not an error.'
+            : 'Unavailable on this environment — the table or column this section reads isn’t present here yet. This is expected on a database that hasn’t had every migration applied; it is not an error.'}
         </p>
       ) : section.totalCount === 0 ? (
         <p className="rounded-xl border border-white/10 bg-neutral-900/60 p-4 text-sm text-emerald-200/80">{healthyLabel}</p>

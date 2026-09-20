@@ -32,8 +32,17 @@ import {
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
+/**
+ * Why a section could not be read. The two causes need different words on the page: a support
+ * person told "the migration has not run here" when the real problem is an unset Razorpay key
+ * would go looking in the wrong place entirely.
+ */
+export type BillingIncidentUnavailableReason = 'schema' | 'provider_config';
+
 export interface BillingIncidentSection<TRow> {
   status: 'ok' | 'unavailable';
+  /** Set only when `status` is 'unavailable'. */
+  unavailableReason: BillingIncidentUnavailableReason | null;
   totalCount: number;
   rows: TRow[];
 }
@@ -116,11 +125,11 @@ export async function getBillingIncidentsDashboard(): Promise<BillingIncidentsDa
     loadFailedWebhooks(supabase, generatedAtMs),
     mode
       ? loadStuckSubscriptionCheckouts(supabase, mode, generatedAtMs)
-      : Promise.resolve(unavailableSection<StuckSubscriptionCheckoutRow>()),
+      : Promise.resolve(unavailableSection<StuckSubscriptionCheckoutRow>('provider_config')),
     mode
       ? loadSubscriptionsPastBoundary(supabase, mode, generatedAtMs)
-      : Promise.resolve(unavailableSection<SubscriptionPastBoundaryRow>()),
-    mode ? loadStuckTopups(supabase, mode, generatedAtMs) : Promise.resolve(unavailableSection<StuckTopupRow>()),
+      : Promise.resolve(unavailableSection<SubscriptionPastBoundaryRow>('provider_config')),
+    mode ? loadStuckTopups(supabase, mode, generatedAtMs) : Promise.resolve(unavailableSection<StuckTopupRow>('provider_config')),
   ]);
 
   return {
@@ -132,8 +141,10 @@ export async function getBillingIncidentsDashboard(): Promise<BillingIncidentsDa
   };
 }
 
-function unavailableSection<TRow>(): BillingIncidentSection<TRow> {
-  return { status: 'unavailable', totalCount: 0, rows: [] };
+function unavailableSection<TRow>(
+  reason: BillingIncidentUnavailableReason
+): BillingIncidentSection<TRow> {
+  return { status: 'unavailable', unavailableReason: reason, totalCount: 0, rows: [] };
 }
 
 async function loadFailedWebhooks(
@@ -151,7 +162,7 @@ async function loadFailedWebhooks(
     .order('received_at', { ascending: false })
     .limit(DASHBOARD_ROW_LIMIT);
 
-  if (isMissingBillingSchemaError(result.error)) return unavailableSection();
+  if (isMissingBillingSchemaError(result.error)) return unavailableSection('schema');
   throwIfQueryFailed(result.error, 'Failed to load failed-webhook incidents');
 
   const rows: FailedWebhookIncidentRow[] = (result.data ?? []).map((row: Record<string, unknown>) => ({
@@ -168,7 +179,7 @@ async function loadFailedWebhooks(
     relatedSubscriptionId: (row.related_subscription_id as string | null) ?? null,
   }));
 
-  return { status: 'ok', totalCount: result.count ?? rows.length, rows };
+  return { status: 'ok', unavailableReason: null, totalCount: result.count ?? rows.length, rows };
 }
 
 async function loadStuckSubscriptionCheckouts(
@@ -192,7 +203,7 @@ async function loadStuckSubscriptionCheckouts(
     .order('created_at', { ascending: false })
     .limit(DASHBOARD_ROW_LIMIT);
 
-  if (isMissingBillingSchemaError(result.error)) return unavailableSection();
+  if (isMissingBillingSchemaError(result.error)) return unavailableSection('schema');
   throwIfQueryFailed(result.error, 'Failed to load stuck subscription checkout incidents');
 
   const rows: StuckSubscriptionCheckoutRow[] = (result.data ?? []).map((row: Record<string, unknown>) => ({
@@ -206,7 +217,7 @@ async function loadStuckSubscriptionCheckouts(
     createdAt: row.created_at as string,
   }));
 
-  return { status: 'ok', totalCount: result.count ?? rows.length, rows };
+  return { status: 'ok', unavailableReason: null, totalCount: result.count ?? rows.length, rows };
 }
 
 async function loadSubscriptionsPastBoundary(
@@ -227,7 +238,7 @@ async function loadSubscriptionsPastBoundary(
     .order('updated_at', { ascending: false })
     .limit(DASHBOARD_ROW_LIMIT);
 
-  if (isMissingBillingSchemaError(result.error)) return unavailableSection();
+  if (isMissingBillingSchemaError(result.error)) return unavailableSection('schema');
   throwIfQueryFailed(result.error, 'Failed to load subscriptions past their boundary');
 
   const rows: SubscriptionPastBoundaryRow[] = (result.data ?? []).map((row: Record<string, unknown>) => ({
@@ -241,7 +252,7 @@ async function loadSubscriptionsPastBoundary(
     cancelAtPeriodEnd: Boolean(row.cancel_at_period_end),
   }));
 
-  return { status: 'ok', totalCount: result.count ?? rows.length, rows };
+  return { status: 'ok', unavailableReason: null, totalCount: result.count ?? rows.length, rows };
 }
 
 async function loadStuckTopups(
@@ -263,7 +274,7 @@ async function loadStuckTopups(
     .order('created_at', { ascending: false })
     .limit(DASHBOARD_ROW_LIMIT);
 
-  if (isMissingBillingSchemaError(result.error)) return unavailableSection();
+  if (isMissingBillingSchemaError(result.error)) return unavailableSection('schema');
   throwIfQueryFailed(result.error, 'Failed to load stuck top-up incidents');
 
   const rows: StuckTopupRow[] = (result.data ?? []).map((row: Record<string, unknown>) => ({
@@ -277,7 +288,7 @@ async function loadStuckTopups(
     createdAt: row.created_at as string,
   }));
 
-  return { status: 'ok', totalCount: result.count ?? rows.length, rows };
+  return { status: 'ok', unavailableReason: null, totalCount: result.count ?? rows.length, rows };
 }
 
 function throwIfQueryFailed(error: PostgrestError | null, context: string): void {
