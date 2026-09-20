@@ -12,7 +12,7 @@ be**, per the plan's own stop: C can move money out of the business and E can br
 
 | Unit | Commit | Note |
 |---|---|---|
-| A — migration 131 | `27a9fcd` | **not applied anywhere.** Nothing needs it yet; it only widens a CHECK for Unit C |
+| A — migration 131 | `27a9fcd` | **applied on dev 2026-09-20 06:14:37+00**, verified against the constraint itself (12 values), not only the ledger. **Frozen.** Not on prod |
 | B — billing panel | `3bf3de5` | seven sections on the admin user record |
 | D — quota inspection | `05cb6d3` + fix `56abc41` | "why did this user hit the limit", IST day shown |
 | F — incident dashboard | `c6f1725` + fix `89dbabf` | `/admin/pricing/billing-incidents` |
@@ -43,7 +43,15 @@ breakage during promotion.
    cancel-immediately semantics, and whether archiving a plan with live subscribers is a hard block or
    an informed confirmation. Nothing else in Phase 4 can proceed. D5 (alerts) is already resolved in
    practice — Unit F ships as a dashboard with no push, keeping the 2026-09-14 notifications deferral.
-2. **Apply migration 131 on dev** when convenient. No code fails without it.
+2. ~~Apply migration 131 on dev~~ — **done 2026-09-20.** Frozen; further audit vocabulary ships as 132.
+
+   **One dead value in it, deliberately left alone.** Decision 13 made "cancel immediately" mean
+   *stop the renewal, keep access* — the same action as cancel-at-cycle-end — so the
+   `subscription_cancelled_immediately` value 131 added now describes nothing. It stays, unused and
+   inert (a CHECK permitting an unwritten value is harmless; 131's own header says so). **Do not
+   reuse that name for the fraud-termination path** in decision 13 — that ships as 132 adding
+   `subscription_terminated`, because a misleading verb in an eight-year financial record is worse
+   than one extra migration. Unit C therefore ships exactly ONE cancel action.
 3. **The §6 money walk** — still the highest-value outstanding action, now doubly so: it is what would
    let anyone confirm the new panels render real rows correctly.
 
@@ -439,6 +447,50 @@ session at natural checkpoints.
     point is the **purchase**, for every purchase, never coin redemption. 18% and SAC 998439 are the seeded editable
     rule. Document issuing stays off until Phase 6. The privacy and account-deletion pages must disclose that
     published stories and author names remain.
+
+**Owner decisions for Phase 4 (2026-09-20)** — these unblock Units C and E.
+
+11. **Full refunds only.** One payment, all of it, or nothing. No partial amounts and no proration in
+    Phase 4. Rationale: the eligibility test (decision 6) is already binary, full-only cannot refund
+    more than was paid, and GST credit notes for partial reversals need the Phase 6 document engine.
+    Revisit partials when that exists.
+12. **Clawback confirms decision 6, with a cap added.** A refund claws back the *unspent* coins of
+    that purchase's own grant and refuses outright when more than ~20% of it has been used. The
+    schema already bounds this: `beat_grants.beats_remaining >= 0` makes a negative balance
+    impossible, so clawback can only ever reach zero — there is no "user owes us coins" state and
+    none is to be built. **New:** refunds are capped per account (see below), closing a loophole
+    decision 6 left open.
+    **Order is part of the decision:** claw back first, then call Razorpay. "Coins removed, refund
+    failed" is visible and fixable; "money refunded, coins still spendable" is a silent loss.
+13. **"Cancel immediately" keeps paid access to the period end** — it cancels the *renewal*, nothing
+    more. The user paid for the period and keeps it. A separate **terminate** path ends access at
+    once with no refund, and exists only for fraud and abuse. Rationale: early cutoff without a
+    refund is what turns a support ticket into a chargeback, which costs more than the refund.
+14. **Catalogue changes take an informed confirmation, not a hard block** — showing the live
+    subscriber count. A hard block would guard a failure the data model already prevents (see the
+    finding below) and would make sunsetting a plan impossible while anyone was still on it.
+
+**The repeat-refund loophole (found 2026-09-20, not previously named).** Nothing limits how often an
+account may be refunded. Buy a top-up → use 19% → refund → rebuy → use 19% → refund: each purchase
+resets both the 7-day window and the usage test, netting ~19% of a pack free every cycle. Decision 12
+therefore caps refunds per account. **This is sharpened by the coin spend order**
+(`040_fractional_action_costs.sql:256`): grants are consumed promotion → subscription → **top-up
+last**, and top-up coins never expire, so a top-up sits at ~100% unused indefinitely and passes the
+"<20% used" test almost forever. **The 7-day window is the only thing containing that** — it is
+load-bearing, not cosmetic, and must not be quietly relaxed without re-deciding 12.
+
+**Finding that reframes decision 14: archiving does NOT strip a live subscriber.** Both paths that
+decide entitlement resolve the subscriber's plan **by id with no status filter** — the snapshot
+loader (`lib/pricing/enforcement.ts:853` selects every version, archived included) and
+`admin_list_users`' lateral join. Razorpay bills against its own plan id, so renewals continue as
+well. The real gap in the pricing studio is narrower than "dangerous archival": the buttons fire
+instantly with no confirmation and no sense of blast radius.
+
+**Still owed before live money:** the public Refund / Cancellation Policy page
+(`lib/managed-pages/registry.ts:315`) is still headed "Starter Draft - Review Before Rollout".
+Decisions 11-14 must be written into it, or the published policy contradicts the code. Also note
+there is exactly one admin account (`ADMIN_USER_ID`, an env var — no roles), so **none of these
+actions has a maker-checker**; the kill switch and the confirmations are the only brakes.
 
 **Deliberate deviation from the pack:** the checkout kill switch blocks new checkouts only. Verify, webhook and reconcile still honour payments already started (see `phase-1-plan.md` decision 8).
 

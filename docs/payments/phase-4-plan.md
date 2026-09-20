@@ -1,13 +1,16 @@
 # Phase 4 — admin billing, support operations and incident tooling
 
-**Status (2026-09-20): the four unblocked units are built. C and E remain blocked on D1–D4.**
+**Status (2026-09-20): A, B, D, F built; migration 131 applied on dev. D1–D4 answered — C and E are unblocked.**
+**Owner decisions 11–14 are recorded in `audit-progress.md`** and are the authority: full refunds only;
+claw back unspent coins and refuse above ~20% used, with a per-account refund cap; "cancel immediately"
+keeps paid access to the period end; catalogue changes take an informed confirmation.
 Source of scope: `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/06_PHASE_4_ADMIN_SUPPORT_OPERATIONS.md`.
 Written 2026-09-19, after Phase 3 went code-complete and the watch quota went live on dev.
 Units A, B, D and F executed 2026-09-20 in the order §10 prescribes.
 
 | Unit | Commit | State |
 |---|---|---|
-| A — migration 131, widened audit CHECK | `27a9fcd` | done. **Not applied on any environment** — the owner applies by hand |
+| A — migration 131, widened audit CHECK | `27a9fcd` | done. **Applied on dev 2026-09-20, frozen.** Not on prod |
 | B — read-only billing panel | `3bf3de5` | done, diff-reviewed |
 | D — quota inspection | `05cb6d3` + review fix `56abc41` | done, diff-reviewed |
 | F — incident dashboard | `c6f1725` + review fix `89dbabf` | done, diff-reviewed |
