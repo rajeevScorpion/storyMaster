@@ -755,8 +755,10 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
 **Billing and cost**
 - **Payments are not safe for real money yet.** Work is in progress on branch `payments`; the living handoff is
   `docs/payments/audit-progress.md` (audit, Phase 0 discovery, phase status, owner decisions). Nothing is merged
-  to `dev` or `main`. As of 2026-09-20: Phases 1-3 are code-complete and Phase 4's read-only half is built;
-  **migrations 124-130 are applied on dev and none on prod**, and **131 is written and applied nowhere**. The
+  to `dev` or `main`. As of 2026-09-20: Phases 1-4 are code-complete;
+  **migrations 124-131 are applied on dev and none on prod**, and **132 is written and applied nowhere**.
+  Phase 4 shipped the first code that can move money out of the business — it is triple-locked: its kill
+  switch `billing_admin_actions_enabled` is off, migration 132 is unapplied, and it has no browser UI. The
   payments migrations are tracked in that handoff rather than in the table above, which stops at 124 on purpose
   while the branch is unmerged — `schema_migration_ledger` is the authority for either.
 - **No payment has ever flowed through the Phase 2 ledger.** `billing_payments` is empty on dev, along with

@@ -3,82 +3,94 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-20 — Phase 4's unblocked half is built; C and E wait on D1-D4)
+## Next session starts here (updated 2026-09-20 — Phase 4 is code-complete; two things block it closing)
 
-**Phase 4 units A, B, D and F are built, diff-reviewed and committed on `payments`.** They are the
-read-only half: the admin billing panel, quota inspection, the incident dashboard, and the migration
-that widens the audit CHECK for Unit C's future actions. **Units C and E are not started and must not
-be**, per the plan's own stop: C can move money out of the business and E can break a live subscriber.
+**All six Phase 4 units are built, reviewed and committed on `payments`.** Nothing is merged to `dev`
+or `main`. Prod is untouched and stays that way until the whole feature is tested (owner, 2026-09-17).
 
-| Unit | Commit | Note |
-|---|---|---|
-| A — migration 131 | `27a9fcd` | **applied on dev 2026-09-20 06:14:37+00**, verified against the constraint itself (12 values), not only the ledger. **Frozen.** Not on prod |
-| B — billing panel | `3bf3de5` | seven sections on the admin user record |
-| D — quota inspection | `05cb6d3` + fix `56abc41` | "why did this user hit the limit", IST day shown |
-| F — incident dashboard | `c6f1725` + fix `89dbabf` | `/admin/pricing/billing-incidents` |
+| Unit | Commit | Reviewed | Note |
+|---|---|---|---|
+| A — migration 131 | `27a9fcd` | yes | **Applied on dev 2026-09-20, frozen.** Not on prod |
+| B — billing panel | `3bf3de5` | yes | seven read-only sections on the admin user record |
+| D — quota inspection | `05cb6d3` + fix `56abc41` | yes | "why did this user hit the limit", IST day shown |
+| F — incident dashboard | `c6f1725` + fix `89dbabf` | yes | `/admin/pricing/billing-incidents` |
+| E — catalogue guardrails | `6a5355b` | yes | informed confirmations carrying a live subscriber count |
+| C — refund/cancel/re-sync | `28b4ef4` | yes | **migration 132 applied NOWHERE. UI not built.** See below |
 
-Gates run on the final tree, not taken from the agents: tsc clean, lint clean, **1,847 tests / 158
-files**, `build:verify` compiled with both new routes.
+**Gates, run directly against `28b4ef4` (not taken from any agent report):** `npx tsc --noEmit` clean,
+`npm run lint` clean with zero warnings, **1,887 tests across 160 files**, `npm run build:verify`
+compiled successfully.
 
-**Two defects found by reading the diffs, both the same class** — a support surface stating a false
-*reason* for having no data, which every gate passes happily. Unit F blamed a missing migration when
-the real cause was an unconfigured Razorpay; Unit D's strict resolver took the entire admin user page
-down (moderation controls included) instead of degrading its own section. Both fixed. This keeps the
-project's running score intact: every agentic phase here has had defects the suite passed over.
+### The two things that block Phase 4 closing
 
-**The honest limit on all of it:** nothing has been seen working against real data. `billing_payments`,
-`billing_refunds`, `billing_documents`, `billing_profiles` and `user_daily_watch_slots` are all still
-**0 rows on dev**, and every Phase 4 surface is behind `verifyAdmin`, which the signed-out e2e smoke
-cannot reach. The money walk below is what closes that, and it is owner-only.
+1. **Migration 132 is not applied on any environment.** Until it is, the refund action refuses rather
+   than refunding money it cannot claw back — deliberate, and the correct direction. Apply on dev
+   first, by hand, as always.
+2. **Unit C has no UI.** `app/actions/admin-billing-actions.ts` exposes five server actions, but
+   nothing in `AdminUserDetail.tsx` calls them: the `ConfirmDialog`s and the
+   `manual:${crypto.randomUUID()}` wiring were deliberately dropped when the session hit its window.
+   So **no admin can trigger a refund from a browser today** — which, with the kill switch off and 132
+   unapplied, means the money path is triple-locked. Building that UI is the next unit of work, and it
+   is small: the server side and its confirmations are fully specified.
 
-**Production check that was worth doing:** prod's ledger holds **nothing >= 124**, and a direct probe
-confirms `billing_payments` is 42P01 and `billing_subscriptions.provider_mode` is 42703 — both in the
-classifier the new panels degrade on. So on `main` today every billing section, the quota section and
-three of four incident sections would render "unavailable" **by design**. Do not mistake that for
-breakage during promotion.
+### Unit C, in the detail a fresh session needs
 
-### In flight as of 2026-09-20 (if this session died, read this first)
+- **Kill switch `billing_admin_actions_enabled`** (`lib/admin/operational-flags.shared.ts`),
+  `defaultEnabled: false`, **deliberately not enabled anywhere.** Every mutating action checks it
+  server-side after `verifyAdmin()`.
+- **Ordering, which is the whole design** (decision 12): audit row written with
+  `outcome: 'attempting'` **before** any mutation → clawback RPC → Razorpay → on provider failure, a
+  compensating restore → audit patched with the final outcome. On success, `recordRefund` is
+  **best-effort in a try/catch**: the `refund.processed` webhook stays the record, and a failed local
+  write is never reported as a failed refund.
+- **Clawback and restore use SEPARATE request keys** (`:clawback` / `:compensate`). This matters:
+  migration 132 audits both directions under `coins_clawed_back` (131's vocabulary is frozen and has
+  no "restored" verb; `metadata_json.direction` carries the distinction), so a shared key would make
+  the restore replay as a no-op and strand the user's coins. Checked, and correct as built.
+- **Migration 132 uses advisory-lock salt 85.** 83 (coin grants, target-user lock) and 84 (cohorts)
+  are taken — verified in 083's function bodies. **Record the next salt here when one is used.**
+- **The per-account refund cap** reads feature flag `billing_refund_cap_per_account`, falling back to
+  `DEFAULT_REFUND_CAP_PER_ACCOUNT = 2`. A misconfigured flag cannot silently disable the cap. There is
+  **no admin UI** for it — edit the flag's `value` column, as several other numeric settings already do.
+- **The riskiest unverified thing:** `resolvePurchaseGrantSourceRef` reconstructs
+  `beat_grants.source_ref_id` in reverse from a payment row (top-up: `billing_order_id`; subscription:
+  `${providerSubscriptionId}:${cycleStartUnix}`). It was verified by reading `razorpay-sync.ts`, never
+  round-tripped against a real subscription payment. If it is wrong, the refund fails to find the
+  grant and **refuses** — it fails closed, but it would refuse a legitimate refund. The money walk is
+  what would catch this.
 
-**Units C and E were dispatched after decisions 11-14 landed.** If they are not in `git log`, they
-did not finish — re-dispatch from `phase-4-plan.md` §9 plus decisions 11-14. If they are, **their
-diffs had not yet been reviewed when this was written**, and every agentic unit on this project so
-far has contained at least one defect the full suite passed over. Review before trusting.
+### Do next, in order
 
-What each was told, so the work is reproducible:
+1. **Apply migration 132 on dev** by hand.
+2. **Build Unit C's UI** — `ConfirmDialog` with `tone="danger"` per action in `AdminUserDetail.tsx`,
+   showing the amount, what gets clawed back, and what the user keeps.
+3. **The §6 money walk** on the preview. This is now the highest-value action in the whole project:
+   `billing_payments`, `billing_refunds`, `billing_documents`, `billing_profiles` and
+   `user_daily_watch_slots` are **all still 0 rows on dev**, so every Phase 4 surface is correct by
+   construction and unproven against real rows. It is owner-only.
+4. **Rewrite the public Refund / Cancellation Policy** (`lib/managed-pages/registry.ts:315`). It still
+   opens "Starter Draft - Review Before Rollout" and tells readers refunds are ad-hoc manual review;
+   decisions 11-14 now say something far more specific. **Shipping live money against a policy page
+   that contradicts the code is the kind of thing that costs more than it saves.** Copy decision, not
+   code.
 
-- **Unit C** — one full-refund action (D11) refusing above ~20% used and over a per-account refund
-  cap (D12); clawback **before** the provider call with an explicit compensating restore if Razorpay
-  then fails; **one** cancel action meaning cancel-the-renewal (D13); re-sync/reprocess reaching the
-  existing recovery implementations rather than new ones; audit row written **before** the provider
-  call with the outcome patched in after; the webhook stays the record and success is never reported
-  on the strength of the local write. Needs **migration 132** — a clawback function on
-  **advisory-lock salt 85** (83 and 84 are taken, verified). Ships behind a new kill switch,
-  `defaultEnabled: false`, **deliberately not enabled**.
-- **Unit E** — informed confirmation carrying the live subscriber count (D14), including disclosing
-  the version `publishPricingPlanVersion` silently archives as a side effect. Not a hard block.
+### What this phase cost, and the lesson worth keeping
 
-**Migration 132 will need applying by hand on dev** once Unit C lands. Until then Unit C's refund
-action refuses rather than refunding money it cannot claw back — that refusal is deliberate.
+**Three defects were found by reading diffs; none would ever have been caught by a gate.** All three
+were the same shape — *a surface telling a support person something untrue about why it had no data*:
+Unit F blamed a missing migration for an unconfigured Razorpay; Unit D's strict resolver blanked the
+entire admin user page instead of degrading its own section; and Unit E's confirmation copy made an
+access-safety claim that had to be verified against two separate query paths before it could stand.
+That copy turned out to be true — but only because it was checked. **Keep reviewing diffs, not
+reports.** One agent also cited a commit hash that was superseded by its own amend.
 
-### Do next
+### Production reality check, verified 2026-09-20
 
-1. **Answer Phase 4's D1-D4** (`phase-4-plan.md` §2): refund amount policy, coin clawback on refund,
-   cancel-immediately semantics, and whether archiving a plan with live subscribers is a hard block or
-   an informed confirmation. Nothing else in Phase 4 can proceed. D5 (alerts) is already resolved in
-   practice — Unit F ships as a dashboard with no push, keeping the 2026-09-14 notifications deferral.
-2. ~~Apply migration 131 on dev~~ — **done 2026-09-20.** Frozen; further audit vocabulary ships as 132.
-
-   **One dead value in it, deliberately left alone.** Decision 13 made "cancel immediately" mean
-   *stop the renewal, keep access* — the same action as cancel-at-cycle-end — so the
-   `subscription_cancelled_immediately` value 131 added now describes nothing. It stays, unused and
-   inert (a CHECK permitting an unwritten value is harmless; 131's own header says so). **Do not
-   reuse that name for the fraud-termination path** in decision 13 — that ships as 132 adding
-   `subscription_terminated`, because a misleading verb in an eight-year financial record is worse
-   than one extra migration. Unit C therefore ships exactly ONE cancel action.
-3. **The §6 money walk** — still the highest-value outstanding action, now doubly so: it is what would
-   let anyone confirm the new panels render real rows correctly.
-
----
+Prod's ledger holds **nothing >= 124**. Direct probes: `billing_payments` → **42P01** (table absent),
+`billing_subscriptions.provider_mode` → **42703** (column absent) — both in the classifier every new
+panel degrades on. So on `main` today, **every** billing section, the quota section and three of four
+incident sections would render "unavailable" **by design**. Do not read that as breakage during
+promotion.
 
 ## Previous entry (2026-09-19 — Phase 3 done; Phase 4 planned, awaiting 5 decisions)
 

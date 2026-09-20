@@ -1,6 +1,8 @@
 # Phase 4 — admin billing, support operations and incident tooling
 
-**Status (2026-09-20): A, B, D, F built; migration 131 applied on dev. D1–D4 answered — C and E are unblocked.**
+**Status (2026-09-20): CODE-COMPLETE. All six units built and reviewed.** Two things block it closing:
+**migration 132 is applied nowhere, and Unit C has no UI** — so no admin can trigger a refund from a
+browser today. Full detail and the next steps live in `audit-progress.md`, which is the living handoff.
 **Owner decisions 11–14 are recorded in `audit-progress.md`** and are the authority: full refunds only;
 claw back unspent coins and refuse above ~20% used, with a per-account refund cap; "cancel immediately"
 keeps paid access to the period end; catalogue changes take an informed confirmation.
@@ -14,8 +16,8 @@ Units A, B, D and F executed 2026-09-20 in the order §10 prescribes.
 | B — read-only billing panel | `3bf3de5` | done, diff-reviewed |
 | D — quota inspection | `05cb6d3` + review fix `56abc41` | done, diff-reviewed |
 | F — incident dashboard | `c6f1725` + review fix `89dbabf` | done, diff-reviewed |
-| C — safe admin actions | — | **not started; blocked on D1–D3** |
-| E — catalogue guardrails | — | **not started; blocked on D4** |
+| C — safe admin actions | `28b4ef4` | done, diff-reviewed. **Migration 132 unapplied; UI not built** |
+| E — catalogue guardrails | `6a5355b` | done, diff-reviewed |
 
 **Two defects were found by reading the diffs, both the same class — a surface telling a support
 person something untrue about why it had no data:**
