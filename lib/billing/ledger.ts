@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { redactRazorpayPayload } from '@/lib/billing/razorpay-redact.shared';
+import { isMissingBillingSchemaError } from '@/lib/billing/schema-availability.shared';
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import type { TaxBreakdown } from '@/lib/billing/tax.shared';
 import type {
@@ -32,19 +33,11 @@ function isUniqueViolation(error: { code?: string } | null | undefined): boolean
 
 /** One latch for the whole migration-125 group (billing_payments, billing_refunds,
  * billing_documents, billing_document_sequences, billing_next_document_number): every query in
- * this module touches only those, so any of these codes from here unambiguously means 125 is not
- * (fully) applied. 42883/PGRST202 cover the RPC function itself being absent. */
+ * this module touches only those, so any of the shared classifier's codes from here unambiguously
+ * means 125 is not (fully) applied. Delegates to schema-availability.shared.ts, which carries the
+ * code list itself -- see that file for why it was extracted out of here. */
 function isMissingLedgerSchemaError(error: { code?: string; message?: string } | null | undefined): boolean {
-  if (!error) return false;
-  return (
-    error.code === '42P01' ||
-    error.code === 'PGRST205' ||
-    error.code === '42703' ||
-    error.code === 'PGRST200' ||
-    error.code === 'PGRST204' ||
-    error.code === '42883' ||
-    error.code === 'PGRST202'
-  );
+  return isMissingBillingSchemaError(error);
 }
 
 let ledgerSchemaUnavailable = false;

@@ -7,19 +7,36 @@ import {
   normalizeEntitlementPlanKey,
   resolveEffectiveEntitlementTier,
 } from '@/lib/pricing/entitlement-tier.shared';
+import { isMissingBillingSchemaError } from '@/lib/billing/schema-availability.shared';
 import type { PlanKey } from '@/lib/types/pricing';
 import {
   beatsToCoins,
+  deriveBillingPlanKeyCheck,
+  mapAdminBillingDocument,
+  mapAdminBillingOrder,
+  mapAdminBillingPayment,
+  mapAdminBillingProfile,
+  mapAdminBillingRefund,
+  mapAdminBillingSubscription,
+  mapAdminBillingWebhookEvent,
   normalizeAdminUserListInput,
   normalizeCoinGrantInput,
   normalizeEntitlementTierInput,
   normalizePromotionalCohortInput,
   type AdminAccountStatus,
+  type AdminBillingDocument,
+  type AdminBillingOrder,
+  type AdminBillingPayment,
+  type AdminBillingRefund,
+  type AdminBillingSectionResult,
+  type AdminBillingSectionStatus,
+  type AdminBillingWebhookEvent,
   type AdminPromotionalCohortCandidate,
   type AdminPromotionalCohortInput,
   type AdminPromotionalCohortPreview,
   type AdminPromotionalCohortRun,
   type AdminUserAuditItem,
+  type AdminUserBillingData,
   type AdminUserDetailData,
   type AdminUserManagementSummary,
   type AdminUserRecentStory,
@@ -27,6 +44,13 @@ import {
   type AdminUsersPageData,
   type AdminUserWalletActivityItem,
   type AdminUserListInput,
+  type RawBillingDocumentRow,
+  type RawBillingOrderRow,
+  type RawBillingPaymentRow,
+  type RawBillingProfileRow,
+  type RawBillingRefundRow,
+  type RawBillingSubscriptionRow,
+  type RawBillingWebhookEventRow,
 } from '@/lib/admin/user-management.shared';
 
 interface AdminListUsersRpcRow {
@@ -468,7 +492,20 @@ async function loadEntitlementOverrides(userIds: string[]): Promise<Map<string, 
 
 async function getAdminUserDetailInternal(userId: string): Promise<AdminUserDetailData | null> {
   const admin = createAdminClient();
-  const [overviewResult, auditResult, grantsResult, usageResult, storiesResult] = await Promise.all([
+  const [
+    overviewResult,
+    auditResult,
+    grantsResult,
+    usageResult,
+    storiesResult,
+    subscriptionsResult,
+    ordersResult,
+    paymentsResult,
+    refundsResult,
+    documentsResult,
+    profileResult,
+    webhookEventsResult,
+  ] = await Promise.all([
     admin.rpc('admin_list_users', {
       p_search: null,
       p_status: 'all',
@@ -500,6 +537,59 @@ async function getAdminUserDetailInternal(userId: string): Promise<AdminUserDeta
       .eq('user_id', userId)
       .order('updated_at', { ascending: false })
       .limit(12),
+    // --- Payments Phase 4, Unit B: the read-only billing panel. Every read below is wrapped with
+    // mapBillingListSection/loadBillingListRows/mapBillingProfileSection rather than
+    // throwAdminUserQueryError, because several of the columns selected here come from
+    // migrations 124/125 (subject_ref,
+    // provider_mode, first_charge_confirmed_at, the webhook incident columns), applied on dev and
+    // NOT on production -- a missing-schema error must degrade that one section, never throw and
+    // blank the whole page. See lib/billing/schema-availability.shared.ts.
+    admin
+      .from('billing_subscriptions')
+      .select('id, plan_version_id, provider, provider_subscription_id, provider_customer_id, status, billing_interval, currency_code, current_period_start, current_period_end, cancel_at_period_end, grace_period_ends_at, last_webhook_at, provider_mode, first_charge_confirmed_at, created_at, updated_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(12),
+    admin
+      .from('billing_orders')
+      .select('id, provider, order_type, provider_order_id, provider_payment_id, currency_code, amount_minor, status, plan_version_id, topup_pack_id, provider_mode, created_at, updated_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(25),
+    admin
+      .from('billing_payments')
+      .select('id, provider, provider_mode, provider_payment_id, provider_order_id, provider_subscription_id, provider_invoice_id, billing_order_id, billing_subscription_id, plan_version_id, topup_pack_id, kind, status, currency_code, net_minor, tax_minor, gross_minor, method_category, provider_fee_minor, provider_tax_minor, cycle_start, cycle_end, captured_at, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(50),
+    // billing_refunds has no user_id column -- subject_ref is set from the matched payment's own
+    // subject_ref whenever a refund/dispute is recorded (lib/billing/razorpay-webhook.ts), which is
+    // the user's id while the account is live, so this filters correctly for a live account.
+    admin
+      .from('billing_refunds')
+      .select('id, payment_id, provider, provider_mode, provider_refund_id, provider_payment_id, amount_minor, net_minor, tax_minor, currency_code, status, reason, initiated_by, processed_at, created_at')
+      .eq('subject_ref', userId)
+      .order('created_at', { ascending: false })
+      .limit(25),
+    // billing_documents likewise has no user_id column; empty on dev for every account until
+    // billing_document_issuing_enabled turns on in Phase 6 (docs/payments/phase-4-plan.md §0).
+    admin
+      .from('billing_documents')
+      .select('id, document_type, document_number, financial_year, issued_at, payment_id, refund_id, currency_code, net_minor, tax_minor, gross_minor, status, void_reason, storage_ref, created_at')
+      .eq('subject_ref', userId)
+      .order('created_at', { ascending: false })
+      .limit(25),
+    admin
+      .from('billing_profiles')
+      .select('id, legal_name, billing_email, phone, company_name, gstin, state_code, country_code, address_line_1, address_line_2, city, postal_code, created_at, updated_at')
+      .eq('user_id', userId)
+      .maybeSingle(),
+    admin
+      .from('billing_webhook_events')
+      .select('id, provider, event_type, provider_event_id, status, related_subscription_id, received_at, processed_at, error_message, attempt_count, last_attempt_at, outcome')
+      .eq('related_user_id', userId)
+      .order('received_at', { ascending: false })
+      .limit(25),
   ]);
 
   throwAdminUserQueryError(overviewResult.error, 'load user overview');
@@ -512,16 +602,171 @@ async function getAdminUserDetailInternal(userId: string): Promise<AdminUserDeta
   if (!overview) return null;
 
   const overrides = await loadEntitlementOverrides([userId]);
+  const user = mapAdminUserRow(overview, overrides.get(userId) ?? null);
+
+  const subscriptionsSection = loadBillingListRows<RawBillingSubscriptionRow>(
+    subscriptionsResult.data,
+    subscriptionsResult.error,
+    'load billing subscriptions'
+  );
+  // Plan-key resolution is enrichment, not core data: it never fails the subscriptions section, and
+  // it only runs once we know which plan_version_ids are actually referenced.
+  const planKeyByVersionId = subscriptionsSection.status === 'ok'
+    ? await loadBillingSubscriptionPlanKeys(
+      admin,
+      Array.from(new Set(
+        subscriptionsSection.items
+          .map((row) => row.plan_version_id)
+          .filter((id): id is string => Boolean(id))
+      ))
+    )
+    : new Map<string, string>();
+  const mappedSubscriptions = subscriptionsSection.items.map(
+    (row) => mapAdminBillingSubscription(row, planKeyByVersionId)
+  );
+
+  const billing: AdminUserBillingData = {
+    subscriptions: {
+      status: subscriptionsSection.status,
+      items: mappedSubscriptions,
+    },
+    orders: mapBillingListSection<RawBillingOrderRow, AdminBillingOrder>(
+      ordersResult.data,
+      ordersResult.error,
+      'load billing orders',
+      mapAdminBillingOrder
+    ),
+    payments: mapBillingListSection<RawBillingPaymentRow, AdminBillingPayment>(
+      paymentsResult.data,
+      paymentsResult.error,
+      'load billing payments',
+      mapAdminBillingPayment
+    ),
+    refunds: mapBillingListSection<RawBillingRefundRow, AdminBillingRefund>(
+      refundsResult.data,
+      refundsResult.error,
+      'load billing refunds',
+      mapAdminBillingRefund
+    ),
+    documents: mapBillingListSection<RawBillingDocumentRow, AdminBillingDocument>(
+      documentsResult.data,
+      documentsResult.error,
+      'load billing documents',
+      mapAdminBillingDocument
+    ),
+    profile: mapBillingProfileSection(profileResult.data, profileResult.error),
+    webhookEvents: mapBillingListSection<RawBillingWebhookEventRow, AdminBillingWebhookEvent>(
+      webhookEventsResult.data,
+      webhookEventsResult.error,
+      'load billing webhook events',
+      mapAdminBillingWebhookEvent
+    ),
+    planKeyCheck: deriveBillingPlanKeyCheck(
+      user.currentPlanKey,
+      subscriptionsSection.status === 'ok',
+      mappedSubscriptions
+    ),
+  };
 
   return {
-    user: mapAdminUserRow(overview, overrides.get(userId) ?? null),
+    user,
     auditEvents: ((auditResult.data ?? []) as AuditRow[]).map(mapAuditItem),
     walletActivity: buildWalletActivity(
       (grantsResult.data ?? []) as GrantRow[],
       (usageResult.data ?? []) as UsageRow[]
     ),
     recentStories: ((storiesResult.data ?? []) as StoryRow[]).map(mapRecentStory),
+    billing,
   };
+}
+
+type BillingQueryError = { code?: string; message: string } | null;
+
+/**
+ * Shared degrade-or-throw shape for every billing list read: a structural missing-schema error
+ * (migration 124/125 not applied here) degrades that section to 'unavailable' rather than throwing;
+ * any other error is a genuine failure and still surfaces via throwAdminUserQueryError, same as
+ * every other read in this loader.
+ */
+function mapBillingListSection<Row, Item>(
+  data: unknown,
+  error: BillingQueryError,
+  action: string,
+  mapRow: (row: Row) => Item
+): AdminBillingSectionResult<Item> {
+  if (error) {
+    if (isMissingBillingSchemaError(error)) {
+      return { status: 'unavailable', items: [] };
+    }
+    throwAdminUserQueryError(error, action);
+  }
+  return { status: 'ok', items: ((data ?? []) as Row[]).map(mapRow) };
+}
+
+/** Same shape as mapBillingListSection, but for the raw rows the subscriptions section needs to
+ * keep around (plan_version_id) before plan-key resolution can run -- see getAdminUserDetailInternal. */
+function loadBillingListRows<Row>(
+  data: unknown,
+  error: BillingQueryError,
+  action: string
+): AdminBillingSectionResult<Row> {
+  if (error) {
+    if (isMissingBillingSchemaError(error)) {
+      return { status: 'unavailable', items: [] };
+    }
+    throwAdminUserQueryError(error, action);
+  }
+  return { status: 'ok', items: (data ?? []) as Row[] };
+}
+
+function mapBillingProfileSection(
+  data: unknown,
+  error: BillingQueryError
+): { status: AdminBillingSectionStatus; profile: ReturnType<typeof mapAdminBillingProfile> | null } {
+  if (error) {
+    if (isMissingBillingSchemaError(error)) {
+      return { status: 'unavailable', profile: null };
+    }
+    throwAdminUserQueryError(error, 'load billing profile');
+  }
+  return {
+    status: 'ok',
+    profile: data ? mapAdminBillingProfile(data as RawBillingProfileRow) : null,
+  };
+}
+
+/**
+ * Best-effort plan_version_id -> plan_key resolution for the subscriptions section, mirroring the
+ * join admin_list_users itself uses (083_admin_user_management.sql). Enrichment only: pricing_plan_
+ * versions/pricing_plans predate migrations 124/125 and are not expected to ever be missing, but a
+ * failure here still must not blank the subscriptions section, which already has its own data --
+ * unresolved plan keys just render as null (see AdminBillingSubscription.planKey).
+ */
+async function loadBillingSubscriptionPlanKeys(
+  admin: ReturnType<typeof createAdminClient>,
+  planVersionIds: string[]
+): Promise<Map<string, string>> {
+  const planKeyByVersionId = new Map<string, string>();
+  if (planVersionIds.length === 0) return planKeyByVersionId;
+
+  const { data, error } = await admin
+    .from('pricing_plan_versions')
+    .select('id, pricing_plans(plan_key)')
+    .in('id', planVersionIds);
+
+  if (error) {
+    console.error('Failed to resolve plan keys for billing subscriptions:', error.message);
+    return planKeyByVersionId;
+  }
+
+  for (const row of (data ?? []) as Array<{
+    id: string;
+    pricing_plans: { plan_key: string } | { plan_key: string }[] | null;
+  }>) {
+    const related = Array.isArray(row.pricing_plans) ? row.pricing_plans[0] : row.pricing_plans;
+    if (related?.plan_key) planKeyByVersionId.set(row.id, related.plan_key);
+  }
+  return planKeyByVersionId;
 }
 
 async function getAdminPromotionalCohortRunsInternal(): Promise<AdminPromotionalCohortRun[]> {

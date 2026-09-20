@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   Activity,
+  AlertTriangle,
   ArrowLeft,
   Ban,
   BookOpen,
@@ -11,22 +12,40 @@ import {
   CircleDollarSign,
   Clock3,
   Coins,
+  CreditCard,
   ExternalLink,
+  FileText,
   Film,
   Gift,
   GitBranch,
+  Landmark,
   Loader2,
+  Repeat,
   RotateCcw,
   ShieldAlert,
+  ShoppingCart,
+  Undo2,
   WalletCards,
+  Webhook,
 } from 'lucide-react';
 import {
   grantAdminUserCoins,
   updateAdminUserModeration,
 } from '@/app/actions/admin-users';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { formatCurrencyMinor } from '@/lib/billing/wallet-tax.shared';
 import {
+  describeBillingSectionState,
   type AdminAccountStatus,
+  type AdminBillingDocument,
+  type AdminBillingOrder,
+  type AdminBillingPayment,
+  type AdminBillingProfile,
+  type AdminBillingRefund,
+  type AdminBillingSectionKey,
+  type AdminBillingSectionStatus,
+  type AdminBillingSubscription,
+  type AdminBillingWebhookEvent,
   type AdminUserDetailData,
 } from '@/lib/admin/user-management.shared';
 import UserAvatar from './UserAvatar';
@@ -476,6 +495,150 @@ export default function AdminUserDetail({
         ) : <EmptyText>No stories or reels created yet.</EmptyText>}
       </TimelineCard>
 
+      <div>
+        <h2 className="text-lg font-serif text-neutral-100">Billing</h2>
+        <p className="mt-1 text-sm text-neutral-500">
+          Read-only. Every table below survives its migration not being applied on this environment
+          yet -- a section renders &ldquo;not available&rdquo; rather than breaking the page.
+        </p>
+      </div>
+
+      {data.billing.planKeyCheck.mismatched && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>
+            Plan key disagreement: the user directory reports{' '}
+            <span className="font-medium capitalize">{data.billing.planKeyCheck.rpcPlanKey}</span>, but this
+            account&apos;s own subscription records imply{' '}
+            <span className="font-medium capitalize">{data.billing.planKeyCheck.subscriptionPlanKey}</span>.
+            Worth investigating directly rather than assuming either side is right.
+          </p>
+        </div>
+      )}
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <BillingListSection<AdminBillingSubscription>
+          title="Subscription"
+          icon={Repeat}
+          sectionKey="subscriptions"
+          status={data.billing.subscriptions.status}
+          items={data.billing.subscriptions.items}
+          headerCells={['Status', 'Plan', 'Interval', 'Period end', 'Cancel at end', 'Provider']}
+          renderRow={(subscription) => (
+            <tr key={subscription.id} className="border-b border-white/5 last:border-0">
+              <td className="py-3 pr-4 capitalize text-neutral-200">{subscription.status}</td>
+              <td className="px-4 py-3 capitalize text-neutral-400">{subscription.planKey ?? '—'}</td>
+              <td className="px-4 py-3 capitalize text-neutral-500">{subscription.billingInterval ?? '—'}</td>
+              <td className="px-4 py-3 text-neutral-500">
+                {subscription.currentPeriodEnd ? formatDateTime(subscription.currentPeriodEnd) : '—'}
+              </td>
+              <td className="px-4 py-3 text-neutral-500">{subscription.cancelAtPeriodEnd ? 'Yes' : 'No'}</td>
+              <td className="px-4 py-3 text-neutral-500">
+                {subscription.provider}
+                {subscription.providerMode ? ` · ${subscription.providerMode}` : ''}
+              </td>
+            </tr>
+          )}
+        />
+
+        <BillingListSection<AdminBillingOrder>
+          title="Orders"
+          icon={ShoppingCart}
+          sectionKey="orders"
+          status={data.billing.orders.status}
+          items={data.billing.orders.items}
+          headerCells={['Type', 'Amount', 'Status', 'Provider', 'Created']}
+          renderRow={(order) => (
+            <tr key={order.id} className="border-b border-white/5 last:border-0">
+              <td className="py-3 pr-4 text-neutral-200">{order.orderType.replaceAll('_', ' ')}</td>
+              <td className="px-4 py-3 text-neutral-300">{formatCurrencyMinor(order.currencyCode, order.amountMinor)}</td>
+              <td className="px-4 py-3 capitalize text-neutral-500">{order.status}</td>
+              <td className="px-4 py-3 text-neutral-500">
+                {order.provider}
+                {order.providerMode ? ` · ${order.providerMode}` : ''}
+              </td>
+              <td className="px-4 py-3 text-neutral-500">{formatDate(order.createdAt)}</td>
+            </tr>
+          )}
+        />
+
+        <BillingListSection<AdminBillingPayment>
+          title="Payments"
+          icon={CreditCard}
+          sectionKey="payments"
+          status={data.billing.payments.status}
+          items={data.billing.payments.items}
+          headerCells={['Kind', 'Gross', 'Method', 'Status', 'Captured']}
+          renderRow={(payment) => (
+            <tr key={payment.id} className="border-b border-white/5 last:border-0">
+              <td className="py-3 pr-4 text-neutral-200">{payment.kind.replaceAll('_', ' ')}</td>
+              <td className="px-4 py-3 text-neutral-300">{formatCurrencyMinor(payment.currencyCode, payment.grossMinor)}</td>
+              <td className="px-4 py-3 capitalize text-neutral-500">{payment.methodCategory ?? 'unknown'}</td>
+              <td className="px-4 py-3 capitalize text-neutral-500">{payment.status}</td>
+              <td className="px-4 py-3 text-neutral-500">
+                {payment.capturedAt ? formatDate(payment.capturedAt) : '—'}
+              </td>
+            </tr>
+          )}
+        />
+
+        <BillingListSection<AdminBillingRefund>
+          title="Refunds & disputes"
+          icon={Undo2}
+          sectionKey="refunds"
+          status={data.billing.refunds.status}
+          items={data.billing.refunds.items}
+          headerCells={['Type', 'Amount', 'Status', 'Reason', 'Created']}
+          renderRow={(refund) => (
+            <tr key={refund.id} className="border-b border-white/5 last:border-0">
+              <td className="py-3 pr-4 text-neutral-200">{refund.isDispute ? 'Dispute' : 'Refund'}</td>
+              <td className="px-4 py-3 text-neutral-300">{formatCurrencyMinor(refund.currencyCode, refund.amountMinor)}</td>
+              <td className="px-4 py-3 capitalize text-neutral-500">{refund.status}</td>
+              <td className="max-w-[220px] truncate px-4 py-3 text-neutral-500">{refund.reason ?? '—'}</td>
+              <td className="px-4 py-3 text-neutral-500">{formatDate(refund.createdAt)}</td>
+            </tr>
+          )}
+        />
+
+        <BillingListSection<AdminBillingDocument>
+          title="Documents"
+          icon={FileText}
+          sectionKey="documents"
+          status={data.billing.documents.status}
+          items={data.billing.documents.items}
+          headerCells={['Number', 'Type', 'Amount', 'Status', 'Issued']}
+          renderRow={(doc) => (
+            <tr key={doc.id} className="border-b border-white/5 last:border-0">
+              <td className="py-3 pr-4 text-neutral-200">{doc.documentNumber}</td>
+              <td className="px-4 py-3 capitalize text-neutral-500">{doc.documentType.replaceAll('_', ' ')}</td>
+              <td className="px-4 py-3 text-neutral-300">{formatCurrencyMinor(doc.currencyCode, doc.grossMinor)}</td>
+              <td className="px-4 py-3 capitalize text-neutral-500">{doc.status}</td>
+              <td className="px-4 py-3 text-neutral-500">{formatDate(doc.issuedAt)}</td>
+            </tr>
+          )}
+        />
+
+        <BillingProfileCard status={data.billing.profile.status} profile={data.billing.profile.profile} />
+
+        <BillingListSection<AdminBillingWebhookEvent>
+          title="Webhook events"
+          icon={Webhook}
+          sectionKey="webhookEvents"
+          status={data.billing.webhookEvents.status}
+          items={data.billing.webhookEvents.items}
+          headerCells={['Event', 'Status', 'Outcome', 'Attempts', 'Received']}
+          renderRow={(event) => (
+            <tr key={event.id} className="border-b border-white/5 last:border-0">
+              <td className="max-w-[220px] truncate py-3 pr-4 text-neutral-200">{event.eventType}</td>
+              <td className="px-4 py-3 capitalize text-neutral-500">{event.status}</td>
+              <td className="px-4 py-3 capitalize text-neutral-500">{event.outcome ?? '—'}</td>
+              <td className="px-4 py-3 text-neutral-500">{event.attemptCount ?? '—'}</td>
+              <td className="px-4 py-3 text-neutral-500">{formatDateTime(event.receivedAt)}</td>
+            </tr>
+          )}
+        />
+      </section>
+
       <ConfirmDialog
         open={confirmModeration}
         title={moderationTarget?.label ?? 'Update account'}
@@ -606,6 +769,108 @@ function TimelineCard({
 
 function EmptyText({ children }: { children: React.ReactNode }) {
   return <p className="py-8 text-center text-sm text-neutral-600">{children}</p>;
+}
+
+function BillingSectionEmptyState({
+  state,
+}: {
+  state: ReturnType<typeof describeBillingSectionState>;
+}) {
+  if (state.kind === 'unavailable') {
+    return (
+      <EmptyText>
+        <span className="inline-flex items-center gap-1.5 text-amber-400/70">
+          <AlertTriangle className="h-3.5 w-3.5" />
+          {state.message}
+        </span>
+      </EmptyText>
+    );
+  }
+  return <EmptyText>{state.message}</EmptyText>;
+}
+
+function BillingListSection<T>({
+  title,
+  icon: Icon,
+  sectionKey,
+  status,
+  items,
+  headerCells,
+  renderRow,
+}: {
+  title: string;
+  icon: typeof WalletCards;
+  sectionKey: AdminBillingSectionKey;
+  status: AdminBillingSectionStatus;
+  items: T[];
+  headerCells: string[];
+  renderRow: (item: T) => React.ReactNode;
+}) {
+  const state = describeBillingSectionState(sectionKey, status, items.length);
+  return (
+    <TimelineCard title={title} icon={Icon}>
+      {state.kind === 'has_data' ? (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-sm">
+            <thead>
+              <tr className="border-b border-white/10 text-left text-xs uppercase tracking-[0.12em] text-neutral-600">
+                {headerCells.map((cell, index) => (
+                  <th key={cell} className={index === 0 ? 'py-3 pr-4 font-medium' : 'px-4 py-3 font-medium'}>
+                    {cell}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>{items.map(renderRow)}</tbody>
+          </table>
+        </div>
+      ) : (
+        <BillingSectionEmptyState state={state} />
+      )}
+    </TimelineCard>
+  );
+}
+
+function BillingProfileCard({
+  status,
+  profile,
+}: {
+  status: AdminBillingSectionStatus;
+  profile: AdminBillingProfile | null;
+}) {
+  const state = describeBillingSectionState('profile', status, profile ? 1 : 0);
+  const address = profile
+    ? [profile.addressLine1, profile.addressLine2, profile.city, profile.postalCode, profile.countryCode]
+      .filter(Boolean)
+      .join(', ')
+    : '';
+
+  return (
+    <TimelineCard title="Billing profile" icon={Landmark}>
+      {state.kind === 'has_data' && profile ? (
+        <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+          <ProfileField label="Legal name" value={profile.legalName} />
+          <ProfileField label="Company" value={profile.companyName} />
+          <ProfileField label="Billing email" value={profile.billingEmail} />
+          <ProfileField label="Phone" value={profile.phone} />
+          <ProfileField label="GSTIN" value={profile.gstin} />
+          <ProfileField label="State code" value={profile.stateCode} />
+          <ProfileField label="Address" value={address || null} />
+        </dl>
+      ) : (
+        <BillingSectionEmptyState state={state} />
+      )}
+    </TimelineCard>
+  );
+}
+
+function ProfileField({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div>
+      <dt className="text-xs uppercase tracking-[0.12em] text-neutral-600">{label}</dt>
+      <dd className="mt-1 text-sm text-neutral-300">{value ?? '—'}</dd>
+    </div>
+  );
 }
 
 function auditLabel(actionType: string): string {

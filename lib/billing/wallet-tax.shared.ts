@@ -53,8 +53,11 @@ export function previewGrossMinor(netMinor: number, ratePercent: number | null):
  * admin need not be. Rs 199 + 18% is Rs 234.82, and showing "Rs 235 total" over a Rs 234.82 debit is
  * the exact disagreement this module exists to prevent, so the paise are shown whenever there are
  * any.
+ *
+ * Exported (Payments Phase 4, Unit B) so the admin billing panel formats minor-unit amounts the same
+ * way the wallet does, rather than hand-rolling a second `/ 100` somewhere.
  */
-function formatCurrencyMinor(currencyCode: string, amountMinor: number): string {
+export function formatCurrencyMinor(currencyCode: string, amountMinor: number): string {
   const locale = currencyCode === 'INR' ? 'en-IN' : 'en-US';
   const hasFraction = amountMinor % 100 !== 0;
   return new Intl.NumberFormat(locale, {
