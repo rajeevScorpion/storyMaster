@@ -502,8 +502,9 @@ export default function AdminUserDetail({
           <EmptyText>
             <span className="inline-flex items-center gap-1.5 text-amber-400/70">
               <AlertTriangle className="h-3.5 w-3.5" />
-              Not available on this environment yet -- the watch-quota migration (129) has not been
-              applied here.
+              {data.watchQuota.unavailableReason === 'pricing_state'
+                ? 'Could not be read -- this account’s pricing state failed to load, so whether a limit applies is unknown. Treat this as a live problem, not a missing migration.'
+                : 'Not available on this environment yet -- the watch-quota migration (129) has not been applied here.'}
             </span>
           </EmptyText>
         ) : (

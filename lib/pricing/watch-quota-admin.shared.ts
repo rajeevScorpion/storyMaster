@@ -77,11 +77,21 @@ export interface AdminWatchQuotaDayCount {
 
 export type AdminWatchQuotaSectionStatus = 'ok' | 'unavailable';
 
+/**
+ * Why the section could not be read. The two causes send a support person to different places, so
+ * they must not share one message: 'schema' is migration 129 not applied on this environment,
+ * 'pricing_state' is the plan/controls read failing, which is a live problem rather than an
+ * un-migrated database.
+ */
+export type AdminWatchQuotaUnavailableReason = 'schema' | 'pricing_state';
+
 export interface AdminWatchQuotaView {
   /** 'unavailable' means `user_daily_watch_slots` (migration 129) could not be read on this
    * environment -- never a throw, per WORKING_AGREEMENTS' fail-closed rule. `why` and the two
    * ledger-derived lists are only meaningful when this is 'ok'. */
   status: AdminWatchQuotaSectionStatus;
+  /** Set only when `status` is 'unavailable'. */
+  unavailableReason: AdminWatchQuotaUnavailableReason | null;
   why: AdminWatchQuotaWhy | null;
   istDay: IstDayWindow;
   todaySlots: AdminWatchQuotaTodaySlot[];
@@ -114,12 +124,15 @@ export function buildRecentDayCounts(
   return days.map((localDay) => ({ localDay, count: counts.get(localDay) ?? 0 }));
 }
 
-/** The "unreadable" state (CRITICAL section, migration 129 absent): distinct from every "why", and
- * never a throw. Still reports the IST day window -- knowing which day *would* be reported is not
- * itself dependent on the ledger table being present. */
-export function buildUnavailableAdminWatchQuotaView(now: Date): AdminWatchQuotaView {
+/** The "unreadable" state: distinct from every "why", and never a throw. Still reports the IST day
+ * window -- knowing which day *would* be reported does not depend on either read succeeding. */
+export function buildUnavailableAdminWatchQuotaView(
+  now: Date,
+  reason: AdminWatchQuotaUnavailableReason
+): AdminWatchQuotaView {
   return {
     status: 'unavailable',
+    unavailableReason: reason,
     why: null,
     istDay: istDayWindow(now),
     todaySlots: [],
@@ -142,6 +155,7 @@ export function buildAdminWatchQuotaView(input: {
 }): AdminWatchQuotaView {
   return {
     status: 'ok',
+    unavailableReason: null,
     why: deriveAdminWatchQuotaWhy({
       isAdmin: input.isAdmin,
       unlimited: input.unlimited,

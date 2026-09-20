@@ -39,10 +39,22 @@ export async function inspectWatchQuotaForAdmin(userId: string): Promise<AdminWa
   let planKey = 'free';
   let dailyLimit = 0;
   if (!isAdmin) {
-    const policy = await resolveWatchQuotaPolicyForUserStrict(userId);
-    unlimited = policy.unlimited;
-    planKey = policy.planKey;
-    dailyLimit = policy.dailyQuota;
+    try {
+      const policy = await resolveWatchQuotaPolicyForUserStrict(userId);
+      unlimited = policy.unlimited;
+      planKey = policy.planKey;
+      dailyLimit = policy.dailyQuota;
+    } catch (error) {
+      // The strict resolver exists so an admin is never shown a false "unmetered" when the pricing
+      // state is unreadable. That distinction has to be RENDERED, though: letting this reject would
+      // take the whole Promise.all in getAdminUserDetailInternal down with it, blanking the
+      // moderation controls and the coin-grant form over one auxiliary diagnostic section.
+      console.error(
+        '[watch-quota-admin] pricing state unreadable, reporting the section unavailable:',
+        error instanceof Error ? error.message : error
+      );
+      return buildUnavailableAdminWatchQuotaView(now, 'pricing_state');
+    }
   }
 
   const localDay = istLocalDay(now);
@@ -74,7 +86,7 @@ export async function inspectWatchQuotaForAdmin(userId: string): Promise<AdminWa
   if (todayResult.error || historyResult.error) {
     // Both queries hit the same table, so either one failing this way means migration 129 has not
     // run here -- degrade the whole section rather than render half of it.
-    return buildUnavailableAdminWatchQuotaView(now);
+    return buildUnavailableAdminWatchQuotaView(now, 'schema');
   }
 
   const todayRows = (todayResult.data ?? []) as { storyline_id: string; created_at: string }[];

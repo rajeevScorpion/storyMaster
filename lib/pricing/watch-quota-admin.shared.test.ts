@@ -96,7 +96,7 @@ describe('buildRecentDayCounts', () => {
 
 describe('buildUnavailableAdminWatchQuotaView', () => {
   it('is a distinct state from every "why" -- unavailable, not a guessed reason', () => {
-    const view = buildUnavailableAdminWatchQuotaView(new Date('2026-09-20T10:00:00.000Z'));
+    const view = buildUnavailableAdminWatchQuotaView(new Date('2026-09-20T10:00:00.000Z'), 'schema');
     expect(view.status).toBe('unavailable');
     expect(view.why).toBeNull();
     expect(view.todaySlots).toEqual([]);
@@ -104,8 +104,17 @@ describe('buildUnavailableAdminWatchQuotaView', () => {
   });
 
   it('still reports which IST day would be in question, even though the ledger is unreadable', () => {
-    const view = buildUnavailableAdminWatchQuotaView(new Date('2026-09-20T10:00:00.000Z'));
+    const view = buildUnavailableAdminWatchQuotaView(new Date('2026-09-20T10:00:00.000Z'), 'schema');
     expect(view.istDay.localDay).toBe('2026-09-20');
+  });
+
+  // The two causes send a support person to different places: an un-migrated environment is
+  // expected and inert, an unreadable pricing state is a live problem. Conflating them is the
+  // defect this pins.
+  it('carries the reason it was unavailable, and keeps the two causes distinct', () => {
+    const now = new Date('2026-09-20T10:00:00.000Z');
+    expect(buildUnavailableAdminWatchQuotaView(now, 'schema').unavailableReason).toBe('schema');
+    expect(buildUnavailableAdminWatchQuotaView(now, 'pricing_state').unavailableReason).toBe('pricing_state');
   });
 });
 
