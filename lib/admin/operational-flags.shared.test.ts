@@ -70,11 +70,12 @@ describe('operational flag registry', () => {
   });
 
   it('matches the flag keys the code actually reads', () => {
-    // These strings are duplicated in app/actions/account.ts, lib/billing/razorpay-reconcile.ts and
-    // lib/billing/ledger.ts. A rename there with no rename here would leave the panel silently
-    // toggling a row nothing reads.
+    // These strings are duplicated in app/actions/account.ts, app/actions/admin-billing-actions.ts,
+    // lib/billing/razorpay-reconcile.ts and lib/billing/ledger.ts. A rename there with no rename here
+    // would leave the panel silently toggling a row nothing reads.
     expect(OPERATIONAL_FLAG_DEFINITIONS.map((flag) => flag.key).sort()).toEqual([
       'account_deletion_enabled',
+      'billing_admin_actions_enabled',
       'billing_document_issuing_enabled',
       'billing_reconcile_enabled',
     ]);

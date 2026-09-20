@@ -232,6 +232,34 @@ export async function captureRazorpayPayment(input: {
   });
 }
 
+export interface RazorpayRefund {
+  id: string;
+  payment_id: string;
+  amount: number;
+  currency: string;
+  status: string;
+  speed_processed?: string;
+  notes?: Record<string, string>;
+}
+
+/**
+ * Payments Phase 4, Unit C: full refunds only (decision 11). `amount` is deliberately never sent --
+ * Razorpay then refunds whatever it actually captured, rather than this app trusting its own
+ * possibly-stale billing_payments row. The response's own `amount` is what the caller should record,
+ * not anything computed beforehand.
+ */
+export async function refundRazorpayPayment(input: {
+  paymentId: string;
+  notes?: Record<string, string>;
+}): Promise<RazorpayRefund> {
+  return razorpayRequest<RazorpayRefund>(`/payments/${input.paymentId}/refund`, {
+    method: 'POST',
+    body: JSON.stringify({
+      ...(input.notes ? { notes: input.notes } : {}),
+    }),
+  });
+}
+
 export async function fetchRazorpayOrderPayments(orderId: string): Promise<{ items: RazorpayPayment[] }> {
   return razorpayRequest<{ items: RazorpayPayment[] }>(`/orders/${orderId}/payments`, {
     method: 'GET',

@@ -63,6 +63,19 @@ export const OPERATIONAL_FLAG_DEFINITIONS: readonly OperationalFlagDefinition[] 
     group: 'billing',
   },
   {
+    key: 'billing_admin_actions_enabled',
+    label: 'Admin refunds, cancellations and re-syncs',
+    description: 'Lets an admin refund a payment, cancel a subscription, or force a re-sync from the user record.',
+    enabledHelp:
+      'The user record’s billing actions become live: refunds call Razorpay and claw back unspent coins first, cancellation stops renewal at cycle end, and re-sync/reprocess re-run the same idempotent reconcile paths the daily cron uses. Every action is audited before the provider is ever called.',
+    disabledHelp:
+      'Every mutating billing action on the user record is refused server-side, even if called directly. Read-only panels (billing history, quota) are unaffected.',
+    beforeEnabling:
+      'This is the first switch in the app that can move money out of the business. Confirm RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET point at the intended mode (test vs live) before turning this on, and confirm migration 132 (the clawback function) is applied here -- refunds fail closed without it, but there is no reason to find that out by trying.',
+    defaultEnabled: false,
+    group: 'billing',
+  },
+  {
     key: 'billing_document_issuing_enabled',
     label: 'Issue tax documents',
     description: 'Allocates a gapless number and writes a receipt or tax invoice for each payment.',
