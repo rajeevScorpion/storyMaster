@@ -9,6 +9,7 @@ import {
   syncSubscriptionFromProvider,
 } from '@/lib/billing/razorpay-sync';
 import { recordDispute, recordRefund } from '@/lib/billing/ledger';
+import { endSubscriptionAfterFullRefund } from '@/lib/billing/subscription-refund-end';
 import { splitRefundProportionally } from '@/lib/billing/tax.shared';
 import { resolveDisputeOutcome } from '@/lib/billing/dispute-status.shared';
 import type { DbBillingOrder, DbBillingPayment, DbBillingSubscription, DbPricingPlanVersion } from '@/lib/types/database';
@@ -279,6 +280,36 @@ async function processRefundEvent(
       const refundedToDateMinor = Math.max(refundedTotalMinor ?? 0, refundAmountMinor);
       const nextPaymentStatus: BillingPaymentStatus = refundedToDateMinor >= payment.gross_minor ? 'refunded' : 'partially_refunded';
       await markLedgerPaymentStatus(supabase, payment.id, nextPaymentStatus);
+
+      // Decision 15 (docs/payments/audit-progress.md, 2026-09-23): a refund arriving straight from
+      // the Razorpay dashboard (not through the admin action) must end a current-cycle subscription's
+      // full refund too. Gated on kind before calling, purely to skip the helper's own query for
+      // every top-up refund -- the helper's own decision logic (subscription-refund-end.shared.ts)
+      // would return false for those anyway. Deliberately NOT gated by billing_admin_actions_enabled
+      // -- that switch gates admin-INITIATED actions; this refund already happened at Razorpay. Must
+      // fail closed: any error here is logged and folded into this event's own outcome, never thrown
+      // in a way that would mark the refund itself unrecorded (endSubscriptionAfterFullRefund never
+      // throws -- see its own contract).
+      if (payment.kind === 'subscription_first' || payment.kind === 'subscription_renewal') {
+        const subscriptionEndResult = await endSubscriptionAfterFullRefund({
+          supabase,
+          kind: payment.kind,
+          providerSubscriptionId: payment.provider_subscription_id,
+          refundAmountMinor,
+          paymentGrossMinor: payment.gross_minor,
+          cycleEnd: payment.cycle_end,
+        });
+        if (subscriptionEndResult.error) {
+          console.error('[razorpay-webhook] failed to end subscription after a full refund', {
+            paymentId: payment.id,
+            providerSubscriptionId: payment.provider_subscription_id,
+            message: subscriptionEndResult.error,
+          });
+          outcome = 'refund_recorded_subscription_end_failed';
+        } else if (subscriptionEndResult.ended) {
+          outcome = 'refund_recorded_subscription_ended';
+        }
+      }
     }
   }
 

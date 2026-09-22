@@ -19,9 +19,14 @@ vi.mock('@/lib/billing/ledger', () => ({
   recordDispute: vi.fn(),
 }));
 
+vi.mock('@/lib/billing/subscription-refund-end', () => ({
+  endSubscriptionAfterFullRefund: vi.fn(),
+}));
+
 import { fetchRazorpayPayment, getRazorpayMode } from '@/lib/billing/razorpay';
 import { settleTopupOrder, syncSubscriptionFromProvider } from '@/lib/billing/razorpay-sync';
 import { recordDispute, recordRefund } from '@/lib/billing/ledger';
+import { endSubscriptionAfterFullRefund } from '@/lib/billing/subscription-refund-end';
 import { processRazorpayWebhookEvent, type RazorpayWebhookPayload } from './razorpay-webhook';
 
 const fetchRazorpayPaymentMock = vi.mocked(fetchRazorpayPayment);
@@ -30,6 +35,13 @@ const settleTopupOrderMock = vi.mocked(settleTopupOrder);
 const syncSubscriptionFromProviderMock = vi.mocked(syncSubscriptionFromProvider);
 const recordRefundMock = vi.mocked(recordRefund);
 const recordDisputeMock = vi.mocked(recordDispute);
+const endSubscriptionAfterFullRefundMock = vi.mocked(endSubscriptionAfterFullRefund);
+
+// Decision 15's default: most refund tests below have nothing to do with subscriptions ending, so
+// every test gets "there was nothing to end" unless it overrides this with mockResolvedValueOnce.
+beforeEach(() => {
+  endSubscriptionAfterFullRefundMock.mockResolvedValue({ ended: false, error: null });
+});
 
 interface QueryResult {
   data?: unknown;
@@ -275,6 +287,9 @@ function fakeLedgerPayment(overrides: Record<string, unknown> = {}) {
     gross_minor: 1180,
     currency_code: 'INR',
     status: 'captured',
+    kind: 'topup',
+    provider_subscription_id: null,
+    cycle_end: null,
     ...overrides,
   };
 }
@@ -419,6 +434,153 @@ describe('processRazorpayWebhookEvent — refunds', () => {
       await processRazorpayWebhookEvent({ supabase, payload });
 
       expect(recordRefundMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 590 }));
+    });
+  });
+
+  // Decision 15 (docs/payments/audit-progress.md, 2026-09-23): the actual "should this end the
+  // subscription" decision (full vs. partial, current vs. past cycle, already-ended idempotency) is
+  // real logic tested directly in subscription-refund-end.shared.test.ts and
+  // subscription-refund-end.test.ts. Here endSubscriptionAfterFullRefund is mocked -- these tests only
+  // cover this module's OWN wiring: does it call the helper with the right facts, and does it fold
+  // the helper's answer into this event's outcome without ever throwing.
+  describe('decision 15 \u2014 ending a subscription after a dashboard-initiated full refund', () => {
+    function fakeSubscriptionPayment(overrides: Record<string, unknown> = {}) {
+      return fakeLedgerPayment({
+        kind: 'subscription_renewal',
+        provider_subscription_id: 'sub_1',
+        cycle_end: '2030-01-01T00:00:00.000Z',
+        ...overrides,
+      });
+    }
+
+    it('calls the helper with this payment\'s own facts and folds a true "ended" into the outcome', async () => {
+      const { supabase, enqueue } = createFakeSupabase();
+      const payment = fakeSubscriptionPayment();
+      enqueue('billing_payments', 'select', { data: payment, error: null });
+      enqueue('billing_orders', 'select', { data: null, error: null });
+      enqueue('billing_payments', 'update', { data: null, error: null });
+      fetchRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'pay_1', order_id: null, status: 'captured', amount: 1180, currency: 'INR',
+        amount_refunded: 1180, refund_status: 'full', invoice_id: null, captured: true,
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-1' });
+      endSubscriptionAfterFullRefundMock.mockResolvedValueOnce({ ended: true, error: null });
+
+      const payload: RazorpayWebhookPayload = {
+        event: 'refund.processed',
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180 } } },
+      };
+      const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+      expect(endSubscriptionAfterFullRefundMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: 'subscription_renewal',
+          providerSubscriptionId: 'sub_1',
+          refundAmountMinor: 1180,
+          paymentGrossMinor: 1180,
+          cycleEnd: '2030-01-01T00:00:00.000Z',
+        })
+      );
+      expect(result.outcome).toBe('refund_recorded_subscription_ended');
+    });
+
+    it('a refund the helper decides not to act on (e.g. partial, or a past cycle) leaves the outcome unchanged', async () => {
+      const { supabase, enqueue } = createFakeSupabase();
+      const payment = fakeSubscriptionPayment();
+      enqueue('billing_payments', 'select', { data: payment, error: null });
+      enqueue('billing_orders', 'select', { data: null, error: null });
+      enqueue('billing_payments', 'update', { data: null, error: null });
+      fetchRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'pay_1', order_id: null, status: 'captured', amount: 1180, currency: 'INR',
+        amount_refunded: 590, refund_status: 'partial', invoice_id: null, captured: true,
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-1' });
+      endSubscriptionAfterFullRefundMock.mockResolvedValueOnce({ ended: false, error: null });
+
+      const payload: RazorpayWebhookPayload = {
+        event: 'refund.processed',
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 590 } } },
+      };
+      const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+      expect(endSubscriptionAfterFullRefundMock).toHaveBeenCalled();
+      expect(result.outcome).toBe('refund_recorded');
+    });
+
+    it('a redelivered (replayed) event is a no-op the second time -- no double "ended", no error', async () => {
+      const payment = fakeSubscriptionPayment();
+      const payload: RazorpayWebhookPayload = {
+        event: 'refund.processed',
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180 } } },
+      };
+      fetchRazorpayPaymentMock.mockResolvedValue({
+        id: 'pay_1', order_id: null, status: 'captured', amount: 1180, currency: 'INR',
+        amount_refunded: 1180, refund_status: 'full', invoice_id: null, captured: true,
+      });
+      recordRefundMock.mockResolvedValue({ state: 'inserted', id: 'refund-1' });
+
+      // First delivery: the subscription is live and gets ended.
+      const first = createFakeSupabase();
+      first.enqueue('billing_payments', 'select', { data: payment, error: null });
+      first.enqueue('billing_orders', 'select', { data: null, error: null });
+      first.enqueue('billing_payments', 'update', { data: null, error: null });
+      endSubscriptionAfterFullRefundMock.mockResolvedValueOnce({ ended: true, error: null });
+      const firstResult = await processRazorpayWebhookEvent({ supabase: first.supabase, payload });
+      expect(firstResult.outcome).toBe('refund_recorded_subscription_ended');
+
+      // Redelivery: the real helper would now find the local row already cancelled and no-op --
+      // simulated here by its mocked return, since the helper's own idempotency is tested elsewhere.
+      const second = createFakeSupabase();
+      second.enqueue('billing_payments', 'select', { data: payment, error: null });
+      second.enqueue('billing_orders', 'select', { data: null, error: null });
+      second.enqueue('billing_payments', 'update', { data: null, error: null });
+      endSubscriptionAfterFullRefundMock.mockResolvedValueOnce({ ended: false, error: null });
+      const secondResult = await processRazorpayWebhookEvent({ supabase: second.supabase, payload });
+      expect(secondResult.outcome).toBe('refund_recorded');
+    });
+
+    it('logs and folds a helper failure into the outcome -- never throws, the refund stays recorded', async () => {
+      const { supabase, enqueue } = createFakeSupabase();
+      const payment = fakeSubscriptionPayment();
+      enqueue('billing_payments', 'select', { data: payment, error: null });
+      enqueue('billing_orders', 'select', { data: null, error: null });
+      enqueue('billing_payments', 'update', { data: null, error: null });
+      fetchRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'pay_1', order_id: null, status: 'captured', amount: 1180, currency: 'INR',
+        amount_refunded: 1180, refund_status: 'full', invoice_id: null, captured: true,
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-1' });
+      endSubscriptionAfterFullRefundMock.mockResolvedValueOnce({ ended: false, error: 'Razorpay request failed: network error' });
+
+      const payload: RazorpayWebhookPayload = {
+        event: 'refund.processed',
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180 } } },
+      };
+      const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+      expect(result.status).toBe('processed');
+      expect(result.outcome).toBe('refund_recorded_subscription_end_failed');
+    });
+
+    it('never calls the helper for a top-up refund', async () => {
+      const { supabase, enqueue } = createFakeSupabase();
+      enqueue('billing_payments', 'select', { data: fakeLedgerPayment({ kind: 'topup' }), error: null });
+      enqueue('billing_orders', 'select', { data: null, error: null });
+      enqueue('billing_payments', 'update', { data: null, error: null });
+      fetchRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'pay_1', order_id: null, status: 'captured', amount: 1180, currency: 'INR',
+        amount_refunded: 1180, refund_status: 'full', invoice_id: null, captured: true,
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-1' });
+
+      const payload: RazorpayWebhookPayload = {
+        event: 'refund.processed',
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180 } } },
+      };
+      const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+      expect(endSubscriptionAfterFullRefundMock).not.toHaveBeenCalled();
+      expect(result.outcome).toBe('refund_recorded');
     });
   });
 });

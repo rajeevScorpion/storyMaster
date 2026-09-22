@@ -46,6 +46,7 @@ import {
   resyncBillingTopupFromProviderSettled,
 } from '@/app/actions/admin-billing-ui-actions';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { isCurrentCycleSubscriptionPayment } from '@/lib/billing/subscription-refund-end.shared';
 import RowActionsMenu, { type RowAction } from '@/components/ui/RowActionsMenu';
 import { formatCurrencyMinor } from '@/lib/billing/wallet-tax.shared';
 import {
@@ -174,9 +175,17 @@ export default function AdminUserDetail({
             requestKey: billingRequestKey,
           }));
           const amount = formatMoneyMinorForConfirmation(payment.currencyCode, result.refundedAmountMinor);
-          successMessage = result.alreadyApplied
+          // Decision 15: a full refund of the current cycle ends the subscription -- separate from
+          // whether the refund itself succeeded, so a cancel failure here is never reported as the
+          // refund failing.
+          const subscriptionNote = result.subscriptionEnded
+            ? ' The subscription was also ended immediately.'
+            : result.subscriptionEndError
+              ? ' Ending the subscription failed -- cancel it manually.'
+              : '';
+          successMessage = (result.alreadyApplied
             ? `This refund had already been applied -- no duplicate refund was issued (${amount} · ${formatCoins(beatsToCoins(result.beatsClawedBack))} coins clawed back).`
-            : `Refunded ${amount} · ${formatCoins(beatsToCoins(result.beatsClawedBack))} coins clawed back.`;
+            : `Refunded ${amount} · ${formatCoins(beatsToCoins(result.beatsClawedBack))} coins clawed back.`) + subscriptionNote;
           break;
         }
         case 'cancel': {
@@ -328,6 +337,10 @@ export default function AdminUserDetail({
             ? `${formatCoins(grantMatch.remainingCoins)} of ${formatCoins(grantMatch.totalCoins)} coins from this purchase are still unspent -- ${formatCoins(grantMatch.remainingCoins)} will be removed. Coins already spent are not recoverable.`
             : "This purchase's unspent coins will be removed first; coins already spent are not recoverable.",
           "Refused if too much of this purchase's coins have already been spent.",
+          // Decision 15: only a refund of the cycle presently paid for ends the subscription.
+          ...(isCurrentCycleSubscriptionPayment({ kind: payment.kind, cycleEnd: payment.cycleEnd })
+            ? ['This also ends the subscription immediately.']
+            : []),
         ],
       };
     }
