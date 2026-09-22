@@ -378,7 +378,10 @@ export default function AdminUserDetail({
       tone: 'default' as const,
       confirmLabel: 'Reprocess',
       requiresReason: false,
-      lines: ['Re-runs this webhook event through the same handler live traffic uses.'],
+      lines: [
+        'Re-runs this webhook event through the same handler live traffic uses.',
+        'Safe to repeat: a payment, grant or refund already recorded is not recorded again. A full refund of a current-cycle subscription payment ends that subscription.',
+      ],
     };
   }, [billingDialog, data.walletActivity]);
 
@@ -988,17 +991,17 @@ export default function AdminUserDetail({
           items={data.billing.webhookEvents.items}
           headerCells={['Event', 'Status', 'Outcome', 'Attempts', 'Received', '']}
           renderRow={(event) => {
-            const actions: RowAction[] = event.status === 'failed' || event.status === 'received'
-              ? [
-                  {
-                    key: 'reprocess',
-                    label: 'Reprocess',
-                    icon: RotateCw,
-                    disabled: !billingActionsEnabled,
-                    onSelect: () => openBillingDialog({ kind: 'reprocess', event }),
-                  },
-                ]
-              : [];
+            // Offered on every event, not only failed ones: processing is idempotent, and re-running a
+            // processed event is how a rule added after it arrived (e.g. decision 15) gets applied.
+            const actions: RowAction[] = [
+              {
+                key: 'reprocess',
+                label: event.status === 'failed' || event.status === 'received' ? 'Reprocess' : 'Re-run',
+                icon: RotateCw,
+                disabled: !billingActionsEnabled,
+                onSelect: () => openBillingDialog({ kind: 'reprocess', event }),
+              },
+            ];
             return (
               <tr key={event.id} className="border-b border-white/5 last:border-0">
                 <td className="max-w-[220px] truncate py-3 pr-4 text-neutral-200">{event.eventType}</td>

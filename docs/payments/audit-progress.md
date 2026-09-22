@@ -3,12 +3,24 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-23 — Unit C has its UI; the money walk is half done)
+## Next session starts here (updated 2026-09-23, late — walk steps 1-5 pass; decisions 15-16 built)
 
-**State.** Migrations 124-133 applied on dev, none on prod. Unit C's admin UI is built (`1e712fb`, review
-fixes `925161b`). The admin-wide payments list is at `/admin/pricing/payments` (`a977bb4`). Gates at
-`925161b`: tsc clean, lint clean, **1,919 tests / 162 files**, `build:verify` compiled. **Not pushed:**
-the Preview still runs `857db8a` until `payments` is pushed.
+**State.** Migrations 124-133 applied on dev, none on prod. On `payments`, unpushed since the owner's last
+push: `c0f6bd7` (admin Billing tables paginate at 10 rows, contained scroll), `de4e645` + review fix
+`8618d8d` (decisions 15-16), and webhook events are re-runnable from the admin record in any status. Gates: tsc clean, lint clean, **1,972 tests / 167 files**,
+`build:verify` compiled.
+
+**Walk steps 4-5, 2026-09-23: pass.** Audience subscribe charged ₹236 (₹200 + IGST). First charge
+confirmed; no grant, correctly, since Audience includes no coins. Dashboard full refund recorded with the
+tax split reversed, `initiated_by = provider`, and payment and order marked refunded. **Found:** the
+refunded subscription stayed `active` and would have renewed. That became decision 15. An in-app refund of
+any Audience payment would have been refused for want of a coin grant. That became decision 16.
+**Decision 15 only acts on Razorpay's `processed`:** a pending refund.created must not end a plan (review fix).
+
+**The owner's test subscription `sub_TfC9ViXijNEVkZ` is still active on dev.** It was refunded before
+decision 15 existed. After pushing, **reprocess its `refund.processed` webhook event** from the admin
+record (the kill switch must be on). That proves the dashboard-refund path end to end and ends the
+subscription.
 
 **Money walk, 2026-09-22, steps 1-2: pass.** A ₹450 top-up charged ₹531 (IGST, supplier 24 → place of
 supply 27). One `billing_payments` row. One grant of 12 beats (= 120 coins; `beat_grants` stores beats).
@@ -31,14 +43,15 @@ no admin-wide view. Fixed by the payments list and a jump bar on the user record
 It matters once billing details are editable. It is recorded as a Phase 5 requirement.
 
 **Do next, in order:**
-1. **Push `payments`** so the Preview gets Unit C's UI and the payments list.
-2. **Owner: the walk from step 3** (`money-walk-runbook.md`), then 4-6. Step 7, the in-app refund, is
-   now runnable; turn `billing_admin_actions_enabled` on only for it.
-3. **Owner: the refund policy copy** (item 4 of the previous list below). It is still open.
-4. **Plan Phase 5** (user billing & checkout UX). Binding owner input:
-   `phase-5-owner-requirements.md`. Billing-details redesign, a searchable state picker,
-   Personal/Business, validation, Settings → Billing. The required-field set there is a proposal
-   awaiting the owner's confirmation.
+1. **Push `payments`.**
+2. **End the test subscription through the new path.** Turn `billing_admin_actions_enabled` on, open the
+   test user's record → Billing → Webhook events → the `refund.processed` row → ⋮ **Re-run**. Expect the
+   outcome `refund_recorded_subscription_ended`, the Audience row `cancelled`, and the user back on Free.
+3. **Owner: walk step 6** (reconcile; the PowerShell form is in the runbook), then **step 7** (in-app
+   refund, e.g. of a fresh top-up). Turn the kill switch off afterwards.
+4. **Owner: the refund policy copy.** It must now also state decisions 15-16.
+5. **Plan Phase 5.** Binding input: `phase-5-owner-requirements.md`, including the Razorpay-window and
+   payment-method notes. The required-field set is a proposal awaiting the owner.
 
 One scope call in Unit C's UI: re-sync is offered only on active, not-cancelling subscriptions, a
 literal reading of the build brief. Widen it if support needs to re-sync a cancelling one.
