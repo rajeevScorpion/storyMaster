@@ -39,6 +39,7 @@ const EXPECTED_PRICING_HREFS = [
   '/admin/pricing/action-costs',
   '/admin/pricing/runtime-controls',
   '/admin/pricing/recovery-tools',
+  '/admin/pricing/payments',
   '/admin/pricing/billing-incidents',
   '/admin/pricing/audit',
 ];

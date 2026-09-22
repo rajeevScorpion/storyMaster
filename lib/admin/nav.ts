@@ -28,6 +28,7 @@ import {
   Palette,
   PenLine,
   Percent,
+  Receipt,
   Route,
   Settings,
   Settings2,
@@ -341,6 +342,14 @@ const PRICING_CHILD_GROUP: AdminNavChildGroup = {
       icon: Wrench,
       description: 'Repair test wallet, checkout, and reservation issues.',
       staticSummary: 'Repair wallet, checkout, and reservations',
+    },
+    {
+      id: 'payments',
+      label: 'Payments',
+      href: '/admin/pricing/payments',
+      icon: Receipt,
+      description: 'Every captured, failed, refunded, or disputed payment across every account.',
+      staticSummary: 'Search payments by Razorpay id, email, or user id',
     },
     {
       id: 'billing-incidents',
