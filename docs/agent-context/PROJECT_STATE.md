@@ -756,9 +756,9 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
 - **Payments are not safe for real money yet.** Work is in progress on branch `payments`; the living handoff is
   `docs/payments/audit-progress.md` (audit, Phase 0 discovery, phase status, owner decisions). Nothing is merged
   to `dev` or `main`. As of 2026-09-23: Phases 1-4 are code-complete;
-  **migrations 124-132 are applied on dev and none on prod**, and **133 is written and applied nowhere**.
-  Phase 4 shipped the first code that can move money out of the business; its kill switch
-  `billing_admin_actions_enabled` is off everywhere. The
+  **migrations 124-133 are applied on dev and none on prod**.
+  **133 applied on dev 2026-09-23.** Phase 4 shipped the first code that can move money out of the
+  business, now with its admin UI; its kill switch `billing_admin_actions_enabled` is off everywhere. The
   payments migrations are tracked in that handoff rather than in the table above, which stops at 124 on purpose
   while the branch is unmerged — `schema_migration_ledger` is the authority for either.
 - **The money walk has started (2026-09-22).** One real test top-up flowed end to end on the Preview: charged

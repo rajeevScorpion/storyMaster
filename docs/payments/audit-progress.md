@@ -3,7 +3,47 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-20 — Phase 4 is code-complete; two things block it closing)
+## Next session starts here (updated 2026-09-23 — Unit C has its UI; the money walk is half done)
+
+**State.** Migrations 124-133 applied on dev, none on prod. Unit C's admin UI is built (`1e712fb`, review
+fixes `925161b`). The admin-wide payments list is at `/admin/pricing/payments` (`a977bb4`). Gates at
+`925161b`: tsc clean, lint clean, **1,919 tests / 162 files**, `build:verify` compiled. **Not pushed:**
+the Preview still runs `857db8a` until `payments` is pushed.
+
+**Money walk, 2026-09-22, steps 1-2: pass.** A ₹450 top-up charged ₹531 (IGST, supplier 24 → place of
+supply 27). One `billing_payments` row. One grant of 12 beats (= 120 coins; `beat_grants` stores beats).
+`payment.captured` granted; the verify call and `order.paid` both saw "already granted". No double credit.
+**Step 3 failed on findability, not data.** The payment sat only at the bottom of the user record, with
+no admin-wide view. Fixed by the payments list and a jump bar on the user record.
+
+**Defects the walk found, all fixed:**
+- **133:** no writer set `subject_ref`, so every grant and billing profile since 125 would have been
+  orphaned by an account deletion. Now a BEFORE INSERT trigger on all seven tables.
+- **Review of Unit C's UI:** thrown server-action errors are redacted in production builds, so refund
+  refusal reasons would have read "an error occurred". The UI now goes through
+  `app/actions/admin-billing-ui-actions.ts`, which returns the reason as data. **Use that pattern for any
+  admin action whose error text matters.** The existing grant and moderation actions still throw and have
+  the same blind spot; they are not fixed, and it is not recorded elsewhere.
+- **Also from the review:** the refund notice showed beats labelled as coins, and the payments list's
+  refund lookup would have overflowed its URL at a few hundred payments.
+
+**Known and not a defect:** `billing_payments.customer_snapshot_json` is always null; no caller passes it.
+It matters once billing details are editable. It is recorded as a Phase 5 requirement.
+
+**Do next, in order:**
+1. **Push `payments`** so the Preview gets Unit C's UI and the payments list.
+2. **Owner: the walk from step 3** (`money-walk-runbook.md`), then 4-6. Step 7, the in-app refund, is
+   now runnable; turn `billing_admin_actions_enabled` on only for it.
+3. **Owner: the refund policy copy** (item 4 of the previous list below). It is still open.
+4. **Plan Phase 5** (user billing & checkout UX). Binding owner input:
+   `phase-5-owner-requirements.md`. Billing-details redesign, a searchable state picker,
+   Personal/Business, validation, Settings → Billing. The required-field set there is a proposal
+   awaiting the owner's confirmation.
+
+One scope call in Unit C's UI: re-sync is offered only on active, not-cancelling subscriptions, a
+literal reading of the build brief. Widen it if support needs to re-sync a cancelling one.
+
+## Previous entry (2026-09-20 — Phase 4 is code-complete; two things block it closing)
 
 **All six Phase 4 units are built, reviewed and committed on `payments`.** Nothing is merged to `dev`
 or `main`. Prod is untouched and stays that way until the whole feature is tested (owner, 2026-09-17).
