@@ -67,7 +67,33 @@ point in the account menu.
   caller passes it. Snapshot the profile onto the payment at checkout, so a later edit can never rewrite
   who a past charge was billed to. Documents (Phase 6) then read the snapshot, not the live profile.
 
-## 3. Admin: finding a payment
+## 3. The Razorpay window: slow to appear, and off-theme
+
+Raised at walk step 4 (subscribe). Razorpay's window is its own iframe. It **can** take: the brand colour
+(already emerald `#10b981`), a backdrop colour (set it to the page's neutral-950 so the page doesn't
+flash white-grey behind it), the Kissago logo (`image`), name and description, prefilled contact
+details, and payment-method ordering. It **cannot** take fonts, dark mode or layout. "Customised to the
+Kissago theme" therefore means:
+- Set the backdrop, the logo and prefill everything. Prefilling phone skips a Razorpay step, so it
+  depends on 1c making phone required.
+- Put the Kissago experience **around** the window: the pre-payment summary the Phase 5 prompt already
+  requires, then a Kissago-styled "Opening secure checkout…" state from the click until the window is
+  visible, and a "Confirming your payment…" state after it closes.
+
+**The wait:** the Razorpay script already loads with the page. The delay is the server preparing the
+checkout (for a subscription: create the Razorpay subscription, and the first time per plan, the plan
+as well) plus Razorpay's own iframe start. **Measure before optimising.** Time each server call in the
+checkout action, and only then decide whether to pre-create anything. The Kissago-styled pending state
+is worth doing either way: a blank second feels broken, and a branded one feels deliberate.
+
+## 4. Payment history detail
+
+Subscription payments record their method as `unknown`: the subscription charge path never passes the
+payment's method to the ledger, and only top-ups do. The payment history (§2) shows a method column, so
+fix it there: take the method from the webhook's payment entity, or fetch it once when the row is
+first written.
+
+## 5. Admin: finding a payment
 
 The owner could not find the walk's payment in admin. The data was correct, but it only appeared at the
 bottom of one user's record. **Being fixed now, not in Phase 5:** an admin-wide payments list with search

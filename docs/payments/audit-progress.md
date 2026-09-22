@@ -546,6 +546,14 @@ session at natural checkpoints.
 14. **Catalogue changes take an informed confirmation, not a hard block** — showing the live
     subscriber count. A hard block would guard a failure the data model already prevents (see the
     finding below) and would make sunsetting a plan impossible while anyone was still on it.
+15. **A full refund of a current-cycle subscription payment ends the subscription now** (owner,
+    2026-09-23): an immediate cancel at Razorpay, and access ends. It applies to in-app and
+    Razorpay-dashboard refunds alike. Decision 13's "keep access to period end" covers cancelling
+    *without* a refund; once the money is returned, ending access carries no chargeback risk. Found by
+    the walk: the refunded ₹236 Audience subscription stayed active and would have renewed.
+16. **A plan that includes no coins is refundable, with nothing to claw back** (owner, 2026-09-23).
+    Before this, every Audience refund was refused for want of a coin grant. A coin-bearing purchase
+    with a missing grant still refuses.
 
 **The repeat-refund loophole (found 2026-09-20, not previously named).** Nothing limits how often an
 account may be refunded. Buy a top-up → use 19% → refund → rebuy → use 19% → refund: each purchase

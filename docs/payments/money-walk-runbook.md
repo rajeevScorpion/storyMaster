@@ -192,7 +192,8 @@ go through, and what were they charged" without writing SQL?**
 2. Pay with a test card.
 
 - [ ] Charged price + GST again.
-- [ ] Subscription coins arrived.
+- [ ] Subscription coins arrived. **Not for Audience:** it includes no coins, so no grant row is expected
+      and the `expires_at` check below does not apply.
 
 ```sql
 select id, status, billing_interval, current_period_start, current_period_end,
@@ -252,6 +253,18 @@ on a Preview you trigger it by hand.
 curl -X POST "https://kissago-git-payments-rajeevscorpions-projects.vercel.app/api/batch/reconcile" \
   -H "Authorization: Bearer $CRON_SECRET"
 ```
+
+**Where to run it:** any terminal on your machine; it is an ordinary web request to the Preview. The secret
+is the **Preview** value of `CRON_SECRET`, from Vercel → Project → Settings → Environment Variables. It is
+not necessarily the one in your `.env.local`. In **PowerShell**, `curl` is an alias for something else,
+so use `curl.exe` and put the whole command on one line:
+
+```powershell
+$env:CRON_SECRET = "<paste the Preview value>"
+curl.exe -X POST "https://kissago-git-payments-rajeevscorpions-projects.vercel.app/api/batch/reconcile" -H "Authorization: Bearer $env:CRON_SECRET"
+```
+
+A `401` means the secret does not match the Preview's.
 
 - [ ] It returns 200 with counts, and does not error.
 - [ ] Run it **twice.** The second run must not double-grant coins or create duplicate rows. This is
