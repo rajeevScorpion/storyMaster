@@ -39,16 +39,20 @@ import {
   updateAdminUserModeration,
 } from '@/app/actions/admin-users';
 import {
-  cancelBillingSubscriptionAtCycleEnd,
-  reprocessBillingWebhookEventById,
-  refundBillingPayment,
-  resyncBillingSubscriptionFromProvider,
-  resyncBillingTopupFromProvider,
-} from '@/app/actions/admin-billing-actions';
+  cancelBillingSubscriptionAtCycleEndSettled,
+  refundBillingPaymentSettled,
+  reprocessBillingWebhookEventByIdSettled,
+  resyncBillingSubscriptionFromProviderSettled,
+  resyncBillingTopupFromProviderSettled,
+} from '@/app/actions/admin-billing-ui-actions';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import RowActionsMenu, { type RowAction } from '@/components/ui/RowActionsMenu';
 import { formatCurrencyMinor } from '@/lib/billing/wallet-tax.shared';
-import { formatMoneyMinorForConfirmation, matchTopupGrantForRefund } from '@/lib/admin/billing-admin-ui.shared';
+import {
+  formatMoneyMinorForConfirmation,
+  matchTopupGrantForRefund,
+  unwrapAdminBillingActionResult as unwrap,
+} from '@/lib/admin/billing-admin-ui.shared';
 import {
   describeBillingSectionState,
   type AdminAccountStatus,
@@ -57,6 +61,7 @@ import {
   type AdminBillingPayment,
   type AdminBillingProfile,
   type AdminBillingRefund,
+  beatsToCoins,
   type AdminBillingSectionKey,
   type AdminBillingSectionStatus,
   type AdminBillingSubscription,
@@ -162,46 +167,46 @@ export default function AdminUserDetail({
       switch (billingDialog.kind) {
         case 'refund': {
           const payment = billingDialog.payment;
-          const result = await refundBillingPayment({
+          const result = unwrap(await refundBillingPaymentSettled({
             paymentId: payment.id,
             reason: billingReason,
             requestKey: billingRequestKey,
-          });
+          }));
           const amount = formatMoneyMinorForConfirmation(payment.currencyCode, result.refundedAmountMinor);
           successMessage = result.alreadyApplied
-            ? `This refund had already been applied -- no duplicate refund was issued (${amount} · ${formatCoins(result.beatsClawedBack)} coins clawed back).`
-            : `Refunded ${amount} · ${formatCoins(result.beatsClawedBack)} coins clawed back.`;
+            ? `This refund had already been applied -- no duplicate refund was issued (${amount} · ${formatCoins(beatsToCoins(result.beatsClawedBack))} coins clawed back).`
+            : `Refunded ${amount} · ${formatCoins(beatsToCoins(result.beatsClawedBack))} coins clawed back.`;
           break;
         }
         case 'cancel': {
-          const result = await cancelBillingSubscriptionAtCycleEnd({
+          const result = unwrap(await cancelBillingSubscriptionAtCycleEndSettled({
             subscriptionId: billingDialog.subscription.id,
             reason: billingReason,
             requestKey: billingRequestKey,
-          });
+          }));
           successMessage = result.alreadyApplied
             ? 'This cancellation had already been applied.'
             : `This subscription will stop renewing at the end of the current cycle (status: ${result.status}).`;
           break;
         }
         case 'resyncSubscription': {
-          const result = await resyncBillingSubscriptionFromProvider({
+          const result = unwrap(await resyncBillingSubscriptionFromProviderSettled({
             providerSubscriptionId: billingDialog.subscription.providerSubscriptionId ?? '',
-          });
+          }));
           successMessage = `Re-synced from Razorpay -- status: ${result.subscriptionStatus}${
             result.grantedCoins > 0 ? ` · ${formatCoins(result.grantedCoins)} coins granted` : ''
           }.`;
           break;
         }
         case 'resyncTopup': {
-          const result = await resyncBillingTopupFromProvider({ billingOrderId: billingDialog.order.id });
+          const result = unwrap(await resyncBillingTopupFromProviderSettled({ billingOrderId: billingDialog.order.id }));
           successMessage = result.grantedCoins > 0
             ? `Re-synced from Razorpay -- ${formatCoins(result.grantedCoins)} coins granted.`
             : 'Re-synced from Razorpay -- nothing new to grant.';
           break;
         }
         case 'reprocess': {
-          const result = await reprocessBillingWebhookEventById({ eventId: billingDialog.event.id });
+          const result = unwrap(await reprocessBillingWebhookEventByIdSettled({ eventId: billingDialog.event.id }));
           successMessage = `Reprocessed -- status: ${result.status}${result.outcome ? ` · outcome: ${result.outcome}` : ''}.`;
           break;
         }

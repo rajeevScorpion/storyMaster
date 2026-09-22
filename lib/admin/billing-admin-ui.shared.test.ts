@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatMoneyMinorForConfirmation,
   matchTopupGrantForRefund,
+  unwrapAdminBillingActionResult,
   type WalletActivityGrantLookup,
 } from './billing-admin-ui.shared';
 
@@ -65,5 +66,17 @@ describe('matchTopupGrantForRefund', () => {
       { kind: 'spend', source: 'topup', sourceRefId: 'order-1', coinsDelta: -10, remainingCoins: null },
     ];
     expect(matchTopupGrantForRefund({ kind: 'topup', billingOrderId: 'order-1' }, spendOnly)).toBeNull();
+  });
+});
+
+describe('unwrapAdminBillingActionResult', () => {
+  it('returns the result of a settled success', () => {
+    expect(unwrapAdminBillingActionResult({ ok: true, result: { grantedCoins: 120 } })).toEqual({ grantedCoins: 120 });
+  });
+
+  it('rethrows the server-side reason verbatim, so production builds still show it', () => {
+    expect(() => unwrapAdminBillingActionResult({ ok: false, error: 'Refund cap reached for this account.' })).toThrow(
+      'Refund cap reached for this account.'
+    );
   });
 });

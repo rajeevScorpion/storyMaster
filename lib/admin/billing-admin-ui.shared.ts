@@ -59,3 +59,17 @@ export function matchTopupGrantForRefund(
   if (!match || match.remainingCoins === null) return null;
   return { remainingCoins: match.remainingCoins, totalCoins: match.coinsDelta };
 }
+
+/**
+ * What the admin billing UI's server actions return instead of throwing. Next replaces a thrown
+ * server-action error's message with a generic one in production builds, so a refund refused for
+ * "too many coins already spent" would reach the admin as "an error occurred" -- the reason has to
+ * travel as data. See app/actions/admin-billing-ui-actions.ts.
+ */
+export type AdminBillingActionResult<T> = { ok: true; result: T } | { ok: false; error: string };
+
+/** Client-side: turns a settled result back into a throw, so callers keep one try/catch path. */
+export function unwrapAdminBillingActionResult<T>(settled: AdminBillingActionResult<T>): T {
+  if (!settled.ok) throw new Error(settled.error);
+  return settled.result;
+}

@@ -34,6 +34,8 @@ const PAYMENT_ROW_COLUMNS =
   'status, currency_code, net_minor, tax_minor, gross_minor, method_category, provider_fee_minor, ' +
   'provider_tax_minor, cycle_start, cycle_end, captured_at, created_at, user_id, subject_ref';
 
+const REFUND_LOOKUP_BATCH_SIZE = 100;
+
 interface DirectoryRow {
   user_id: string;
   email: string | null;
@@ -181,17 +183,25 @@ export async function getAdminPaymentsList(input: AdminPaymentsListInput = {}): 
   const totalsCapped = totalsRows.length >= ADMIN_PAYMENTS_TOTALS_ROW_LIMIT;
   const totalsPaymentIds = totalsRows.map((row) => row.id);
 
-  const refundsResult = totalsPaymentIds.length > 0
-    ? await admin
-      .from('billing_refunds')
-      .select('payment_id, provider_mode, amount_minor, status')
-      .in('payment_id', totalsPaymentIds)
-    : { data: [] as RefundTotalsRow[], error: null };
-
-  if (refundsResult.error && !isMissingBillingSchemaError(refundsResult.error)) {
-    throw new Error(`Failed to load refunds: ${refundsResult.error.message}`);
+  // Batched: an .in() filter travels in the request URL, and a few hundred uuids in one list is
+  // enough to overflow it -- the page would then fail at exactly the volume it exists for.
+  const refundBatches: string[][] = [];
+  for (let index = 0; index < totalsPaymentIds.length; index += REFUND_LOOKUP_BATCH_SIZE) {
+    refundBatches.push(totalsPaymentIds.slice(index, index + REFUND_LOOKUP_BATCH_SIZE));
   }
-  const refundRows = (refundsResult.data ?? []) as unknown as RefundTotalsRow[];
+  const refundResults = await Promise.all(
+    refundBatches.map((batch) =>
+      admin.from('billing_refunds').select('payment_id, provider_mode, amount_minor, status').in('payment_id', batch)
+    )
+  );
+
+  const refundRows: RefundTotalsRow[] = [];
+  for (const refundsResult of refundResults) {
+    if (refundsResult.error && !isMissingBillingSchemaError(refundsResult.error)) {
+      throw new Error(`Failed to load refunds: ${refundsResult.error.message}`);
+    }
+    refundRows.push(...((refundsResult.data ?? []) as unknown as RefundTotalsRow[]));
+  }
 
   const totals = computePaymentModeTotals(
     totalsRows.map((row) => ({
