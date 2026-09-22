@@ -755,16 +755,18 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
 **Billing and cost**
 - **Payments are not safe for real money yet.** Work is in progress on branch `payments`; the living handoff is
   `docs/payments/audit-progress.md` (audit, Phase 0 discovery, phase status, owner decisions). Nothing is merged
-  to `dev` or `main`. As of 2026-09-20: Phases 1-4 are code-complete;
-  **migrations 124-131 are applied on dev and none on prod**, and **132 is written and applied nowhere**.
-  Phase 4 shipped the first code that can move money out of the business — it is triple-locked: its kill
-  switch `billing_admin_actions_enabled` is off, migration 132 is unapplied, and it has no browser UI. The
+  to `dev` or `main`. As of 2026-09-23: Phases 1-4 are code-complete;
+  **migrations 124-132 are applied on dev and none on prod**, and **133 is written and applied nowhere**.
+  Phase 4 shipped the first code that can move money out of the business; its kill switch
+  `billing_admin_actions_enabled` is off everywhere. The
   payments migrations are tracked in that handoff rather than in the table above, which stops at 124 on purpose
   while the branch is unmerged — `schema_migration_ledger` is the authority for either.
-- **No payment has ever flowed through the Phase 2 ledger.** `billing_payments` is empty on dev, along with
-  refunds, documents, billing profiles and watch slots. Every admin billing surface built in Phase 4 is therefore
-  correct by construction and unproven against real rows. The owner-only money walk in `phase-2-plan.md` §6 is
-  what closes this, and several later phases are waiting on it.
+- **The money walk has started (2026-09-22).** One real test top-up flowed end to end on the Preview: charged
+  price + GST, one ledger row, one grant, webhook processed, no double credit. Subscription, refunds and the
+  reconcile backstop are still unwalked — `docs/payments/money-walk-runbook.md` steps 4-8.
+- **Phase 5 (user billing & checkout UX) has owner requirements recorded** in
+  `docs/payments/phase-5-owner-requirements.md`: billing-details redesign, searchable state picker,
+  Personal/Business billing, validation, and Settings → Billing.
 - The Story Bible LLM call is **unbilled** — it consumes tokens without a coin charge.
 - The full `ImageModelSnapshot` — including both `providerCost*Usd` fields — still reaches the client inside
   `beat.imageGenerationMetadata.imageModelSnapshot`. The picker leak was fixed by splitting
