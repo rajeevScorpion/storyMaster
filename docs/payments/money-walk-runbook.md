@@ -126,6 +126,8 @@ from beat_grants order by granted_at desc limit 3;
 - [ ] **`billing_payments` has its first row ever.** This is the single most important line in the
       whole runbook.
 - [ ] `net_minor + tax_minor = gross_minor`, and `gross_minor` matches what you were charged.
+- **`beat_grants` stores beats, not coins: 1 beat = 10 coins.** A 120-coin pack shows `beats_total = 12`.
+  Every screen converts; raw SQL does not.
 - [ ] The `beat_grants` row has `source_type = 'topup'` and **`expires_at` is null** — top-up coins
       never expire, by design.
 - [ ] `provider_mode` is `test`.
