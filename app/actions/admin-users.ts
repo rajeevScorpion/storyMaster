@@ -102,7 +102,9 @@ interface AuditRow {
 interface GrantRow {
   id: string;
   source_type: string;
+  source_ref_id: string | null;
   beats_total: number | string;
+  beats_remaining: number | string;
   expires_at: string | null;
   granted_at: string;
 }
@@ -523,7 +525,10 @@ async function getAdminUserDetailInternal(userId: string): Promise<AdminUserDeta
       .limit(50),
     admin
       .from('beat_grants')
-      .select('id, source_type, beats_total, expires_at, granted_at')
+      // source_ref_id/beats_remaining (both migration 017, universally applied) ride along with
+      // this existing read so Unit C's refund dialog can identify a top-up's own grant without a
+      // second server call -- see lib/admin/billing-admin-ui.shared.ts.
+      .select('id, source_type, source_ref_id, beats_total, beats_remaining, expires_at, granted_at')
       .eq('user_id', userId)
       .order('granted_at', { ascending: false })
       .limit(25),
@@ -932,6 +937,8 @@ function buildWalletActivity(
       source: grant.source_type,
       occurredAt: grant.granted_at,
       expiresAt: grant.expires_at,
+      sourceRefId: grant.source_ref_id,
+      remainingCoins: beatsToCoins(grant.beats_remaining),
     })),
     ...usageEvents.map((event): AdminUserWalletActivityItem => ({
       id: `spend:${event.id}`,
@@ -941,6 +948,8 @@ function buildWalletActivity(
       source: event.action_key,
       occurredAt: event.created_at,
       expiresAt: null,
+      sourceRefId: null,
+      remainingCoins: null,
     })),
   ];
 

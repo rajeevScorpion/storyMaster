@@ -95,6 +95,13 @@ export interface AdminUserWalletActivityItem {
   source: string;
   occurredAt: string;
   expiresAt: string | null;
+  /** beat_grants.source_ref_id, for a 'grant' item only -- lets Unit C's refund dialog find a
+   * top-up's own grant (lib/admin/billing-admin-ui.shared.ts) without a second server call. Always
+   * null for a 'spend' item. */
+  sourceRefId: string | null;
+  /** beat_grants.beats_remaining converted to coins, for a 'grant' item only; always null for a
+   * 'spend' item. */
+  remainingCoins: number | null;
 }
 
 export interface AdminUserRecentStory {
