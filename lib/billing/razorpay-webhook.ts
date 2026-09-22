@@ -28,7 +28,7 @@ export interface RazorpayWebhookPayload {
      * refund event, in minor units -- Razorpay always sends it on refund.* webhooks. Used to split
      * the refund proportionally into net/tax; falls back to the payment's total refunded-to-date
      * when absent (an old/malformed payload), which is only accurate for a single full refund. */
-    refund?: { entity?: { id?: string; payment_id?: string; amount?: number } };
+    refund?: { entity?: { id?: string; payment_id?: string; amount?: number; status?: string } };
     /** Same `amount` note as refund above -- a dispute normally covers the full payment amount, but
      * Razorpay's own figure is preferred when present. `status` is one of Razorpay's five dispute
      * statuses and is what actually says whether the money moved -- see dispute-status.shared.ts.
@@ -290,7 +290,14 @@ async function processRefundEvent(
       // fail closed: any error here is logged and folded into this event's own outcome, never thrown
       // in a way that would mark the refund itself unrecorded (endSubscriptionAfterFullRefund never
       // throws -- see its own contract).
-      if (payment.kind === 'subscription_first' || payment.kind === 'subscription_renewal') {
+      // Only on Razorpay's own 'processed': the ledger status above treats anything but refund.failed
+      // as processed, and a still-pending refund.created must not end a plan whose money may never
+      // go back.
+      const refundEntityStatus = payload.payload?.refund?.entity?.status ?? null;
+      if (
+        refundEntityStatus === 'processed' &&
+        (payment.kind === 'subscription_first' || payment.kind === 'subscription_renewal')
+      ) {
         const subscriptionEndResult = await endSubscriptionAfterFullRefund({
           supabase,
           kind: payment.kind,

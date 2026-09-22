@@ -468,7 +468,7 @@ describe('processRazorpayWebhookEvent — refunds', () => {
 
       const payload: RazorpayWebhookPayload = {
         event: 'refund.processed',
-        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180 } } },
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180, status: 'processed' } } },
       };
       const result = await processRazorpayWebhookEvent({ supabase, payload });
 
@@ -482,6 +482,27 @@ describe('processRazorpayWebhookEvent — refunds', () => {
         })
       );
       expect(result.outcome).toBe('refund_recorded_subscription_ended');
+    });
+
+    it('does not end the subscription while Razorpay still reports the refund as pending', async () => {
+      const { supabase, enqueue } = createFakeSupabase();
+      enqueue('billing_payments', 'select', { data: fakeSubscriptionPayment(), error: null });
+      enqueue('billing_orders', 'select', { data: null, error: null });
+      enqueue('billing_payments', 'update', { data: null, error: null });
+      fetchRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'pay_1', order_id: null, status: 'captured', amount: 1180, currency: 'INR',
+        amount_refunded: 1180, refund_status: 'full', invoice_id: null, captured: true,
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-1' });
+
+      const payload: RazorpayWebhookPayload = {
+        event: 'refund.created',
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180, status: 'pending' } } },
+      };
+      const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+      expect(endSubscriptionAfterFullRefundMock).not.toHaveBeenCalled();
+      expect(result.outcome).toBe('refund_recorded');
     });
 
     it('a refund the helper decides not to act on (e.g. partial, or a past cycle) leaves the outcome unchanged', async () => {
@@ -499,7 +520,7 @@ describe('processRazorpayWebhookEvent — refunds', () => {
 
       const payload: RazorpayWebhookPayload = {
         event: 'refund.processed',
-        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 590 } } },
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 590, status: 'processed' } } },
       };
       const result = await processRazorpayWebhookEvent({ supabase, payload });
 
@@ -511,7 +532,7 @@ describe('processRazorpayWebhookEvent — refunds', () => {
       const payment = fakeSubscriptionPayment();
       const payload: RazorpayWebhookPayload = {
         event: 'refund.processed',
-        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180 } } },
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180, status: 'processed' } } },
       };
       fetchRazorpayPaymentMock.mockResolvedValue({
         id: 'pay_1', order_id: null, status: 'captured', amount: 1180, currency: 'INR',
@@ -554,7 +575,7 @@ describe('processRazorpayWebhookEvent — refunds', () => {
 
       const payload: RazorpayWebhookPayload = {
         event: 'refund.processed',
-        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180 } } },
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180, status: 'processed' } } },
       };
       const result = await processRazorpayWebhookEvent({ supabase, payload });
 
@@ -575,7 +596,7 @@ describe('processRazorpayWebhookEvent — refunds', () => {
 
       const payload: RazorpayWebhookPayload = {
         event: 'refund.processed',
-        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180 } } },
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180, status: 'processed' } } },
       };
       const result = await processRazorpayWebhookEvent({ supabase, payload });
 

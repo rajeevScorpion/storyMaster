@@ -290,6 +290,32 @@ describe('refundBillingPayment', () => {
       expect(cancelRazorpaySubscriptionMock).toHaveBeenCalledWith({ subscriptionId: 'sub_3', atCycleEnd: false });
     });
 
+    it('leaves a still-pending refund to the refund.processed webhook instead of ending the subscription now', async () => {
+      const payment = fakePayment({
+        kind: 'subscription_renewal',
+        billing_order_id: null,
+        provider_subscription_id: 'sub_3',
+        cycle_start: '2026-08-01T00:00:00.000Z',
+        cycle_end: FUTURE_CYCLE_END,
+        plan_version_id: 'plan-version-3',
+      });
+      const fake = withStandardSetup(payment);
+      fake.enqueue('beat_grants', 'select', { data: { id: 'grant-1', beats_total: 100, beats_remaining: 100 }, error: null });
+      queueThroughClawback(fake, { hasGrant: true });
+      fake.enqueue('admin_user_audit_events', 'update', { data: null, error: null });
+      createAdminClientMock.mockReturnValue(fake.supabase);
+      refundRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'rfnd_5', payment_id: 'pay_1', amount: 1180, currency: 'INR', status: 'pending',
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-5' });
+
+      const result = await refundBillingPayment({ paymentId: PAYMENT_ID, reason: REASON, requestKey: REQUEST_KEY });
+
+      expect(result.subscriptionEnded).toBe(false);
+      expect(result.subscriptionEndPending).toBe(true);
+      expect(cancelRazorpaySubscriptionMock).not.toHaveBeenCalled();
+    });
+
     it('does not end a subscription for a refund of a PAST cycle', async () => {
       const payment = fakePayment({
         kind: 'subscription_renewal',

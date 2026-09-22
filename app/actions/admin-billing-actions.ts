@@ -45,6 +45,7 @@ import {
   resolveRefundCapPerAccount,
 } from '@/lib/billing/refund-eligibility.shared';
 import { endSubscriptionAfterFullRefund } from '@/lib/billing/subscription-refund-end';
+import { isCurrentCycleSubscriptionPayment } from '@/lib/billing/subscription-refund-end.shared';
 import { resolveSubscriptionIncludedBeats } from '@/lib/billing/subscription-included-beats';
 import {
   reconcilePricingSubscription,
@@ -139,6 +140,9 @@ export interface RefundBillingPaymentResult {
   /** Set only when decision 15 applied and ending the subscription failed -- the refund above still
    * succeeded; never let this turn a successful refund into a reported failure. */
   subscriptionEndError: string | null;
+  /** The refund is still pending at Razorpay, so the subscription is left for the refund.processed
+   * webhook to end. */
+  subscriptionEndPending: boolean;
 }
 
 export async function refundBillingPayment(input: {
@@ -364,14 +368,22 @@ export async function refundBillingPayment(input: {
   // deliberately separate from "did the refund succeed", so its failure never turns a real refund
   // into a reported failure (module header, and see endSubscriptionAfterFullRefund's own contract:
   // it never throws).
-  const subscriptionEndResult = await endSubscriptionAfterFullRefund({
-    supabase: admin,
+  // Only once Razorpay says 'processed': a still-pending refund may yet fail, and the refund.processed
+  // webhook ends the subscription through the same helper when it lands.
+  const subscriptionEndPending = refund.status !== 'processed' && isCurrentCycleSubscriptionPayment({
     kind: payment.kind,
-    providerSubscriptionId: payment.provider_subscription_id,
-    refundAmountMinor: refund.amount,
-    paymentGrossMinor: payment.gross_minor,
     cycleEnd: payment.cycle_end,
   });
+  const subscriptionEndResult = refund.status === 'processed'
+    ? await endSubscriptionAfterFullRefund({
+        supabase: admin,
+        kind: payment.kind,
+        providerSubscriptionId: payment.provider_subscription_id,
+        refundAmountMinor: refund.amount,
+        paymentGrossMinor: payment.gross_minor,
+        cycleEnd: payment.cycle_end,
+      })
+    : { ended: false, error: null };
   if (subscriptionEndResult.error) {
     console.error('[admin-billing-actions] ending the subscription after a full refund failed', {
       paymentId: payment.id,
@@ -389,6 +401,7 @@ export async function refundBillingPayment(input: {
     beatsClawedBack: eligibility.beatsToClaw,
     subscriptionEnded: subscriptionEndResult.ended,
     subscriptionEndError: subscriptionEndResult.error,
+    subscriptionEndPending,
   });
 
   try {
@@ -425,6 +438,7 @@ export async function refundBillingPayment(input: {
     alreadyApplied: false,
     subscriptionEnded: subscriptionEndResult.ended,
     subscriptionEndError: subscriptionEndResult.error,
+    subscriptionEndPending,
   };
 }
 
@@ -446,6 +460,7 @@ function replayRefundOutcome(existing: {
       alreadyApplied: true,
       subscriptionEnded: Boolean(after.subscriptionEnded),
       subscriptionEndError: after.subscriptionEndError ? String(after.subscriptionEndError) : null,
+      subscriptionEndPending: Boolean(after.subscriptionEndPending),
     };
   }
   if (outcome === 'provider_call_failed_compensated') {

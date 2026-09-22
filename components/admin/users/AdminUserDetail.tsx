@@ -182,7 +182,9 @@ export default function AdminUserDetail({
             ? ' The subscription was also ended immediately.'
             : result.subscriptionEndError
               ? ' Ending the subscription failed -- cancel it manually.'
-              : '';
+              : result.subscriptionEndPending
+                ? ' Razorpay has the refund as pending; the subscription ends when it confirms.'
+                : '';
           successMessage = (result.alreadyApplied
             ? `This refund had already been applied -- no duplicate refund was issued (${amount} · ${formatCoins(beatsToCoins(result.beatsClawedBack))} coins clawed back).`
             : `Refunded ${amount} · ${formatCoins(beatsToCoins(result.beatsClawedBack))} coins clawed back.`) + subscriptionNote;
