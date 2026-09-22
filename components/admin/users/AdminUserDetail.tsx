@@ -53,6 +53,7 @@ import {
   matchTopupGrantForRefund,
   unwrapAdminBillingActionResult as unwrap,
 } from '@/lib/admin/billing-admin-ui.shared';
+import { paginateAdminTableRows } from '@/lib/admin/table-pagination.shared';
 import {
   describeBillingSectionState,
   type AdminAccountStatus,
@@ -1207,27 +1208,89 @@ function BillingListSection<T>({
   renderRow: (item: T) => React.ReactNode;
 }) {
   const state = describeBillingSectionState(sectionKey, status, items.length);
+  const [page, setPage] = useState(1);
+  // A refund/cancel/re-sync/reprocess action calls router.refresh() rather than patching this
+  // row in place, which hands `items` down as a new array -- reset to page 1 so a stale page
+  // number from a longer previous result set never renders an empty table. Adjusted during render
+  // (React's documented pattern for "state that depends on a prop"), not an effect -- an effect's
+  // setState here is exactly what react-hooks/set-state-in-effect rejects.
+  const [prevItems, setPrevItems] = useState(items);
+  if (items !== prevItems) {
+    setPrevItems(items);
+    setPage(1);
+  }
+  const paged = paginateAdminTableRows(items, page);
+
   return (
     <TimelineCard title={title} icon={Icon}>
       {state.kind === 'has_data' ? (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead>
-              <tr className="border-b border-white/10 text-left text-xs uppercase tracking-[0.12em] text-neutral-600">
-                {headerCells.map((cell, index) => (
-                  <th key={cell} className={index === 0 ? 'py-3 pr-4 font-medium' : 'px-4 py-3 font-medium'}>
-                    {cell}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>{items.map(renderRow)}</tbody>
-          </table>
-        </div>
+        <>
+          <div className="admin-table-scroll max-h-[420px] overflow-auto">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead>
+                <tr className="sticky top-0 z-10 border-b border-white/10 bg-neutral-950 text-left text-xs uppercase tracking-[0.12em] text-neutral-600">
+                  {headerCells.map((cell, index) => (
+                    <th key={cell} className={index === 0 ? 'py-3 pr-4 font-medium' : 'px-4 py-3 font-medium'}>
+                      {cell}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>{paged.rows.map(renderRow)}</tbody>
+            </table>
+          </div>
+          <TablePager
+            page={paged.page}
+            pageCount={paged.pageCount}
+            rangeStart={paged.rangeStart}
+            rangeEnd={paged.rangeEnd}
+            totalCount={paged.totalCount}
+            onPageChange={setPage}
+          />
+        </>
       ) : (
         <BillingSectionEmptyState state={state} />
       )}
     </TimelineCard>
+  );
+}
+
+/** Compact "‹ Prev · 1–10 of 23 · Next ›" footer for a BillingListSection table. Hidden entirely
+ * when everything fits on one page -- pageCount is always >= 1, so this is the only check needed. */
+function TablePager({
+  page,
+  pageCount,
+  rangeStart,
+  rangeEnd,
+  totalCount,
+  onPageChange,
+}: {
+  page: number;
+  pageCount: number;
+  rangeStart: number;
+  rangeEnd: number;
+  totalCount: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (pageCount <= 1) return null;
+  const pagerButtonClass = 'rounded-full border border-white/10 bg-white/5 px-3 py-1 text-neutral-400 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-200 disabled:pointer-events-none disabled:opacity-30';
+  return (
+    <div className="mt-3 flex items-center justify-end gap-3 border-t border-white/5 pt-3 text-xs text-neutral-500">
+      <button type="button" disabled={page <= 1} onClick={() => onPageChange(page - 1)} className={pagerButtonClass}>
+        ‹ Prev
+      </button>
+      <span>
+        {rangeStart}–{rangeEnd} of {totalCount}
+      </span>
+      <button
+        type="button"
+        disabled={page >= pageCount}
+        onClick={() => onPageChange(page + 1)}
+        className={pagerButtonClass}
+      >
+        Next ›
+      </button>
+    </div>
   );
 }
 
