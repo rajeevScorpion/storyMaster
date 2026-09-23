@@ -3,11 +3,12 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-23, evening — decision 15 proven end to end; refund-row defect open)
+## Next session starts here (updated 2026-09-23, night — walk steps 1-6 pass; refund-row fix in; step 7 next)
 
-**State.** Migrations 124-133 applied on dev, none on prod. `payments` is pushed through `429a361`
-(pagination `c0f6bd7`, decisions 15-16 `de4e645` + review fix `8618d8d`, re-run in any status). Gates at
-`429a361`: tsc clean, lint clean, **1,972 tests / 167 files**, `build:verify` compiled.
+**State.** Migrations 124-133 applied on dev, none on prod. `payments` is pushed through `429a361`;
+unpushed on top: the refund-row fix and handoff updates. Gates after the fix: tsc clean, lint clean,
+**1,977 tests / 167 files**, `build:verify` compiled. The billing-incidents dashboard reads Healthy; its four
+amber "stuck top-ups" are the unpaid 2026-09-17 orders and age out to `abandoned` after 7 days.
 
 **Decision 15, dashboard path, 2026-09-23: pass.** Re-running the `refund.processed` event ended
 `sub_TfC9ViXijNEVkZ`: outcome `refund_recorded_subscription_ended`, subscription `cancelled`, and
@@ -21,14 +22,13 @@ across both (orders 19, payments 2, refunds 1, subscriptions 2, webhook events 1
 unpaid. Two stale ones (April, June) were marked `abandoned`. The same cron also cleared a media-retention
 backlog on dev (24 originals, 5 reference sources) on the first run, since crons never run on Preview.
 
-**Open defect, fix before walk step 7: `recordRefund`'s update path (`lib/billing/ledger.ts`) blanks
-fields the webhook doesn't carry.** On a duplicate refund id it writes `reason`, `coin_adjustment_json`
-and `processed_at` unconditionally, as `null` when absent. An in-app refund records the admin's reason and
-the clawback; Razorpay's `refund.created`/`refund.processed` webhooks then land on the same row and null
-both. Nothing reads them back (the admin audit event keeps its own copy), so no money or coins go wrong,
-only the refund row's audit trail. Same path: every re-run moves `processed_at` to the re-run time
-(seen on the test refund: 2026-09-23 15:48, refunded 2026-09-22). Fix: only overwrite fields the caller
-passes, and never move a set `processed_at`.
+**Fixed 2026-09-23 (`d42622b` + review follow-up): `recordRefund`'s update path blanked fields.** When
+several writers hit one refund row (in-app refund, refund webhook, dispute webhook), the second nulled the
+first's `reason`, `coin_adjustment_json` and `payment_id`, and every re-run moved `processed_at`. The
+update now fills only what its caller supplies; `pending` never overwrites a settled status;
+`processed_at` is set once via a guarded update. It also now fills `net_minor`/`tax_minor`, which an
+in-app refund never had. The test refund's `processed_at` (2026-09-23 15:48, refunded 2026-09-22) was
+moved before the fix and is left as is.
 **Related, known, not fixed:** `processRefundEvent` records any non-failed refund event as `processed`,
 so a pending `refund.created` marks the ledger refund and payment refunded early. Test mode processes
 instantly, so the walk won't show it; live mode can.
@@ -61,12 +61,11 @@ no admin-wide view. Fixed by the payments list and a jump bar on the user record
 It matters once billing details are editable. It is recorded as a Phase 5 requirement.
 
 **Do next, in order:**
-1. **Fix the `recordRefund` update path** (open defect above), with tests. Small; one commit.
-2. **Owner: walk step 7** (in-app refund, e.g. of a fresh top-up), after the fix is pushed. Then check
-   the refund row still has the admin's reason and `coin_adjustment_json`. Turn the kill switch off
-   afterwards.
-3. **Owner: the refund policy copy.** It must now also state decisions 15-16.
-4. **Plan Phase 5.** Binding input: `phase-5-owner-requirements.md`, including the Razorpay-window and
+1. **Push `payments`**, then **owner: walk step 7** (in-app refund of a fresh top-up). Then check the
+   refund row keeps the admin's reason, `coin_adjustment_json` and a net/tax split after Razorpay's
+   webhooks land. Turn the kill switch off afterwards.
+2. **Owner: the refund policy copy.** It must now also state decisions 15-16.
+3. **Plan Phase 5.** Binding input: `phase-5-owner-requirements.md`, including the Razorpay-window and
    payment-method notes. The required-field set is a proposal awaiting the owner.
 
 One scope call in Unit C's UI: re-sync is offered only on active, not-cancelling subscriptions, a

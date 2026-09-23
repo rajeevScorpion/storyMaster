@@ -277,8 +277,8 @@ export async function recordRefund(input: RecordRefundInput): Promise<LedgerWrit
   // Admin's in-app refund, Razorpay's refund webhook, and the dispute webhook all converge on the
   // same row here, each carrying only the fields it knows about -- so this fills in whatever the
   // caller supplies instead of blanking the rest with its nulls. status only ever moves forward
-  // (an incoming 'pending' never regresses an already-processed/failed row), and processed_at is
-  // the tax point: it gets its own guarded update below, written once and never moved.
+  // (an incoming 'pending' never regresses an already-processed/failed row), and processed_at gets
+  // its own guarded update below: written once, never moved by a redelivery or an admin re-run.
   const fill: Record<string, unknown> = {
     raw_payload_json: rawPayload,
     updated_at: new Date().toISOString(),

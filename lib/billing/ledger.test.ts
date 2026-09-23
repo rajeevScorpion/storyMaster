@@ -362,6 +362,7 @@ describe('recordRefund', () => {
     expect(updateCalls[0]?.payload).not.toHaveProperty('processed_at');
     expect(updateCalls[1]?.payload).toEqual({ processed_at: '2026-09-23T00:00:00.000Z' });
     expect(updateCalls[1]?.filters).toContainEqual({ method: 'is', args: ['processed_at', null] });
+    expect(updateCalls[1]?.filters).toContainEqual({ method: 'eq', args: ['provider_refund_id', 'rfnd_1'] });
   });
 
   it('leaves payment_id alone on a duplicate when the caller has none to give (a still-unmatched renewal refund)', async () => {
