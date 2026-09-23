@@ -3,7 +3,7 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-23, late — Phase 5 planned)
+## Next session starts here (updated 2026-09-23, late — A-D done, E1 spec ready)
 
 **Phase 5 is planned: `phase-5-plan.md`.** Ten units (0, A-G, M), migration 134 written out in full inside the
 plan (not yet as files). **Seven owner decisions, P1-P7 (plan §3), gate D, E1, F and G.** B, C and the Razorpay
@@ -43,9 +43,27 @@ reaches the customer. Decision 6 (adult attestation, no checkout from kids mode)
   `build:verify` compiled. e2e: 37/38; the one failure is the storyline item below, not Phase 5.
 - **Owner call at 67% usage: no new agents.** The session stopped after A.
 
+**E1 re-planned, 2026-09-23 (usage 79%, owner: plan only, no subagents).** The plan's E1 line numbers
+predated A and D. The new **"E1 execution spec"** in plan §5 is anchored at `7c00672` and is what to execute.
+It adds three things the plan missed:
+- **An unused exported server action, `prepareRazorpayCheckout`, would bypass a route-only kids/attestation
+  gate.** Delete it, and gate inside the internal function.
+- **The prepare route returns raw error text on 500s**, so Razorpay API errors reach the customer.
+  Customer-facing errors become a typed class; everything else gets a generic sentence.
+- **A top-up order goes `failed` on the `payment.failed` webhook and back to `paid` on a successful retry**,
+  so the dismiss poll must not stop on `failed`.
+
+Two scope calls in the spec:
+- A server-side P7 gate ("complete for its type", matching D's client gate).
+- An interim attestation checkbox on `/wallet`, because the server refuses unattested checkouts and E2's
+  sheet isn't built yet. E2 removes it.
+**No Kissago mark image exists** (`public/brand/` absent), so Razorpay's `image` stays omitted until the
+owner supplies one (square PNG, 256px or larger).
+
 **Next session starts with:**
 1. The phase brief.
-2. **E1** (checkout plumbing) and then **E2**, **F** and **G** (plan §9).
+2. **E1**, from the E1 execution spec in plan §5, then **E2**, **F** and **G** (plan §9). Execute it on Sonnet
+   (one agent, one commit), and have Opus review the diff against the spec's "Review focus" list.
 3. If the owner has run **Unit 0** by then, read the new subscription's `subscription.*` webhook rows in
    `billing_webhook_events`, then write `research/11-cycle-end-cancel-probe.md`. They keep the full entity:
    look at `charge_at`, `ended_at`, `has_scheduled_changes` and `change_scheduled_at` after a cycle-end

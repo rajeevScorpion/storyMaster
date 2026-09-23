@@ -15,7 +15,7 @@ Living handoff: `audit-progress.md`. Written by Opus after the money walk passed
 | **C** | `FilterDropdown`: keyboard support for all, `searchable` opt-in. **BUILT `b818493` + review fix `549b40c`** | — | low (28 callers) |
 | **M** | Migration 134: record who asked for a cancellation, and when | — | low |
 | **D** | Billing-details dialog redesign: Personal/Business, sections, inline validation. **BUILT `6a1f661`, diff-reviewed; owner visual review on the Preview pending** | B, C, **P1, P7** | low |
-| **E1** | Checkout plumbing: timing, Razorpay options, failure handling, kids gate, attestation | **P6** | medium |
+| **E1** | Checkout plumbing: timing, Razorpay options, failure handling, kids gate, attestation. **Execution spec re-anchored at `7c00672` (§5 E1); not built** | **P6** | medium |
 | **E2** | Checkout UI: pre-payment summary, branded opening and confirming states | E1 | low |
 | **F** | Settings → Billing at `/account/billing`, with self-serve cancel | A, M, D, E1, **P3, P5** | medium |
 | **G** | Plan comparison page | E2, **P2, P4** | low |
@@ -501,6 +501,179 @@ Rewrite `components/pricing/BillingDetailsDialog.tsx`. Keep its props (`open, pr
      front.
 **Tests:** `checkout-errors.shared.test.ts`. A route test for the kids and attestation refusals, if the prepare
 route has a test harness (check); otherwise test a pure `assertCheckoutAllowed({audienceMode, adultAttested})`.
+
+#### E1 execution spec — re-anchored at `7c00672` (2026-09-23), supersedes the line numbers above
+
+The line numbers above were written at `c95f06a`, before A and D landed. Use these instead. Everything below was checked
+in the code at `7c00672`.
+
+**Current-state facts (checked):**
+- `components/pricing/WalletPage.tsx` is now 1,117 lines. `requestPreparedRazorpayCheckout` is at 192-232,
+  `runPlanCheckout` at 354-402, `handlePlanCheckout` at 404-412, `runTopupCheckout` at 414-445,
+  `handleTopupCheckout` at 447-455, the `<Script>` at 467-474 and `openRazorpayCheckout` at 1021-1116. The
+  options are at 1043-1093, and `payment.failed` → `settleReject(raw description)` is at 1105-1111. Both run
+  functions swallow only the literal `'Razorpay checkout dismissed'` (396, 439).
+- `app/actions/pricing-checkout.ts` is 621 lines. `resolveCheckoutTax` is at 73-130 and already returns
+  `profile` (Unit A). `prepareRazorpayCheckoutInternal` runs 155-406. Subscription: flag 159, auth 163,
+  version/plan 167-169, tax 180-185, snapshot 187-203, RPC 205-210, reused early return 227-242, superseded
+  cancels 244-253, `ensureRazorpayPlanRef` 262, `createRazorpaySubscription` 279-288, order update 299-316,
+  return 318-327. Top-up: pack 330, tax 337-342, `createRazorpayOrder` 345-354, order insert 356-390 (snapshot
+  369-383), return 394-405. `ensureRazorpayPlanRef` is at 536.
+- **`prepareRazorpayCheckout` (148-153) is an exported server action with no caller in the repo.** Every
+  `'use server'` export is a public POST endpoint, so a kids/attestation gate placed only in the route could
+  be bypassed through it. **Delete the wrapper** and put the gate inside `prepareRazorpayCheckoutInternal`.
+- `app/api/billing/razorpay/prepare/route.ts` (49 lines) returns `err.message` verbatim at 41-47 for every
+  status, **500 included**. So a Razorpay API error thrown by `createRazorpayOrder` / `createRazorpaySubscription`
+  reaches the customer as raw provider text. That is defect 4 by another road.
+- There is no test for the prepare route. `app/api/billing/razorpay/verify/route.test.ts` is the harness to
+  copy: it mocks `@/lib/billing/razorpay`, `razorpay-sync`, `supabase/admin` and `supabase/server`.
+- **A top-up order is marked `failed` by the `payment.failed` webhook** (`lib/billing/razorpay-webhook.ts`
+  `processTopupFailureEvent`, 178-200) and flips to `paid` if a retry in the same window succeeds
+  (`settleTopupOrder`, `razorpay-sync.ts:315-325`). So **`failed` on a top-up order is not final** while the
+  window is open or a UPI approval is still in flight.
+- Subscription checkout orders carry the **provider subscription status** (`created` → `authenticated` →
+  `active`, via `nextSubscriptionCheckoutOrderStatus`, `razorpay-sync.ts:47`), plus `preparing`, `failed`,
+  `abandoned`, `superseded`, `refunded`, `partially_refunded` and `disputed`. "Paid" for a subscription means
+  `billing_subscriptions.first_charge_confirmed_at` is set (migration 124).
+- `resolveActiveViewerProfile()` (`lib/viewer-profile/index.ts:83`, server-only) returns `audienceMode:
+  'all' | 'kids'`, and falls back to `'all'` when signed out or on any error.
+- `resolveCheckoutTax` still gates on `state_code` alone (108-110). The client gate became "complete for its
+  type" in D (`WalletPage.tsx:350-352`), so the server is looser than the client.
+- `public/brand/` does not exist. No Kissago mark has been supplied yet.
+- `PreparedRazorpayCheckoutBase` is at `lib/types/pricing.ts:667-674`. `PricingWalletPageData` is at 557, and
+  `getPricingWalletPageData` is at `app/actions/pricing-runtime.ts:210`.
+
+**Edits, in commit order (one commit, or two if the hook extraction is kept separate):**
+
+1. **`lib/billing/checkout-guard.shared.ts`** (new, pure):
+   - `assertCheckoutAllowed({ audienceMode, adultAttested }): CheckoutRefusal | null`. The codes are
+     `'kids_profile'` → "Switch to an adult profile to buy." and `'not_attested'` → "Please confirm you're 18 or
+     older and the one paying."
+   - `class CheckoutRefusalError extends Error { code; httpStatus }`. **Only this class's message is shown to
+     the customer.**
+2. **`app/actions/pricing-checkout.ts`:**
+   - Delete `prepareRazorpayCheckout` (148-153).
+   - `PrepareCheckoutOptions` gains `adultAttested: boolean`, `audienceMode: 'all' | 'kids'` and an optional
+     `timer`.
+   - **Right after the flag check (159), call `assertCheckoutAllowed`.** On a refusal, throw
+     `CheckoutRefusalError` (403). The route resolves `audienceMode` and passes it in, so the pure internal
+     function takes no cookie dependency.
+   - Convert the existing customer-facing throws to `CheckoutRefusalError` with their current wording and the
+     status the route maps today: sign-in 401; "currently unavailable" and "temporarily unavailable" 503;
+     "not purchasable", "not available yet" and "does not belong" 400; "already have a Razorpay subscription"
+     and "already opening" 409; "Pricing changed" 409; "add your billing details" 400; "India only" 400. That
+     retires the substring matching in the route.
+   - **Server P7 gate:** in `resolveCheckoutTax` at 107-110, replace `!profile.state_code` with
+     `!isBillingProfileComplete(toBillingProfileDTO(profile))`. The message becomes "Please complete your
+     billing details before checkout." (400). The client already opens the dialog on the same rule, so only a
+     stale or crafted client sees this.
+   - Add `adultAttestedAt: new Date().toISOString()` to both snapshots: the subscription at 187-203 and the
+     top-up at 369-383.
+   - `PreparedRazorpayCheckoutBase` gains `userPhone: string | null`, from `tax.profile?.phone ?? null`. Unit B
+     stores it normalised as `+91…`. The **reused** early return (232-241) has no `tax`. It already ran
+     `resolveCheckoutTax` at 180, so pass `tax.profile?.phone` there too.
+   - **Timing:** `timer.mark('auth' | 'catalogue' | 'tax' | 'rpc' | 'plan_ref' | 'provider_create' |
+     'order_write')` after each step. Measurement only, no reordering.
+3. **`lib/billing/checkout-timing.shared.ts`** (new, pure):
+   - `createCheckoutTimer(now = () => performance.now())` returns `{ mark(step), entries(),
+     toServerTiming() }`.
+   - `toServerTiming()` gives `auth;dur=12.3, catalogue;dur=…`.
+   - Unit-test it with an injected clock.
+4. **`app/api/billing/razorpay/prepare/route.ts`:**
+   - Body: `{ input, pricingMarketKey?, adultAttested?: boolean }`. A missing value counts as `false`.
+   - `audienceMode = (await resolveActiveViewerProfile()).audienceMode`.
+   - On success, set `Server-Timing` and log one line: `console.info('[checkout-timing]', { kind, reused,
+     internalOrderId, steps })`. Nothing else goes in it: no user id, no provider ids.
+     `prepareRazorpayCheckoutInternal` returns `reused` on the result, and the client ignores it.
+   - Errors: a `CheckoutRefusalError` returns its message and status. **Anything else returns 500 with "We
+     couldn't start checkout. Please try again in a moment."** The full error stays in the existing
+     `console.error`.
+   - The log currently includes `input`, which is fine: plan and pack ids only.
+5. **`lib/billing/checkout-errors.shared.ts`** (new, pure):
+   - `describeCheckoutFailure(error: { code?, reason?, source?, step? } | null): string` maps Razorpay's
+     `reason` values to Kissago sentences:
+     - `payment_cancelled` / `payment_dismissed` → "You cancelled the payment. You haven't been charged."
+     - `insufficient_funds`, `card_declined`, `incorrect_card_details` / `incorrect_otp` / `payment_timed_out`,
+       and `authentication_failed` each get their own sentence.
+     - Anything else gets the plan's default: "That payment didn't go through, and you haven't been charged
+       for it. You can try again."
+   - **Never interpolate `description`.**
+   - Test every mapped reason, plus the default, plus the rule that a `description` string never appears in
+     the output.
+6. **`app/actions/billing-account.ts`** (new, `'use server'`, functions only):
+   `getMyCheckoutStatus(internalOrderId): Promise<{ state: 'open' | 'confirming' | 'paid' | 'failed' |
+   'abandoned' }>`. It authenticates, then uses the admin client with `.eq('id', …).eq('user_id', auth.userId)`.
+   A missing row returns `abandoned`, so an unknown id leaks nothing. Put the mapping in
+   `lib/billing/checkout-status.shared.ts` as a pure `checkoutStateFromOrder({ orderType, status,
+   firstChargeConfirmedAt })`:
+   - **top-up:** `paid`, `refunded*` and `disputed` → `paid`. `failed` → `failed`, **which the client treats
+     as not final while it is still polling** (see the facts above). `abandoned` and `superseded` →
+     `abandoned`. Anything else → `open`.
+   - **subscription:** `first_charge_confirmed_at` set → `paid`. `authenticated`, `active`, `pending` →
+     `confirming`. `failed`, `halted`, `cancelled` → `failed`. `abandoned`, `superseded`, `expired` →
+     `abandoned`. `preparing`, `created` → `open`.
+   - Test the table.
+7. **`components/pricing/checkout/useRazorpayCheckout.ts`** (new, `'use client'`). Move
+   `requestPreparedRazorpayCheckout` and `openRazorpayCheckout` here verbatim first, then change them:
+   - Export `startRazorpayCheckout({ input, pricingMarketKey, adultAttested }): Promise<CheckoutOutcome>`.
+     `CheckoutOutcome` is `{ kind: 'success', message }`, `{ kind: 'confirming' }`, `{ kind: 'failed',
+     message }` or `{ kind: 'dismissed' }`. **It no longer rejects for dismissal**; it rejects only for prepare
+     errors, whose message is now always safe.
+   - Options add `prefill.contact: userPhone ?? undefined`, `theme.backdrop_color: '#0a0a0a'` and
+     `modal.confirm_close: true`. Add `image` **only if** `public/brand/kissago-checkout-mark.png` exists at
+     build time. The owner hasn't supplied it, so leave `image` out. There is a TODO in the plan, not in the
+     code.
+   - `payment.failed` stores `lastFailure = event.error` and **does not settle**.
+   - `handler`: runs verify as today. On `ok`, it resolves `success` with the server message (already
+     sanitised). On a non-ok verify, it resolves `failed` with `describeCheckoutFailure(null)`; it never uses
+     `payload.error` raw. **Exception:** keep verify's own 409/402 sentences, which are ours. Map by status,
+     not by trusting text.
+   - `ondismiss`: poll `getMyCheckoutStatus` every 2s for up to 20s.
+     - `paid` → `success` ("Payment received. It's being applied to your account.").
+     - `confirming` → `confirming`.
+     - At the timeout: if a failure was recorded, `failed` with `describeCheckoutFailure(lastFailure)`. If
+       there was none and the state is `open`, `dismissed`. Otherwise `confirming`.
+     - A `failed` top-up state during the poll is **not** a stop condition.
+   - Export the hook as `useRazorpayCheckout()`, which returns `{ ready, start }` and owns the `<Script>`'s
+     `ready` flag through a `RazorpayScript` component. Keep it a plain function plus a thin component if the
+     hook adds nothing. E2 builds `CheckoutProgress` on the outcome type, so its shape matters more than its
+     wrapper.
+8. **`WalletPage.tsx`:** import from the hook file and delete the moved code (192-232, 1021-1116).
+   `runPlanCheckout` and `runTopupCheckout` switch on `CheckoutOutcome`:
+   - `success` → the status banner plus the existing refreshes;
+   - `confirming` → the status banner "Payment received. We're confirming it. This can take a few minutes with
+     UPI, and it applies automatically.";
+   - `failed` → the error banner with the mapped copy;
+   - `dismissed` → nothing.
+   The two `'Razorpay checkout dismissed'` string checks go away.
+9. **The interim attestation checkbox (a scope call; E2 moves it).** The server refuses `adultAttested:
+   false`, and E2's summary sheet doesn't exist yet. So E1 adds one checkbox row to `WalletPage` above the
+   plans section, with the P6 wording ("I'm 18 or older and I'm the one paying for this purchase.") and links
+   to Terms and the Refund Policy. **Every buy button is disabled until it's ticked.** It is not persisted. E2
+   deletes it when the sheet takes over. Without it, checkout on the Preview is broken between E1 and E2.
+10. **Kids up front:**
+    - `PricingWalletPageData` gains `audienceMode`, and `getPricingWalletPageData` (`pricing-runtime.ts:210`)
+      sets it from `resolveActiveViewerProfile()`.
+    - In kids mode, `WalletPage` replaces the buy buttons with one line, "Switch to an adult profile to buy
+      plans or coins.", and hides the checkbox.
+
+**Tests (new):**
+- `checkout-guard.shared.test.ts`, `checkout-errors.shared.test.ts`, `checkout-status.shared.test.ts` and
+  `checkout-timing.shared.test.ts`.
+- `app/api/billing/razorpay/prepare/route.test.ts`, modelled on the verify harness. It also mocks
+  `@/lib/viewer-profile` and `@/app/actions/pricing-checkout`'s internals. It covers:
+  - kids → 403;
+  - unattested or missing `adultAttested` → 403;
+  - a `CheckoutRefusalError` → its status and message;
+  - an arbitrary `Error('Razorpay: BAD_REQUEST_ERROR …')` → 500 with the generic sentence;
+  - success → a `Server-Timing` header.
+
+**Verify:** tsc, lint, `npm test` and `build:verify`, then e2e (only `/wallet`'s header smoke touches this).
+Signed-in behaviour is unit tests plus the owner's walk steps 12-14. **Review focus for Opus:**
+- no provider text reaches any customer-visible string;
+- the gate sits inside the internal function;
+- the dismiss poll can't report `failed` for a top-up that later turns `paid`;
+- `WalletPage` still reopens the billing dialog on an incomplete profile.
 
 ### Unit E2 — checkout UI (Sonnet; the owner reviews on the Preview)
 
