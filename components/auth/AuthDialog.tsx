@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { motion, useReducedMotion } from 'motion/react';
 import { KeyRound, Loader2, Mail, Sparkles, UserPlus, X } from 'lucide-react';
 
 import Checkbox from '@/components/ui/Checkbox';
+import DialogGlow from '@/components/ui/DialogGlow';
 import Modal from '@/components/ui/Modal';
 import LegalDocumentModal from '@/components/legal/LegalDocumentModal';
 
@@ -61,7 +61,6 @@ export default function AuthDialog({
   const [openLegalDoc, setOpenLegalDoc] = useState<'terms' | 'privacy_policy' | null>(null);
   const [feedback, setFeedback] = useState<AuthActionResult | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const prefersReducedMotion = useReducedMotion();
   const tabRefs = useRef<Record<AuthDialogMode, HTMLButtonElement | null>>({
     sign_in: null,
     sign_up: null,
@@ -186,22 +185,7 @@ export default function AuthDialog({
   return (
     <>
       <Modal isOpen={isOpen} onClose={handleClose} ariaLabel={header.title} showCloseButton={false}>
-        <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-[28px]">
-          <div className="absolute -top-20 left-10 h-44 w-44 rounded-full bg-emerald-500/10 blur-3xl" />
-          <div className="absolute bottom-0 right-0 h-40 w-40 rounded-full bg-indigo-500/10 blur-3xl" />
-          <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-white/[0.06] to-transparent" />
-          {!prefersReducedMotion && (
-            <motion.div
-              className="absolute -inset-1 rounded-[28px]"
-              style={{
-                background:
-                  'radial-gradient(60% 60% at 20% 0%, rgba(52,211,153,0.16), transparent 70%), radial-gradient(50% 50% at 100% 100%, rgba(99,102,241,0.14), transparent 70%)',
-              }}
-              animate={{ opacity: [0.6, 1, 0.6] }}
-              transition={{ duration: 20, repeat: Infinity, ease: 'easeInOut' }}
-            />
-          )}
-        </div>
+        <DialogGlow />
 
         <div className="relative space-y-6">
           <div className="flex items-start justify-between gap-4">

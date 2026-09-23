@@ -13,6 +13,7 @@ import BillingDetailsDialog from '@/components/pricing/BillingDetailsDialog';
 import { RAZORPAY_CHECKOUT_SCRIPT_URL } from '@/lib/billing/razorpay-shared';
 import { formatPriceWithTaxLine } from '@/lib/billing/wallet-tax.shared';
 import { indiaStateName } from '@/lib/billing/india-states.shared';
+import { isBillingProfileComplete } from '@/lib/billing/billing-profile.shared';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { PRICING_RUNTIME_REFRESH_EVENT } from '@/lib/pricing/runtime-events';
 import { getPricingWalletPageData } from '@/app/actions/pricing-runtime';
@@ -252,6 +253,10 @@ export default function WalletPage() {
   const [checkoutBusyKey, setCheckoutBusyKey] = useState<string | null>(null);
   const [razorpayReady, setRazorpayReady] = useState(false);
   const [billingDialogOpen, setBillingDialogOpen] = useState(false);
+  // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit D): the dialog's submit label and
+  // "future invoices" line depend on whether it opened to unblock a pending checkout or from the
+  // wallet's own billing-details row.
+  const [billingDialogContext, setBillingDialogContext] = useState<'checkout' | 'manage'>('manage');
   const [pendingCheckoutAction, setPendingCheckoutAction] = useState<(() => void) | null>(null);
 
   useEffect(() => {
@@ -339,9 +344,12 @@ export default function WalletPage() {
 
   // Payments Phase 2, Unit B2a: once a tax rule is published, checkout requires a declared billing
   // state (the GST place of supply). Both checkout handlers below gate on this before they ever call
-  // requestPreparedRazorpayCheckout.
+  // requestPreparedRazorpayCheckout. Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit D,
+  // owner decision P7): "has a state" isn't enough any more -- an old profile saved under the looser
+  // rules can be missing phone, city or PIN, so the gate is "complete for its type".
   const requiresBillingDetails =
-    Boolean(walletData?.taxPreview?.requiresBillingState) && !walletData?.billingProfile?.stateCode;
+    Boolean(walletData?.taxPreview?.requiresBillingState) &&
+    !isBillingProfileComplete(walletData?.billingProfile ?? null);
 
   const runPlanCheckout = useCallback(async (offer: PricingPlanOfferCard) => {
     const planVersionId = getSelectedPlanVersionId(offer, selectedPlanInterval);
@@ -396,6 +404,7 @@ export default function WalletPage() {
   const handlePlanCheckout = useCallback((offer: PricingPlanOfferCard) => {
     if (requiresBillingDetails) {
       setPendingCheckoutAction(() => () => void runPlanCheckout(offer));
+      setBillingDialogContext('checkout');
       setBillingDialogOpen(true);
       return;
     }
@@ -438,6 +447,7 @@ export default function WalletPage() {
   const handleTopupCheckout = useCallback((topupPackId: string, packKey: string, provider: string | null) => {
     if (requiresBillingDetails) {
       setPendingCheckoutAction(() => () => void runTopupCheckout(topupPackId, packKey, provider));
+      setBillingDialogContext('checkout');
       setBillingDialogOpen(true);
       return;
     }
@@ -479,6 +489,7 @@ export default function WalletPage() {
       <BillingDetailsDialog
         open={billingDialogOpen}
         profile={walletData?.billingProfile ?? null}
+        context={billingDialogContext}
         onClose={() => {
           setBillingDialogOpen(false);
           setPendingCheckoutAction(null);
@@ -634,7 +645,10 @@ export default function WalletPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setBillingDialogOpen(true)}
+                  onClick={() => {
+                    setBillingDialogContext('manage');
+                    setBillingDialogOpen(true);
+                  }}
                   className="cursor-pointer rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-neutral-300 transition-all duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/10 hover:text-neutral-100"
                 >
                   {walletData.billingProfile ? 'Edit' : 'Add billing details'}
