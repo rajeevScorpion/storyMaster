@@ -3,12 +3,19 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-23, night — walk steps 1-6 pass; refund-row fix in; step 7 next)
+## Next session starts here (updated 2026-09-23, night — money walk steps 1-7 all pass)
 
-**State.** Migrations 124-133 applied on dev, none on prod. `payments` is pushed through `429a361`;
-unpushed on top: the refund-row fix and handoff updates. Gates after the fix: tsc clean, lint clean,
+**State.** Migrations 124-133 applied on dev, none on prod. `payments` is pushed through `27cdd32`
+(the refund-row fix). Gates at `27cdd32`: tsc clean, lint clean,
 **1,977 tests / 167 files**, `build:verify` compiled. The billing-incidents dashboard reads Healthy; its four
 amber "stuck top-ups" are the unpaid 2026-09-17 orders and age out to `abandoned` after 7 days.
+
+**Walk step 7, 2026-09-23: pass (in-app refund, on `27cdd32`).** A ₹1,003 top-up (₹850 + ₹153 GST,
+24 beats) refunded from the admin record. Audit: `payment_refunded` then `coins_clawed_back` −24 beats,
+grant left at 0. Razorpay's `refund.created` and `refund.processed` both processed. The refund row kept
+`initiated_by = admin`, the reason, `coin_adjustment_json` and the actor, and gained the net/tax split
+from the webhook. `processed_at` was set once and not moved by the second webhook. Payment `refunded`.
+This is the refund-row fix proven live. **Owner: turn `billing_admin_actions_enabled` off** (walk done).
 
 **Decision 15, dashboard path, 2026-09-23: pass.** Re-running the `refund.processed` event ended
 `sub_TfC9ViXijNEVkZ`: outcome `refund_recorded_subscription_ended`, subscription `cancelled`, and
@@ -61,9 +68,7 @@ no admin-wide view. Fixed by the payments list and a jump bar on the user record
 It matters once billing details are editable. It is recorded as a Phase 5 requirement.
 
 **Do next, in order:**
-1. **Push `payments`**, then **owner: walk step 7** (in-app refund of a fresh top-up). Then check the
-   refund row keeps the admin's reason, `coin_adjustment_json` and a net/tax split after Razorpay's
-   webhooks land. Turn the kill switch off afterwards.
+1. **Owner: turn `billing_admin_actions_enabled` off.** Optional: walk step 8 (account deletion).
 2. **Owner: the refund policy copy.** It must now also state decisions 15-16.
 3. **Plan Phase 5.** Binding input: `phase-5-owner-requirements.md`, including the Razorpay-window and
    payment-method notes. The required-field set is a proposal awaiting the owner.
