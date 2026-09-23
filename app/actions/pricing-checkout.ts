@@ -14,7 +14,10 @@ import { redactRazorpayPayload } from '@/lib/billing/razorpay-redact.shared';
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import { getPublishedTaxRule } from '@/lib/billing/tax-rules';
 import { computeTax, type TaxBreakdown } from '@/lib/billing/tax.shared';
-import { buildCustomerSnapshot, loadBillingProfile } from '@/lib/billing/billing-profile';
+import { buildCustomerSnapshot, loadBillingProfile, toBillingProfileDTO } from '@/lib/billing/billing-profile';
+import { isBillingProfileComplete } from '@/lib/billing/billing-profile.shared';
+import { assertCheckoutAllowed, CheckoutRefusalError } from '@/lib/billing/checkout-guard.shared';
+import type { CheckoutTimer } from '@/lib/billing/checkout-timing.shared';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import type {
@@ -31,6 +34,16 @@ import type {
 
 interface PrepareCheckoutOptions {
   pricingMarketKey?: PricingMarketKey | null;
+  /** Owner decision P6: required on every checkout attempt, checked by `assertCheckoutAllowed` before
+   * any auth or database work. The route reads this from the request body (a missing value counts as
+   * `false`); there is no other caller. */
+  adultAttested: boolean;
+  /** From `resolveActiveViewerProfile()` -- resolved by the route (a cookie-bearing, server-only call)
+   * and passed in here so this stays a pure function of its arguments. */
+  audienceMode: 'all' | 'kids';
+  /** Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1): measurement only -- see
+   * checkout-timing.shared.ts. Optional so the unit tests that don't care about timing can omit it. */
+  timer?: CheckoutTimer;
 }
 
 interface BillingBeginSubscriptionCheckoutRow {
@@ -93,7 +106,11 @@ async function resolveCheckoutTax(input: {
   }
 
   if (ruleResult.status === 'not_found') {
-    throw new Error('Checkout is temporarily unavailable while tax rules are being configured. Please try again shortly.');
+    throw new CheckoutRefusalError(
+      'Checkout is temporarily unavailable while tax rules are being configured. Please try again shortly.',
+      'tax_rules_unavailable',
+      503
+    );
   }
 
   const profileResult = await loadBillingProfile(input.supabase, input.userId);
@@ -101,12 +118,16 @@ async function resolveCheckoutTax(input: {
   // The tax-rule table and billing_profiles come from the same migration (125), so this should be
   // unreachable in practice -- but a partially-applied migration must still refuse, not under-charge.
   if (profileResult.status === 'unavailable') {
-    throw new Error('Checkout is temporarily unavailable. Please try again shortly.');
+    throw new CheckoutRefusalError('Checkout is temporarily unavailable. Please try again shortly.', 'billing_schema_unavailable', 503);
   }
 
   const profile = profileResult.profile;
-  if (!profile || !profile.state_code) {
-    throw new Error('Please add your billing details (state) before checkout.');
+  // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, owner-approved 2026-09-24, P7): "has a
+  // state" is no longer enough -- a profile saved under the old rules can be missing phone, city or
+  // PIN. The client already opens the billing dialog on the same isBillingProfileComplete rule
+  // (WalletPage.tsx), so only a stale or crafted client ever reaches this refusal.
+  if (!profile || !isBillingProfileComplete(toBillingProfileDTO(profile))) {
+    throw new CheckoutRefusalError('Please complete your billing details before checkout.', 'billing_details_incomplete', 400);
   }
 
   const result = computeTax({
@@ -145,22 +166,31 @@ function taxSnapshotFields(tax: CheckoutTaxContext) {
   };
 }
 
-export async function prepareRazorpayCheckout(
-  input: PrepareRazorpayCheckoutInput,
-  options: PrepareCheckoutOptions = {}
-): Promise<PreparedRazorpayCheckout> {
-  return prepareRazorpayCheckoutInternal(input, options);
-}
-
+/**
+ * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, defect 8): the whole checkout surface
+ * runs through this one function, called only from app/api/billing/razorpay/prepare/route.ts. There is
+ * deliberately no thin `'use server'`-exported wrapper any more -- every `'use server'` export is a
+ * public POST endpoint, and the previous wrapper (`prepareRazorpayCheckout`) had no caller in the repo,
+ * so a kids/attestation gate placed only in the route could have been bypassed straight through it.
+ */
 export async function prepareRazorpayCheckoutInternal(
   input: PrepareRazorpayCheckoutInput,
-  options: PrepareCheckoutOptions = {}
+  options: PrepareCheckoutOptions
 ): Promise<PreparedRazorpayCheckout> {
   if (!(await getFeatureFlag('pricing_checkout_enabled', false))) {
-    throw new Error('Checkout is currently unavailable');
+    throw new CheckoutRefusalError('Checkout is currently unavailable', 'checkout_disabled', 503);
   }
 
+  // Owner decision P6, right after the flag check and before any auth or database work: a kids
+  // profile or a missing attestation refuses immediately, with no side effects to unwind.
+  const refusal = assertCheckoutAllowed({ audienceMode: options.audienceMode, adultAttested: options.adultAttested });
+  if (refusal) {
+    throw new CheckoutRefusalError(refusal.message, refusal.code, 403);
+  }
+
+  const timer = options.timer;
   const auth = await getAuthenticatedUser();
+  timer?.mark('auth');
   const supabase = createAdminClient();
 
   if (input.kind === 'subscription') {
@@ -169,12 +199,17 @@ export async function prepareRazorpayCheckoutInternal(
     const plan = await loadPlanById(supabase, version.plan_id);
 
     if (plan.plan_key === 'free' || version.price_minor <= 0) {
-      throw new Error('This plan is not purchasable');
+      throw new CheckoutRefusalError('This plan is not purchasable', 'not_purchasable', 400);
     }
 
     if (version.provider === 'razorpay' && version.billing_interval === 'annual') {
-      throw new Error('Yearly checkout is not available yet for the India market. Please use a monthly plan while we test monthly refills end to end.');
+      throw new CheckoutRefusalError(
+        'Yearly checkout is not available yet for the India market. Please use a monthly plan while we test monthly refills end to end.',
+        'annual_unavailable',
+        400
+      );
     }
+    timer?.mark('catalogue');
 
     const providerMode = getRazorpayMode();
     const tax = await resolveCheckoutTax({
@@ -183,6 +218,7 @@ export async function prepareRazorpayCheckoutInternal(
       appliesTo: 'subscription',
       netMinor: version.price_minor,
     });
+    timer?.mark('tax');
 
     const snapshot = {
       kind: 'subscription',
@@ -200,6 +236,10 @@ export async function prepareRazorpayCheckoutInternal(
       // checkout time -- the ledger's recordPayment fills this into the payment row once and never
       // rewrites it, so a later profile edit never reaches a past charge.
       customer: buildCustomerSnapshot(tax.profile),
+      // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, owner decision P6): the gate above
+      // already confirmed adultAttested is true, so this is always "now" -- recorded per purchase, not
+      // on the profile, per the owner's decision to avoid a migration for it.
+      adultAttestedAt: new Date().toISOString(),
     };
 
     const beginResult = await supabase.rpc('billing_begin_subscription_checkout', {
@@ -210,6 +250,7 @@ export async function prepareRazorpayCheckoutInternal(
     });
 
     throwIfQueryFailed(beginResult.error, 'Failed to begin subscription checkout');
+    timer?.mark('rpc');
 
     const beginRow = (beginResult.data?.[0] ?? null) as BillingBeginSubscriptionCheckoutRow | null;
     if (!beginRow) {
@@ -217,11 +258,15 @@ export async function prepareRazorpayCheckoutInternal(
     }
 
     if (beginRow.blocked_reason === 'subscription_exists') {
-      throw new Error('You already have a Razorpay subscription in progress. Subscription changes will stay manual until account management is live.');
+      throw new CheckoutRefusalError(
+        'You already have a Razorpay subscription in progress. Subscription changes will stay manual until account management is live.',
+        'subscription_exists',
+        409
+      );
     }
 
     if (beginRow.blocked_reason === 'checkout_in_progress') {
-      throw new Error('A checkout is already opening in another tab');
+      throw new CheckoutRefusalError('A checkout is already opening in another tab', 'checkout_in_progress', 409);
     }
 
     if (beginRow.reused) {
@@ -238,6 +283,8 @@ export async function prepareRazorpayCheckoutInternal(
         description: `${plan.name} plan · ${labelInterval(version.billing_interval)}`,
         userName: auth.userName,
         userEmail: auth.userEmail,
+        userPhone: tax.profile?.phone ?? null,
+        reused: true,
       };
     }
 
@@ -260,6 +307,7 @@ export async function prepareRazorpayCheckoutInternal(
     let subscription: RazorpaySubscription;
     try {
       const planRef = await ensureRazorpayPlanRef(supabase, version, plan, providerMode, tax.grossMinor);
+      timer?.mark('plan_ref');
 
       if (planRef.reused && planRef.grossMinor === null && tax.taxMinor > 0) {
         // 125 applied but 126 not: tax is being charged, yet the plan cache is still keyed on mode
@@ -267,13 +315,17 @@ export async function prepareRazorpayCheckoutInternal(
         // this order records the gross. A freshly created plan is fine -- it was created at the
         // gross just quoted -- so only reuse is refused. The two migrations are meant to be applied
         // together (docs/payments/audit-progress.md).
-        throw new Error('Subscription checkout is temporarily unavailable pending a database update. Please try again shortly.');
+        throw new CheckoutRefusalError(
+          'Subscription checkout is temporarily unavailable pending a database update. Please try again shortly.',
+          'plan_ref_stale',
+          503
+        );
       }
 
       if (planRef.grossMinor !== null && planRef.grossMinor !== tax.grossMinor) {
         // A concurrent request created/reused a plan at a different gross (e.g. a rate change mid-flight).
         // Refuse rather than charge a subscription at an amount that doesn't match what we just quoted.
-        throw new Error('Pricing changed while preparing checkout. Please try again.');
+        throw new CheckoutRefusalError('Pricing changed while preparing checkout. Please try again.', 'pricing_changed', 409);
       }
 
       subscription = await createRazorpaySubscription({
@@ -286,6 +338,7 @@ export async function prepareRazorpayCheckoutInternal(
           pricing_market_key: version.pricing_market_key,
         },
       });
+      timer?.mark('provider_create');
     } catch (err) {
       const failUpdate = await supabase
         .from('billing_orders')
@@ -314,6 +367,7 @@ export async function prepareRazorpayCheckoutInternal(
       .eq('id', orderId);
 
     throwIfQueryFailed(orderUpdateResult.error, 'Failed to update subscription checkout order');
+    timer?.mark('order_write');
 
     return {
       kind: 'subscription',
@@ -324,14 +378,17 @@ export async function prepareRazorpayCheckoutInternal(
       description: `${plan.name} plan · ${labelInterval(version.billing_interval)}`,
       userName: auth.userName,
       userEmail: auth.userEmail,
+      userPhone: tax.profile?.phone ?? null,
+      reused: false,
     };
   }
 
   const topup = await loadTopupPackForCheckout(supabase, input.topupPackId, options.pricingMarketKey ?? null);
   await assertBetaMarketAllowed(topup.pricing_market_key);
   if (topup.price_minor <= 0) {
-    throw new Error('This coin pack is not purchasable');
+    throw new CheckoutRefusalError('This coin pack is not purchasable', 'not_purchasable', 400);
   }
+  timer?.mark('catalogue');
 
   const providerMode = getRazorpayMode();
   const tax = await resolveCheckoutTax({
@@ -340,6 +397,7 @@ export async function prepareRazorpayCheckoutInternal(
     appliesTo: 'topup',
     netMinor: topup.price_minor,
   });
+  timer?.mark('tax');
 
   const receipt = `kissago_${topup.pack_key}_${Date.now()}`;
   const order = await createRazorpayOrder({
@@ -352,6 +410,7 @@ export async function prepareRazorpayCheckoutInternal(
       pricing_market_key: topup.pricing_market_key,
     },
   });
+  timer?.mark('provider_create');
 
   const orderInsertResult = await supabase
     .from('billing_orders')
@@ -380,6 +439,9 @@ export async function prepareRazorpayCheckoutInternal(
         // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): see the matching comment on
         // the subscription snapshot above.
         customer: buildCustomerSnapshot(tax.profile),
+        // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, owner decision P6): see the
+        // matching comment on the subscription snapshot above.
+        adultAttestedAt: new Date().toISOString(),
       },
       raw_provider_payload_json: redactRazorpayPayload({
         kind: 'topup',
@@ -390,6 +452,7 @@ export async function prepareRazorpayCheckoutInternal(
     .single();
 
   throwIfQueryFailed(orderInsertResult.error, 'Failed to create top-up checkout order');
+  timer?.mark('order_write');
 
   return {
     kind: 'topup',
@@ -402,12 +465,14 @@ export async function prepareRazorpayCheckoutInternal(
     description: topup.name,
     userName: auth.userName,
     userEmail: auth.userEmail,
+    userPhone: tax.profile?.phone ?? null,
+    reused: false,
   };
 }
 
 async function assertBetaMarketAllowed(pricingMarketKey: PricingMarketKey): Promise<void> {
   if (pricingMarketKey !== 'IN' && await getFeatureFlag('pricing_india_only_beta_enabled', true)) {
-    throw new Error('Kissago paid beta checkout is currently available in India only.');
+    throw new CheckoutRefusalError('Kissago paid beta checkout is currently available in India only.', 'market_restricted', 400);
   }
 }
 
@@ -423,7 +488,7 @@ async function getAuthenticatedUser(): Promise<{
   } = await supabase.auth.getUser();
 
   if (error || !user) {
-    throw new Error('Please sign in before starting checkout');
+    throw new CheckoutRefusalError('Please sign in before starting checkout', 'sign_in_required', 401);
   }
 
   return {
@@ -456,11 +521,11 @@ async function loadPlanVersionForCheckout(
 
   const version = (result.data ?? null) as DbPricingPlanVersion | null;
   if (!version) {
-    throw new Error('This plan checkout is not available yet');
+    throw new CheckoutRefusalError('This plan checkout is not available yet', 'plan_version_unavailable', 400);
   }
 
   if (pricingMarketKey && version.pricing_market_key !== pricingMarketKey) {
-    throw new Error('This plan does not belong to the selected market');
+    throw new CheckoutRefusalError('This plan does not belong to the selected market', 'market_mismatch', 400);
   }
 
   return version;
@@ -503,11 +568,11 @@ async function loadTopupPackForCheckout(
 
   const topup = (result.data ?? null) as DbPricingTopupPack | null;
   if (!topup) {
-    throw new Error('This top-up is not available yet');
+    throw new CheckoutRefusalError('This top-up is not available yet', 'topup_unavailable', 400);
   }
 
   if (pricingMarketKey && topup.pricing_market_key !== pricingMarketKey) {
-    throw new Error('This coin pack does not belong to the selected market');
+    throw new CheckoutRefusalError('This coin pack does not belong to the selected market', 'market_mismatch', 400);
   }
 
   return topup;

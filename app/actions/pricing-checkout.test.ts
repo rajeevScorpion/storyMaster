@@ -256,6 +256,10 @@ function taxAvailable(rule: Record<string, unknown> = fakeTaxRule()) {
   getPublishedTaxRuleMock.mockResolvedValueOnce({ status: 'ok', rule } as any);
 }
 
+// Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, P7): resolveCheckoutTax now gates on
+// isBillingProfileComplete, not just a declared state, so this fixture has to satisfy the full
+// Personal required set (billing-profile.shared.ts's validateBillingProfile) or every tax test below
+// would start failing on "Please complete your billing details" instead of exercising tax math.
 function billingProfileWithState(stateCode = '24') {
   loadBillingProfileMock.mockResolvedValueOnce({
     status: 'ok',
@@ -263,16 +267,16 @@ function billingProfileWithState(stateCode = '24') {
       id: 'bp-1',
       user_id: 'user-1',
       legal_name: 'Jane Doe',
-      billing_email: null,
-      phone: null,
+      billing_email: 'jane@example.com',
+      phone: '+919876543210',
       company_name: null,
       gstin: null,
       state_code: stateCode,
       country_code: 'IN',
       address_line_1: null,
       address_line_2: null,
-      city: null,
-      postal_code: null,
+      city: 'Ahmedabad',
+      postal_code: '380001',
       created_at: '2026-01-01T00:00:00.000Z',
       updated_at: '2026-01-01T00:00:00.000Z',
     },
@@ -301,12 +305,65 @@ describe('prepareRazorpayCheckoutInternal — kill switch', () => {
     getFeatureFlagMock.mockResolvedValueOnce(false);
 
     await expect(
-      prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' })
+      prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      )
     ).rejects.toThrow('Checkout is currently unavailable');
 
     expect(createAdminClientMock).not.toHaveBeenCalled();
     expect(createRazorpaySubscriptionMock).not.toHaveBeenCalled();
     expect(createRazorpayOrderMock).not.toHaveBeenCalled();
+  });
+});
+
+// Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, owner decision P6, defect 8): the gate
+// runs against the REAL assertCheckoutAllowed here (only 'server-only', supabase and the Razorpay/tax
+// modules are mocked above) -- proving the refusal lives inside prepareRazorpayCheckoutInternal itself,
+// not only in the route that calls it.
+describe('prepareRazorpayCheckoutInternal — kids and attestation gate (owner decision P6)', () => {
+  it('refuses a kids viewer profile before touching auth or the database', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+
+    await expect(
+      prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'kids' }
+      )
+    ).rejects.toThrow('Switch to an adult profile to buy.');
+
+    expect(createClientMock).not.toHaveBeenCalled();
+    expect(createAdminClientMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unattested purchase before touching auth or the database', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+
+    await expect(
+      prepareRazorpayCheckoutInternal(
+        { kind: 'topup', topupPackId: 'pack-1' },
+        { adultAttested: false, audienceMode: 'all' }
+      )
+    ).rejects.toThrow("Please confirm you're 18 or older and the one paying.");
+
+    expect(createClientMock).not.toHaveBeenCalled();
+    expect(createAdminClientMock).not.toHaveBeenCalled();
+  });
+
+  it('proceeds once attested and not a kids profile', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_topup_packs', 'select', { data: fakeTopupPackRow(), error: null });
+    createRazorpayOrderMock.mockResolvedValueOnce({ id: 'order_rzp_1', amount: 500, currency: 'INR', receipt: null, status: 'created', notes: {} });
+    enqueue('billing_orders', 'insert', { data: { id: 'order-1' }, error: null });
+
+    await expect(
+      prepareRazorpayCheckoutInternal(
+        { kind: 'topup', topupPackId: 'pack-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      )
+    ).resolves.toMatchObject({ kind: 'topup', internalOrderId: 'order-1' });
   });
 });
 
@@ -323,7 +380,10 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout', () => {
     });
 
     await expect(
-      prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' })
+      prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      )
     ).rejects.toThrow('already have a Razorpay subscription in progress');
 
     expect(createRazorpaySubscriptionMock).not.toHaveBeenCalled();
@@ -341,7 +401,10 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout', () => {
     });
 
     await expect(
-      prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' })
+      prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      )
     ).rejects.toThrow('A checkout is already opening in another tab');
 
     expect(createRazorpaySubscriptionMock).not.toHaveBeenCalled();
@@ -358,12 +421,19 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout', () => {
       error: null,
     });
 
-    const result = await prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' });
+    const result = await prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      );
 
     expect(result).toMatchObject({
       kind: 'subscription',
       internalOrderId: 'order-existing',
       razorpaySubscriptionId: 'sub_existing',
+      // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1): the reused early return still
+      // carries userPhone/reused -- tax was already resolved before the RPC call either way.
+      userPhone: null,
+      reused: true,
     });
     expect(createRazorpaySubscriptionMock).not.toHaveBeenCalled();
     expect(createRazorpayPlanMock).not.toHaveBeenCalled();
@@ -391,7 +461,10 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout', () => {
     createRazorpaySubscriptionMock.mockResolvedValueOnce(fakeRazorpaySubscription());
     enqueue('billing_orders', 'update', { data: null, error: null });
 
-    const result = await prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' });
+    const result = await prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      );
 
     expect(cancelRazorpaySubscriptionMock).toHaveBeenCalledTimes(2);
     expect(cancelRazorpaySubscriptionMock).toHaveBeenCalledWith({ subscriptionId: 'sub_old_1', atCycleEnd: false });
@@ -423,7 +496,10 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout', () => {
     createRazorpaySubscriptionMock.mockResolvedValueOnce(fakeRazorpaySubscription());
     enqueue('billing_orders', 'update', { data: null, error: null });
 
-    await prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' });
+    await prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      );
 
     expect(createRazorpayPlanMock).toHaveBeenCalledTimes(1);
     expect(createRazorpaySubscriptionMock).toHaveBeenCalledWith(
@@ -447,7 +523,10 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout', () => {
     enqueue('billing_orders', 'update', { data: null, error: null });
 
     await expect(
-      prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' })
+      prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      )
     ).rejects.toThrow('razorpay is down');
 
     const failUpdate = calls.find((call) => call.table === 'billing_orders' && call.op === 'update');
@@ -484,13 +563,29 @@ describe('prepareRazorpayCheckoutInternal — top-up checkout', () => {
     createRazorpayOrderMock.mockResolvedValueOnce({ id: 'order_rzp_1', amount: 500, currency: 'INR', receipt: null, status: 'created', notes: {} });
     enqueue('billing_orders', 'insert', { data: { id: 'order-1' }, error: null });
 
-    const result = await prepareRazorpayCheckoutInternal({ kind: 'topup', topupPackId: 'pack-1' });
+    const result = await prepareRazorpayCheckoutInternal(
+        { kind: 'topup', topupPackId: 'pack-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      );
 
-    expect(result).toMatchObject({ kind: 'topup', internalOrderId: 'order-1', razorpayOrderId: 'order_rzp_1' });
+    expect(result).toMatchObject({
+      kind: 'topup',
+      internalOrderId: 'order-1',
+      razorpayOrderId: 'order_rzp_1',
+      // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1): no billing profile in this test
+      // (tax is 'unavailable'), so there is nothing to prefill Razorpay's prefill.contact with.
+      userPhone: null,
+      reused: false,
+    });
     const insertCall = calls.find((call) => call.table === 'billing_orders' && call.op === 'insert');
     expect(insertCall?.payload).toMatchObject({
       provider_mode: 'test',
-      purchase_snapshot_json: expect.objectContaining({ kind: 'topup', beatAmount: 50, providerMode: 'test' }),
+      purchase_snapshot_json: expect.objectContaining({
+        kind: 'topup',
+        beatAmount: 50,
+        providerMode: 'test',
+        adultAttestedAt: expect.any(String),
+      }),
     });
   });
 });
@@ -506,7 +601,10 @@ describe('prepareRazorpayCheckoutInternal — top-up checkout charges tax', () =
     createRazorpayOrderMock.mockResolvedValueOnce({ id: 'order_rzp_1', amount: 590, currency: 'INR', receipt: null, status: 'created', notes: {} });
     enqueue('billing_orders', 'insert', { data: { id: 'order-1' }, error: null });
 
-    const result = await prepareRazorpayCheckoutInternal({ kind: 'topup', topupPackId: 'pack-1' });
+    const result = await prepareRazorpayCheckoutInternal(
+        { kind: 'topup', topupPackId: 'pack-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      );
 
     expect(createRazorpayOrderMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 590 }));
     expect(result).toMatchObject({ kind: 'topup', amountMinor: 590 });
@@ -533,7 +631,10 @@ describe('prepareRazorpayCheckoutInternal — top-up checkout charges tax', () =
     createRazorpayOrderMock.mockResolvedValueOnce({ id: 'order_rzp_1', amount: 590, currency: 'INR', receipt: null, status: 'created', notes: {} });
     enqueue('billing_orders', 'insert', { data: { id: 'order-1' }, error: null });
 
-    await prepareRazorpayCheckoutInternal({ kind: 'topup', topupPackId: 'pack-1' });
+    await prepareRazorpayCheckoutInternal(
+        { kind: 'topup', topupPackId: 'pack-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      );
 
     const insertCall = calls.find((call) => call.table === 'billing_orders' && call.op === 'insert');
     const snapshot = (insertCall?.payload as any)?.purchase_snapshot_json;
@@ -554,7 +655,10 @@ describe('prepareRazorpayCheckoutInternal — top-up checkout charges tax', () =
     loadBillingProfileMock.mockResolvedValueOnce({ status: 'ok', profile: null });
 
     await expect(
-      prepareRazorpayCheckoutInternal({ kind: 'topup', topupPackId: 'pack-1' })
+      prepareRazorpayCheckoutInternal(
+        { kind: 'topup', topupPackId: 'pack-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      )
     ).rejects.toThrow('billing details');
 
     expect(createRazorpayOrderMock).not.toHaveBeenCalled();
@@ -568,7 +672,10 @@ describe('prepareRazorpayCheckoutInternal — top-up checkout charges tax', () =
     getPublishedTaxRuleMock.mockResolvedValueOnce({ status: 'not_found' });
 
     await expect(
-      prepareRazorpayCheckoutInternal({ kind: 'topup', topupPackId: 'pack-1' })
+      prepareRazorpayCheckoutInternal(
+        { kind: 'topup', topupPackId: 'pack-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      )
     ).rejects.toThrow('temporarily unavailable');
 
     expect(loadBillingProfileMock).not.toHaveBeenCalled();
@@ -584,7 +691,10 @@ describe('prepareRazorpayCheckoutInternal — top-up checkout charges tax', () =
     createRazorpayOrderMock.mockResolvedValueOnce({ id: 'order_rzp_1', amount: 500, currency: 'INR', receipt: null, status: 'created', notes: {} });
     enqueue('billing_orders', 'insert', { data: { id: 'order-1' }, error: null });
 
-    await prepareRazorpayCheckoutInternal({ kind: 'topup', topupPackId: 'pack-1' });
+    await prepareRazorpayCheckoutInternal(
+        { kind: 'topup', topupPackId: 'pack-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      );
 
     expect(createRazorpayOrderMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 500 }));
     const insertCall = calls.find((call) => call.table === 'billing_orders' && call.op === 'insert');
@@ -609,7 +719,10 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax'
     createRazorpaySubscriptionMock.mockResolvedValueOnce(fakeRazorpaySubscription());
     enqueue('billing_orders', 'update', { data: null, error: null });
 
-    await prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' });
+    await prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      );
 
     // 19900 * 18% = 3582 exactly -> gross 23482.
     expect(createRazorpayPlanMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 23482 }));
@@ -632,7 +745,10 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax'
     createRazorpaySubscriptionMock.mockResolvedValueOnce(fakeRazorpaySubscription());
     enqueue('billing_orders', 'update', { data: null, error: null });
 
-    await prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' });
+    await prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      );
 
     expect(createRazorpayPlanMock).not.toHaveBeenCalled();
     expect(createRazorpaySubscriptionMock).toHaveBeenCalledWith(expect.objectContaining({ planId: 'plan_cached' }));
@@ -656,7 +772,10 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax'
     createRazorpaySubscriptionMock.mockResolvedValueOnce(fakeRazorpaySubscription());
     enqueue('billing_orders', 'update', { data: null, error: null });
 
-    await prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' });
+    await prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      );
 
     expect(createRazorpayPlanMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 23482 }));
     expect(createRazorpaySubscriptionMock).toHaveBeenCalledWith(expect.objectContaining({ planId: 'plan_rzp_new_rate' }));
@@ -681,7 +800,10 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax'
     enqueue('billing_orders', 'update', { data: null, error: null });
 
     await expect(
-      prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' })
+      prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      )
     ).rejects.toThrow('Pricing changed while preparing checkout');
 
     expect(createRazorpaySubscriptionMock).not.toHaveBeenCalled();
@@ -708,7 +830,10 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax'
     enqueue('billing_orders', 'update', { data: null, error: null });
 
     await expect(
-      prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' })
+      prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      )
     ).rejects.toThrow('pending a database update');
 
     expect(createRazorpaySubscriptionMock).not.toHaveBeenCalled();
@@ -734,7 +859,10 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax'
     createRazorpaySubscriptionMock.mockResolvedValueOnce(fakeRazorpaySubscription());
     enqueue('billing_orders', 'update', { data: null, error: null });
 
-    await prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' });
+    await prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      );
 
     expect(createRazorpayPlanMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 23482 }));
     expect(createRazorpaySubscriptionMock).toHaveBeenCalledWith(expect.objectContaining({ planId: 'plan_rzp_fresh' }));
@@ -755,7 +883,10 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax'
     createRazorpaySubscriptionMock.mockResolvedValueOnce(fakeRazorpaySubscription());
     enqueue('billing_orders', 'update', { data: null, error: null });
 
-    await prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' });
+    await prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      );
 
     const rpcCall = calls.find((call) => call.table === 'billing_begin_subscription_checkout');
     const snapshot = (rpcCall?.payload as any)?.p_snapshot;
@@ -772,7 +903,10 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax'
     loadBillingProfileMock.mockResolvedValueOnce({ status: 'ok', profile: null });
 
     await expect(
-      prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' })
+      prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      )
     ).rejects.toThrow('billing details');
 
     expect(createRazorpaySubscriptionMock).not.toHaveBeenCalled();

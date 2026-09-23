@@ -566,6 +566,10 @@ export interface PricingWalletPageData {
   billingProfile: BillingProfileDTO | null;
   /** null when migration 125 is absent -- the wallet then behaves exactly as it does today. */
   taxPreview: WalletTaxPreview | null;
+  /** Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, owner decision P6): the active
+   * viewer profile's audience scope, from lib/viewer-profile. 'kids' hides every buy button behind a
+   * "switch profiles" line -- checkout refuses server-side regardless of what the client sends. */
+  audienceMode: 'all' | 'kids';
 }
 
 export type PricingAuthorizationDeniedReason =
@@ -671,6 +675,13 @@ interface PreparedRazorpayCheckoutBase {
   description: string;
   userName: string | null;
   userEmail: string | null;
+  /** Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1): the profile's normalised phone
+   * (+91XXXXXXXXXX), read from the same profile checkout already loaded to resolve tax. Feeds
+   * Razorpay's `prefill.contact`; null when there is no profile or no phone on it. */
+  userPhone: string | null;
+  /** True only when this checkout reused an already-open session (the RPC's own `reused` flag) --
+   * carried through so the `[checkout-timing]` log line can tell a resumed checkout from a fresh one. */
+  reused: boolean;
 }
 
 export interface PreparedRazorpaySubscriptionCheckout extends PreparedRazorpayCheckoutBase {

@@ -19,6 +19,7 @@ import { createClient } from '@/lib/supabase/server';
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import { loadBillingProfile, toBillingProfileDTO } from '@/lib/billing/billing-profile';
 import { getPublishedTaxRule, type TaxRuleLookupResult } from '@/lib/billing/tax-rules';
+import { resolveActiveViewerProfile } from '@/lib/viewer-profile';
 import type {
   DbBeatGrant,
   DbBeatSpendReservation,
@@ -214,7 +215,14 @@ export async function getPricingWalletPageData(
   const supabase = createAdminClient();
   const currentPlanKey: PlanKey = input.currentPlanKey ?? 'free';
 
-  const [plansResult, planVersionsResult, topupsResult, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled] = await Promise.all([
+  const [
+    plansResult,
+    planVersionsResult,
+    topupsResult,
+    freePlusCharacterSheetsEnabled,
+    creatorCharacterSheetsEnabled,
+    viewerProfile,
+  ] = await Promise.all([
     supabase
       .from('pricing_plans')
       .select('*')
@@ -235,6 +243,9 @@ export async function getPricingWalletPageData(
       .order('beat_amount', { ascending: true }),
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
+    // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, owner decision P6): resolveActiveViewerProfile
+    // never throws -- it fails closed to the implicit 'all' default -- so this needs no try/catch of its own.
+    resolveActiveViewerProfile(),
   ]);
 
   throwIfQueryFailed(plansResult.error, 'Failed to load wallet plan offers');
@@ -316,6 +327,7 @@ export async function getPricingWalletPageData(
     recentActivity,
     billingProfile,
     taxPreview,
+    audienceMode: viewerProfile.audienceMode,
   };
 }
 
