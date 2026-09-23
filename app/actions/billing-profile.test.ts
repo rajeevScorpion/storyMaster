@@ -93,6 +93,9 @@ describe('getMyBillingProfile', () => {
         phone: null,
         companyName: null,
         gstin: null,
+        // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit B): derived, not stored --
+        // 'business' iff gstin is set. dbRow.gstin is null here, so 'personal'.
+        profileType: 'personal',
         stateCode: '24',
         countryCode: 'IN',
         addressLine1: null,

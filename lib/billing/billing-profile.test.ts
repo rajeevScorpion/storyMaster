@@ -16,10 +16,14 @@ interface QueryResult {
 }
 
 class FakeQueryBuilder implements PromiseLike<QueryResult> {
+  upsertedRow: Record<string, unknown> | undefined;
   constructor(private readonly result: QueryResult) {}
   select() { return this; }
   eq() { return this; }
-  upsert() { return this; }
+  upsert(row: Record<string, unknown>) {
+    this.upsertedRow = row;
+    return this;
+  }
   maybeSingle(): Promise<QueryResult> { return Promise.resolve(this.result); }
   single(): Promise<QueryResult> { return Promise.resolve(this.result); }
   then<TResult1 = QueryResult, TResult2 = never>(
@@ -31,16 +35,37 @@ class FakeQueryBuilder implements PromiseLike<QueryResult> {
 }
 
 function fakeSupabase(result: QueryResult) {
-  return { from: () => new FakeQueryBuilder(result) } as any;
+  const builder = new FakeQueryBuilder(result);
+  return { from: () => builder, builder } as any;
 }
 
+// Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit B): a complete PERSONAL profile under
+// P1's required-field set -- legalName, billingEmail, phone, stateCode, city and postalCode are all
+// required, so the fixture must supply all of them for a "minimal valid" case to actually be valid.
 function validInput(overrides: Partial<BillingProfileInput> = {}): BillingProfileInput {
   return {
     legalName: 'Jane Doe',
+    billingEmail: 'jane@example.com',
+    phone: '9876543210',
     stateCode: '24',
+    city: 'Gandhinagar',
+    postalCode: '382016',
+    profileType: 'personal',
     gstin: null,
     ...overrides,
   };
+}
+
+// A complete BUSINESS profile: adds the fields P1 requires only for business (addressLine1,
+// companyName, a checksum-valid GSTIN) on top of validInput's personal fields.
+function validBusinessInput(overrides: Partial<BillingProfileInput> = {}): BillingProfileInput {
+  return validInput({
+    profileType: 'business',
+    addressLine1: 'B601, Kunj Heights',
+    companyName: 'Aavriti Design Studio',
+    gstin: '24ACLFA8196N1ZN',
+    ...overrides,
+  });
 }
 
 beforeEach(() => {
@@ -48,26 +73,42 @@ beforeEach(() => {
 });
 
 describe('validateBillingProfileInput', () => {
-  it('accepts a minimal valid profile', () => {
+  it('accepts a complete personal profile', () => {
     expect(validateBillingProfileInput(validInput())).toBeNull();
   });
 
-  it('accepts a valid GSTIN', () => {
-    expect(validateBillingProfileInput(validInput({ gstin: '24ACLFA8196N1ZN' }))).toBeNull();
+  it('accepts a complete business profile with a valid GSTIN', () => {
+    expect(validateBillingProfileInput(validBusinessInput())).toBeNull();
   });
 
   it('rejects a missing or blank legal name', () => {
-    expect(validateBillingProfileInput(validInput({ legalName: '' }))).toMatch(/legal name/i);
-    expect(validateBillingProfileInput(validInput({ legalName: '   ' }))).toMatch(/legal name/i);
+    expect(validateBillingProfileInput(validInput({ legalName: '' }))).toMatch(/name/i);
+    expect(validateBillingProfileInput(validInput({ legalName: '   ' }))).toMatch(/name/i);
   });
 
-  it('rejects an invalid or retired state code', () => {
+  it('rejects an invalid or retired state code for a personal profile', () => {
     expect(validateBillingProfileInput(validInput({ stateCode: '99' }))).toMatch(/state/i);
     expect(validateBillingProfileInput(validInput({ stateCode: '25' }))).toMatch(/state/i);
   });
 
-  it('rejects a malformed GSTIN', () => {
-    expect(validateBillingProfileInput(validInput({ gstin: 'not-a-gstin' }))).toMatch(/gstin/i);
+  it('rejects a malformed GSTIN on a business profile', () => {
+    expect(validateBillingProfileInput(validBusinessInput({ gstin: 'not-a-gstin' }))).toMatch(/gstin/i);
+  });
+
+  it('rejects a business GSTIN that fails its checksum', () => {
+    expect(validateBillingProfileInput(validBusinessInput({ gstin: '27AAPFU0939F1ZX' }))).toMatch(/gstin/i);
+  });
+
+  it('rejects a personal profile that still carries a GSTIN', () => {
+    expect(validateBillingProfileInput(validInput({ gstin: '24ACLFA8196N1ZN' }))).toMatch(/business/i);
+  });
+
+  it('rejects a phone that does not normalise', () => {
+    expect(validateBillingProfileInput(validInput({ phone: '12345' }))).toMatch(/mobile/i);
+  });
+
+  it('rejects an invalid billing email', () => {
+    expect(validateBillingProfileInput(validInput({ billingEmail: 'not-an-email' }))).toMatch(/email/i);
   });
 });
 
@@ -138,5 +179,36 @@ describe('saveBillingProfile', () => {
     const result = await saveBillingProfile(supabase, 'user-1', validInput());
 
     expect(result).toEqual({ status: 'unavailable' });
+  });
+
+  it('normalises the phone and upper-cases the GSTIN before saving', async () => {
+    const supabase = fakeSupabase({ data: { id: 'profile-1' }, error: null });
+
+    await saveBillingProfile(
+      supabase,
+      'user-1',
+      validBusinessInput({ phone: '098765 43210', gstin: '24aclfa8196n1zn' })
+    );
+
+    expect(supabase.builder.upsertedRow?.phone).toBe('+919876543210');
+    expect(supabase.builder.upsertedRow?.gstin).toBe('24ACLFA8196N1ZN');
+  });
+
+  it('derives the saved state from the GSTIN for a business profile, ignoring the client stateCode', async () => {
+    const supabase = fakeSupabase({ data: { id: 'profile-1' }, error: null });
+
+    // 24ACLFA8196N1ZN is state 24 (Gujarat); the client sent 27 (Maharashtra) instead.
+    await saveBillingProfile(supabase, 'user-1', validBusinessInput({ stateCode: '27' }));
+
+    expect(supabase.builder.upsertedRow?.state_code).toBe('24');
+  });
+
+  it('nulls out company_name and gstin when saving a personal profile', async () => {
+    const supabase = fakeSupabase({ data: { id: 'profile-1' }, error: null });
+
+    await saveBillingProfile(supabase, 'user-1', validInput());
+
+    expect(supabase.builder.upsertedRow?.company_name).toBeNull();
+    expect(supabase.builder.upsertedRow?.gstin).toBeNull();
   });
 });

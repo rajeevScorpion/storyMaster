@@ -1,7 +1,12 @@
 import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
-import { GSTIN_REGEX, isValidIndiaStateCode } from '@/lib/billing/india-states.shared';
+import {
+  normalizeIndianPhone,
+  resolveBillingProfileType,
+  stateCodeFromGstin,
+  validateBillingProfile,
+} from '@/lib/billing/billing-profile.shared';
 import type { DbBillingProfile } from '@/lib/types/database';
 import type { BillingProfileDTO, BillingProfileInput } from '@/lib/types/pricing';
 
@@ -14,6 +19,10 @@ import type { BillingProfileDTO, BillingProfileInput } from '@/lib/types/pricing
  * toBillingProfileDTO also lives here (not duplicated in the two 'use server' action files that
  * need it) because a 'use server' file may only export async functions -- this plain mapper has to
  * live in a plain server-only module either way, so both callers share one definition.
+ *
+ * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit B): validation itself moved to
+ * lib/billing/billing-profile.shared.ts, the one authority both this file and the client dialog
+ * import, so the two sides can never drift.
  */
 
 export function toBillingProfileDTO(row: DbBillingProfile): BillingProfileDTO {
@@ -24,6 +33,7 @@ export function toBillingProfileDTO(row: DbBillingProfile): BillingProfileDTO {
     phone: row.phone,
     companyName: row.company_name,
     gstin: row.gstin,
+    profileType: row.gstin ? 'business' : 'personal',
     stateCode: row.state_code,
     countryCode: row.country_code,
     addressLine1: row.address_line_1,
@@ -77,19 +87,14 @@ export async function loadBillingProfile(supabase: AdminClient, userId: string):
   return { status: 'ok', profile: (result.data ?? null) as DbBillingProfile | null };
 }
 
-/** Returns a user-facing validation message, or null when the input is acceptable. Exported
- * separately from saveBillingProfile so a caller (or a test) can validate without a DB round trip. */
+/** Returns a user-facing validation message, or null when the input is acceptable. A thin wrapper
+ * over lib/billing/billing-profile.shared.ts's validateBillingProfile, returning only the first of
+ * its (possibly several) field errors -- kept so existing callers and tests need only a single
+ * message, not the full field-level list the dialog (Unit D) will want. Exported separately from
+ * saveBillingProfile so a caller (or a test) can validate without a DB round trip. */
 export function validateBillingProfileInput(input: BillingProfileInput): string | null {
-  if (!input.legalName || !input.legalName.trim()) {
-    return 'Legal name is required.';
-  }
-  if (!isValidIndiaStateCode(input.stateCode)) {
-    return 'Please select a valid Indian state or union territory.';
-  }
-  if (input.gstin && !GSTIN_REGEX.test(input.gstin.trim().toUpperCase())) {
-    return 'That GSTIN does not look right. It should be 15 characters, e.g. 24ACLFA8196N1ZN.';
-  }
-  return null;
+  const errors = validateBillingProfile(input);
+  return errors.length > 0 ? errors[0].message : null;
 }
 
 export type SaveBillingProfileResult =
@@ -97,7 +102,14 @@ export type SaveBillingProfileResult =
   | { status: 'unavailable' }
   | { status: 'invalid'; message: string };
 
-/** Upserts the caller's billing profile (one row per user_id, per the migration's UNIQUE constraint). */
+/** Upserts the caller's billing profile (one row per user_id, per the migration's UNIQUE constraint).
+ *
+ * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit B): the row stores the normalised phone
+ * (+91XXXXXXXXXX) and the upper-cased GSTIN. For a business profile the state is derived from the
+ * GSTIN, not taken from the client -- validateBillingProfile already guarantees a business GSTIN's
+ * state code is current, so the client's stateCode is only a fallback that should never be reached.
+ * Switching to personal (or never having been business) always writes company_name/gstin as null,
+ * even if the client still echoed stale values back. */
 export async function saveBillingProfile(
   supabase: AdminClient,
   userId: string,
@@ -105,17 +117,21 @@ export async function saveBillingProfile(
 ): Promise<SaveBillingProfileResult> {
   if (billingProfileSchemaUnavailable) return { status: 'unavailable' };
 
-  const validationError = validateBillingProfileInput(input);
-  if (validationError) return { status: 'invalid', message: validationError };
+  const validationErrors = validateBillingProfile(input);
+  if (validationErrors.length > 0) return { status: 'invalid', message: validationErrors[0].message };
+
+  const gstinTrimmed = input.gstin?.trim().toUpperCase() || null;
+  const isBusiness = resolveBillingProfileType(input) === 'business';
+  const normalizedPhone = normalizeIndianPhone(input.phone);
 
   const row = {
     user_id: userId,
     legal_name: input.legalName.trim(),
     billing_email: input.billingEmail?.trim() || null,
-    phone: input.phone?.trim() || null,
-    company_name: input.companyName?.trim() || null,
-    gstin: input.gstin ? input.gstin.trim().toUpperCase() : null,
-    state_code: input.stateCode,
+    phone: normalizedPhone,
+    company_name: isBusiness ? input.companyName?.trim() || null : null,
+    gstin: isBusiness ? gstinTrimmed : null,
+    state_code: isBusiness ? stateCodeFromGstin(gstinTrimmed) ?? input.stateCode : input.stateCode,
     country_code: 'IN',
     address_line_1: input.addressLine1?.trim() || null,
     address_line_2: input.addressLine2?.trim() || null,

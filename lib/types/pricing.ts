@@ -700,7 +700,13 @@ export interface BillingProfileInput {
   companyName?: string | null;
   /** Validated against lib/billing/india-states.shared.ts's GSTIN_REGEX before it ever reaches the DB. */
   gstin?: string | null;
-  /** A code from lib/billing/india-states.shared.ts's INDIA_GST_STATE_CODES -- the checkout place of supply. */
+  /** Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit B): the Personal/Business toggle. When
+   * absent (an old client), treated as 'business' iff a GSTIN is present -- see
+   * lib/billing/billing-profile.shared.ts's validateBillingProfile. */
+  profileType?: 'personal' | 'business';
+  /** A code from lib/billing/india-states.shared.ts's INDIA_GST_STATE_CODES -- the checkout place of
+   * supply. For a business profile this is derived from the GSTIN server-side; the client's value is
+   * ignored (Unit B). */
   stateCode: string;
   addressLine1?: string | null;
   addressLine2?: string | null;
@@ -715,6 +721,9 @@ export interface BillingProfileDTO {
   phone: string | null;
   companyName: string | null;
   gstin: string | null;
+  /** Derived, not stored: 'business' iff gstin is set (lib/billing/billing-profile.ts's
+   * toBillingProfileDTO). Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit B). */
+  profileType: 'personal' | 'business';
   stateCode: string;
   countryCode: string;
   addressLine1: string | null;
