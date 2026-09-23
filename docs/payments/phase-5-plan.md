@@ -14,7 +14,7 @@ Living handoff: `audit-progress.md`. Written by Opus after the money walk passed
 | **B** | `billing-profile.shared.ts`: one validation authority for client and server. **BUILT `c2f0e9c`, diff-reviewed** | — | low |
 | **C** | `FilterDropdown`: keyboard support for all, `searchable` opt-in. **BUILT `b818493` + review fix `549b40c`** | — | low (28 callers) |
 | **M** | Migration 134: record who asked for a cancellation, and when | — | low |
-| **D** | Billing-details dialog redesign: Personal/Business, sections, inline validation. **BUILT `6a1f661`, diff-reviewed; owner visual review on the Preview pending** | B, C, **P1, P7** | low |
+| **D** | Billing-details dialog redesign: Personal/Business, sections, inline validation. **BUILT `6a1f661`, diff-reviewed; owner visual review on the Preview passed 2026-09-24** | B, C, **P1, P7** | low |
 | **E1** | Checkout plumbing: timing, Razorpay options, failure handling, kids gate, attestation. **Execution spec re-anchored at `7c00672` (§5 E1); not built** | **P6** | medium |
 | **E2** | Checkout UI: pre-payment summary, branded opening and confirming states | E1 | low |
 | **F** | Settings → Billing at `/account/billing`, with self-serve cancel | A, M, D, E1, **P3, P5** | medium |
@@ -189,6 +189,10 @@ below.
 | 5 | Closing Razorpay's window during a UPI approval resets silently, though the payment may still settle | E1/E2 |
 | 6 | Owner decision 6 (adult attestation, no checkout from kids mode) was never built | E1 |
 | 7 | The billing dialog has no focus trap or focus return | D |
+| 8 | An uncalled exported server action (`prepareRazorpayCheckout`) would bypass a route-only kids/attestation gate | E1 (spec step 2) |
+| 9 | The prepare route returns raw error text on 500s, so Razorpay API errors reach the customer | E1 (spec steps 1, 2, 4) |
+| 10 | A top-up order goes `failed` on `payment.failed` and back to `paid` on an in-window retry; a naive poll would report failure | E1 (spec steps 6, 7) |
+| 11 | The server gates checkout on `state_code` only; the client gates on "complete for its type" | E1 (spec step 2) |
 
 ---
 
@@ -563,7 +567,7 @@ in the code at `7c00672`.
      "not purchasable", "not available yet" and "does not belong" 400; "already have a Razorpay subscription"
      and "already opening" 409; "Pricing changed" 409; "add your billing details" 400; "India only" 400. That
      retires the substring matching in the route.
-   - **Server P7 gate:** in `resolveCheckoutTax` at 107-110, replace `!profile.state_code` with
+   - **Server P7 gate (owner-approved 2026-09-24):** in `resolveCheckoutTax` at 107-110, replace `!profile.state_code` with
      `!isBillingProfileComplete(toBillingProfileDTO(profile))`. The message becomes "Please complete your
      billing details before checkout." (400). The client already opens the dialog on the same rule, so only a
      stale or crafted client sees this.
@@ -620,9 +624,13 @@ in the code at `7c00672`.
      message }` or `{ kind: 'dismissed' }`. **It no longer rejects for dismissal**; it rejects only for prepare
      errors, whose message is now always safe.
    - Options add `prefill.contact: userPhone ?? undefined`, `theme.backdrop_color: '#0a0a0a'` and
-     `modal.confirm_close: true`. Add `image` **only if** `public/brand/kissago-checkout-mark.png` exists at
-     build time. The owner hasn't supplied it, so leave `image` out. There is a TODO in the plan, not in the
-     code.
+     `modal.confirm_close: true`.
+   - **`image` (owner, 2026-09-24): the favicon's "k" mark, scaled up.** `app/icon.tsx` draws it with
+     `ImageResponse` (black circle, emerald `#34d399` lowercase k, weight 900). Extract that JSX into
+     `lib/brand/kissago-mark.tsx` as `renderKissagoMark(px)`, with the font size scaled from 44/64.
+     `app/icon.tsx` keeps rendering it at 64. A new `app/brand/checkout-mark/route.tsx` returns it at
+     **256×256 PNG** with a long `Cache-Control`. The client passes
+     `image: \`${window.location.origin}/brand/checkout-mark\``. There is no binary file to supply.
    - `payment.failed` stores `lastFailure = event.error` and **does not settle**.
    - `handler`: runs verify as today. On `ok`, it resolves `success` with the server message (already
      sanitised). On a non-ok verify, it resolves `failed` with `describeCheckoutFailure(null)`; it never uses
@@ -646,7 +654,7 @@ in the code at `7c00672`.
    - `failed` → the error banner with the mapped copy;
    - `dismissed` → nothing.
    The two `'Razorpay checkout dismissed'` string checks go away.
-9. **The interim attestation checkbox (a scope call; E2 moves it).** The server refuses `adultAttested:
+9. **The interim attestation checkbox (owner-approved 2026-09-24; E2 moves it).** The server refuses `adultAttested:
    false`, and E2's summary sheet doesn't exist yet. So E1 adds one checkbox row to `WalletPage` above the
    plans section, with the P6 wording ("I'm 18 or older and I'm the one paying for this purchase.") and links
    to Terms and the Refund Policy. **Every buy button is disabled until it's ticked.** It is not persisted. E2

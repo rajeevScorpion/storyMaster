@@ -53,12 +53,13 @@ It adds three things the plan missed:
 - **A top-up order goes `failed` on the `payment.failed` webhook and back to `paid` on a successful retry**,
   so the dismiss poll must not stop on `failed`.
 
-Two scope calls in the spec:
+Two scope calls in the spec, **both approved by the owner 2026-09-24**:
 - A server-side P7 gate ("complete for its type", matching D's client gate).
 - An interim attestation checkbox on `/wallet`, because the server refuses unattested checkouts and E2's
   sheet isn't built yet. E2 removes it.
-**No Kissago mark image exists** (`public/brand/` absent), so Razorpay's `image` stays omitted until the
-owner supplies one (square PNG, 256px or larger).
+**Razorpay's `image` (owner, 2026-09-24):** the favicon's "k" mark, rendered at 256px from the same drawing as
+`app/icon.tsx` (spec step 7). No binary file.
+**Owner, 2026-09-24:** the billing dialog visual review on the Preview **passed**. Usage at the start of E1: **83%**.
 
 **Next session starts with:**
 1. The phase brief.
@@ -70,7 +71,6 @@ owner supplies one (square PNG, 256px or larger).
    cancel. Then tell the owner to cancel the test subscription immediately.
 **Owner, still open:**
 - Unit 0 (steps in this session's chat, repeated in plan §5 Unit 0).
-- A visual review of the new billing dialog on the Preview.
 - **Unit 0** (the Razorpay cycle-end-cancel probe) is waiting on the owner.
 - Usage was **60%** when C was reviewed.
 **Open, not Phase 5:** `e2e/storyline-signin-return.spec.ts:36` fails every time on this branch. Clicking
