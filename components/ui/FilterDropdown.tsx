@@ -1,9 +1,17 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, Check } from 'lucide-react';
-import { AnimatePresence, motion } from 'motion/react';
+import { ChevronDown, Check, Search } from 'lucide-react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { filterAndRankOptions } from './filter-dropdown.shared';
+
+/**
+ * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit C): keyboard support and an opt-in
+ * `searchable` mode for the one shared dropdown every caller in the app uses (CLAUDE.md
+ * "Conventions" -- never a native `<select>`). Both are additive: every existing prop keeps its
+ * old default behaviour, so the 28 current callers are unaffected unless they opt in.
+ */
 
 export interface FilterDropdownOption {
   value: string;
@@ -34,6 +42,8 @@ interface ScrollIndicator {
 const SCROLL_TRACK_INSET = 4;
 const MIN_SCROLL_THUMB_HEIGHT = 20;
 const MAX_SCROLL_THUMB_HEIGHT = 32;
+/** Keys the closed trigger opens the menu on. */
+const OPEN_KEYS = new Set(['ArrowDown', 'ArrowUp', 'Enter', ' ']);
 
 export default function FilterDropdown({
   value,
@@ -44,6 +54,9 @@ export default function FilterDropdown({
   mode = 'popover',
   ariaLabel,
   contextLabel,
+  placeholder,
+  searchable = false,
+  searchPlaceholder,
 }: {
   value: string;
   options: FilterDropdownOption[];
@@ -54,6 +67,15 @@ export default function FilterDropdown({
   ariaLabel?: string;
   /** Small field name shown beside the selected value inside the trigger. */
   contextLabel?: string;
+  /**
+   * Shown, muted, when `value` matches no option -- instead of silently falling back to the
+   * first option's label. Omit to keep that old fallback exactly (existing callers do).
+   */
+  placeholder?: string;
+  /** Opt-in: a search box pinned atop the menu that filters options by label. */
+  searchable?: boolean;
+  /** Overrides the search box's placeholder text. Defaults to "Search…". */
+  searchPlaceholder?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [opensUp, setOpensUp] = useState(false);
@@ -63,21 +85,45 @@ export default function FilterDropdown({
     top: 0,
     visible: false,
   });
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [query, setQuery] = useState('');
   const ref = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const baseId = useId();
+  const prefersReducedMotion = useReducedMotion();
+
+  const filteredOptions = useMemo(
+    () => (searchable ? filterAndRankOptions(options, query) : options),
+    [options, query, searchable]
+  );
+
+  const optionId = useCallback((index: number) => `${baseId}-option-${index}`, [baseId]);
+  const listboxId = `${baseId}-listbox`;
+  const activeOptionId = filteredOptions.length > 0 ? optionId(activeIndex) : undefined;
+
+  const closeMenu = useCallback((focusTrigger: boolean) => {
+    setIsOpen(false);
+    setQuery('');
+    if (focusTrigger) triggerRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       const target = e.target as Node;
       if (ref.current?.contains(target) || menuRef.current?.contains(target)) return;
-      setIsOpen(false);
+      closeMenu(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  }, [closeMenu]);
 
   const selected = options.find((o) => o.value === value);
+  const showsPlaceholder = !selected && Boolean(placeholder);
+  const triggerLabel = selected?.label ?? (placeholder ?? options[0]?.label);
   const isForm = size === 'form';
   const updatePlacement = useCallback(() => {
     if (!ref.current || typeof window === 'undefined') return;
@@ -85,13 +131,16 @@ export default function FilterDropdown({
     const rect = ref.current.getBoundingClientRect();
     const viewportPadding = 8;
     const estimatedOptionHeight = isForm ? 44 : 36;
-    const estimatedMenuHeight = Math.min(options.length * estimatedOptionHeight + 16, 280);
+    const optionCount = Math.max(filteredOptions.length, 1); // room for a "No matches" row
+    const searchHeaderHeight = searchable ? (isForm ? 52 : 44) : 0;
+    const estimatedListHeight = Math.min(optionCount * estimatedOptionHeight + 16, 280);
+    const estimatedMenuHeight = estimatedListHeight + searchHeaderHeight;
     const spaceBelow = window.innerHeight - rect.bottom;
     const spaceAbove = rect.top;
     const nextOpensUp = spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow;
     const maxHeight = Math.max(
-      estimatedOptionHeight + 16,
-      Math.min(280, (nextOpensUp ? spaceAbove : spaceBelow) - viewportPadding * 2)
+      estimatedOptionHeight + 16 + searchHeaderHeight,
+      Math.min(280 + searchHeaderHeight, (nextOpensUp ? spaceAbove : spaceBelow) - viewportPadding * 2)
     );
     const maxWidth = Math.max(0, window.innerWidth - viewportPadding * 2);
     const width = mode === 'inline' || fullWidth
@@ -113,7 +162,7 @@ export default function FilterDropdown({
       top: nextOpensUp ? undefined : Math.min(window.innerHeight - viewportPadding, rect.bottom - 1),
       width,
     });
-  }, [fullWidth, isForm, mode, options.length]);
+  }, [fullWidth, isForm, mode, filteredOptions.length, searchable]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -163,7 +212,117 @@ export default function FilterDropdown({
       window.cancelAnimationFrame(frame);
       resizeObserver?.disconnect();
     };
-  }, [isOpen, menuPosition, options.length, updateScrollIndicator]);
+  }, [isOpen, menuPosition, filteredOptions.length, updateScrollIndicator]);
+
+  // Keep the highlighted row in view as it moves by keyboard.
+  useEffect(() => {
+    if (!isOpen) return;
+    optionRefs.current[activeIndex]?.scrollIntoView({ block: 'nearest' });
+  }, [isOpen, activeIndex, filteredOptions]);
+
+  // Searchable: the search box owns focus while the menu is open, so it also owns navigation.
+  useEffect(() => {
+    if (isOpen && searchable) searchInputRef.current?.focus();
+  }, [isOpen, searchable]);
+
+  const openMenu = useCallback(() => {
+    updatePlacement();
+    const startIndex = Math.max(0, options.findIndex((o) => o.value === value));
+    setActiveIndex(startIndex);
+    setIsOpen(true);
+  }, [options, updatePlacement, value]);
+
+  const moveActive = useCallback((delta: number) => {
+    setActiveIndex((current) => {
+      const max = Math.max(0, filteredOptions.length - 1);
+      return Math.min(max, Math.max(0, current + delta));
+    });
+  }, [filteredOptions.length]);
+
+  const selectActive = useCallback(() => {
+    const option = filteredOptions[activeIndex];
+    if (!option) return; // e.g. the "No matches" row
+    onChange(option.value);
+    closeMenu(true);
+  }, [filteredOptions, activeIndex, onChange, closeMenu]);
+
+  const handleTriggerKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (!isOpen) {
+      if (OPEN_KEYS.has(e.key)) {
+        e.preventDefault();
+        openMenu();
+      }
+      return;
+    }
+    // Reached only in non-searchable mode: searchable moves focus to the search box on open.
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        moveActive(1);
+        return;
+      case 'ArrowUp':
+        e.preventDefault();
+        moveActive(-1);
+        return;
+      case 'Home':
+        e.preventDefault();
+        setActiveIndex(0);
+        return;
+      case 'End':
+        e.preventDefault();
+        setActiveIndex(Math.max(0, filteredOptions.length - 1));
+        return;
+      case 'Enter':
+      case ' ':
+        e.preventDefault();
+        selectActive();
+        return;
+      case 'Escape':
+        e.preventDefault();
+        closeMenu(true);
+        return;
+      case 'Tab':
+        closeMenu(false);
+        return;
+      default:
+        return;
+    }
+  };
+
+  const handleSearchInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        moveActive(1);
+        return;
+      case 'ArrowUp':
+        e.preventDefault();
+        moveActive(-1);
+        return;
+      case 'Home':
+        e.preventDefault();
+        setActiveIndex(0);
+        return;
+      case 'End':
+        e.preventDefault();
+        setActiveIndex(Math.max(0, filteredOptions.length - 1));
+        return;
+      case 'Enter':
+        // Never let Enter fall through to a submit on a form this dropdown lives inside.
+        e.preventDefault();
+        selectActive();
+        return;
+      case 'Escape':
+        e.preventDefault();
+        closeMenu(true);
+        return;
+      case 'Tab':
+        closeMenu(false);
+        return;
+      default:
+        return;
+    }
+  };
 
   const containerClassName = [
     'relative',
@@ -183,25 +342,39 @@ export default function FilterDropdown({
     'fixed z-[1000] overflow-hidden',
     mode === 'inline' || fullWidth ? 'w-full' : '',
   ].join(' ');
-  const menuClassName = [
-    'dropdown-scrollbar max-h-72 overflow-y-auto bg-neutral-900/95 border border-emerald-500/40 backdrop-blur-xl shadow-2xl',
+  const menuCardClassName = [
+    'flex flex-col overflow-hidden bg-neutral-900/95 border border-emerald-500/40 backdrop-blur-xl shadow-2xl',
     isForm
-      ? opensUp ? 'rounded-2xl rounded-b-none py-1.5' : 'rounded-2xl rounded-t-none py-1.5'
-      : opensUp ? 'rounded-xl rounded-b-none py-1' : 'rounded-xl rounded-t-none py-1',
+      ? opensUp ? 'rounded-2xl rounded-b-none' : 'rounded-2xl rounded-t-none'
+      : opensUp ? 'rounded-xl rounded-b-none' : 'rounded-xl rounded-t-none',
+  ].join(' ');
+  const listboxClassName = [
+    'dropdown-scrollbar absolute inset-0 overflow-y-auto',
+    isForm ? 'py-1.5' : 'py-1',
   ].join(' ');
   const optionClassName = [
     'w-full flex items-center gap-2 transition-colors',
     isForm ? 'px-4 py-3 text-sm text-left' : 'px-3 py-2 text-sm text-left',
   ].join(' ');
+  const menuMotionProps = prefersReducedMotion
+    ? {
+        initial: { opacity: 0 },
+        animate: { opacity: 1 },
+        exit: { opacity: 0 },
+        transition: { duration: 0.12 },
+      }
+    : {
+        initial: { opacity: 0, height: 0 },
+        animate: { opacity: 1, height: 'auto' },
+        exit: { opacity: 0, height: 0 },
+        transition: { duration: 0.2, ease: [0.16, 1, 0.3, 1] as const },
+      };
   const menu = typeof document !== 'undefined' ? createPortal(
     <AnimatePresence>
       {isOpen && menuPosition && (
         <motion.div
           ref={menuRef}
-          initial={{ opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: 'auto' }}
-          exit={{ opacity: 0, height: 0 }}
-          transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+          {...menuMotionProps}
           className={menuWrapperClassName}
           style={{
             bottom: menuPosition.bottom,
@@ -212,56 +385,100 @@ export default function FilterDropdown({
             width: menuPosition.width,
           }}
         >
-          <div
-            ref={scrollRef}
-            className={menuClassName}
-            role="listbox"
-            style={{ maxHeight: menuPosition.maxHeight }}
-            onScroll={updateScrollIndicator}
-          >
-            {options.map((opt) => (
-              <button
-                type="button"
-                key={opt.value}
-                onClick={() => {
-                  onChange(opt.value);
-                  setIsOpen(false);
-                }}
-                className={`${optionClassName} ${
-                  opt.value === value
-                    ? 'text-emerald-400'
-                    : 'text-neutral-400 hover:bg-emerald-500/10 hover:text-emerald-300'
-                }`}
-                role="option"
-                aria-selected={opt.value === value}
+          <div className={menuCardClassName} style={{ maxHeight: menuPosition.maxHeight }}>
+            {searchable && (
+              <div className={`shrink-0 border-b border-white/10 ${isForm ? 'p-2' : 'p-1.5'}`}>
+                <div className="relative">
+                  <Search
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-neutral-500"
+                  />
+                  <input
+                    ref={searchInputRef}
+                    type="text"
+                    value={query}
+                    onChange={(e) => {
+                      setQuery(e.target.value);
+                      setActiveIndex(0);
+                    }}
+                    onKeyDown={handleSearchInputKeyDown}
+                    placeholder={searchPlaceholder ?? 'Search…'}
+                    aria-label={ariaLabel ? `Search ${ariaLabel}` : 'Search options'}
+                    aria-controls={listboxId}
+                    aria-activedescendant={activeOptionId}
+                    className="w-full rounded-lg border border-white/10 bg-neutral-950/60 py-1.5 pl-8 pr-2.5 text-sm text-neutral-100 outline-none placeholder:text-neutral-600 focus:border-emerald-400/40"
+                  />
+                </div>
+              </div>
+            )}
+            <div className="relative min-h-0 flex-1">
+              <div
+                ref={scrollRef}
+                id={listboxId}
+                className={listboxClassName}
+                role="listbox"
+                onScroll={updateScrollIndicator}
               >
-                <Check
-                  className={`w-3 h-3 shrink-0 ${
-                    opt.value === value ? 'opacity-100' : 'opacity-0'
-                  }`}
-                />
-                {opt.hint ? (
-                  <span className="flex min-w-0 flex-col gap-0.5">
-                    <span className="truncate">{opt.label}</span>
-                    <span className="truncate text-[11px] text-neutral-500">{opt.hint}</span>
-                  </span>
+                {filteredOptions.length === 0 ? (
+                  <div className={`${optionClassName} cursor-default text-neutral-500`} role="presentation">
+                    No matches
+                  </div>
                 ) : (
-                  opt.label
+                  filteredOptions.map((opt, index) => {
+                    const isSelected = opt.value === value;
+                    const isActive = index === activeIndex;
+                    return (
+                      <button
+                        type="button"
+                        key={opt.value}
+                        ref={(el) => {
+                          optionRefs.current[index] = el;
+                        }}
+                        id={optionId(index)}
+                        onClick={() => {
+                          onChange(opt.value);
+                          closeMenu(false);
+                        }}
+                        onMouseEnter={() => setActiveIndex(index)}
+                        className={`${optionClassName} ${
+                          isSelected
+                            ? 'text-emerald-400'
+                            : 'text-neutral-400 hover:text-emerald-300'
+                        } ${isActive ? 'bg-emerald-500/10' : 'hover:bg-emerald-500/10'}`}
+                        role="option"
+                        aria-selected={isSelected}
+                      >
+                        <Check
+                          className={`w-3 h-3 shrink-0 ${
+                            isSelected ? 'opacity-100' : 'opacity-0'
+                          }`}
+                        />
+                        {opt.hint ? (
+                          <span className="flex min-w-0 flex-col gap-0.5">
+                            <span className="truncate">{opt.label}</span>
+                            <span className="truncate text-[11px] text-neutral-500">{opt.hint}</span>
+                          </span>
+                        ) : (
+                          opt.label
+                        )}
+                      </button>
+                    );
+                  })
                 )}
-              </button>
-            ))}
+              </div>
+              {scrollIndicator.visible && (
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute bottom-1 right-1 top-1 w-1"
+                >
+                  <span
+                    className="absolute left-0 w-1 rounded-full bg-emerald-600/90"
+                    style={{ height: scrollIndicator.height, top: scrollIndicator.top }}
+                  />
+                </span>
+              )}
+            </div>
           </div>
-          {scrollIndicator.visible && (
-            <span
-              aria-hidden="true"
-              className="pointer-events-none absolute bottom-1 right-1 top-1 w-1"
-            >
-              <span
-                className="absolute left-0 w-1 rounded-full bg-emerald-600/90"
-                style={{ height: scrollIndicator.height, top: scrollIndicator.top }}
-              />
-            </span>
-          )}
         </motion.div>
       )}
     </AnimatePresence>,
@@ -271,21 +488,31 @@ export default function FilterDropdown({
   return (
     <div ref={ref} className={containerClassName}>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => {
-          if (!isOpen) {
-            updatePlacement();
+          if (isOpen) {
+            closeMenu(false);
+          } else {
+            openMenu();
           }
-          setIsOpen(!isOpen);
         }}
+        onKeyDown={handleTriggerKeyDown}
         className={triggerClassName}
         aria-expanded={isOpen}
         aria-haspopup="listbox"
+        aria-controls={listboxId}
+        aria-activedescendant={isOpen && !searchable ? activeOptionId : undefined}
         aria-label={ariaLabel}
       >
         <span className={fullWidth ? 'flex min-w-0 flex-1 items-center justify-between gap-3' : ''}>
-          <span className={fullWidth ? 'min-w-0 truncate' : ''}>
-            {selected?.label || options[0]?.label}
+          <span
+            className={[
+              fullWidth ? 'min-w-0 truncate' : '',
+              showsPlaceholder ? 'text-neutral-500' : '',
+            ].filter(Boolean).join(' ')}
+          >
+            {triggerLabel}
           </span>
           {contextLabel && (
             <span className="mr-1 shrink-0 whitespace-nowrap text-[10px] font-normal tracking-wide text-neutral-500">

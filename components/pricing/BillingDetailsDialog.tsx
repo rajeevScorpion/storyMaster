@@ -20,13 +20,15 @@ const INPUT_CLASS =
   'w-full rounded-xl border border-white/10 bg-neutral-900/70 px-3 py-2.5 text-sm text-neutral-100 placeholder:text-neutral-600 focus:border-emerald-400/40 focus:outline-none focus:ring-1 focus:ring-emerald-400/40 disabled:opacity-60';
 const LABEL_CLASS = 'text-xs font-sans uppercase tracking-wider text-neutral-500';
 
-// A leading placeholder option so an unfilled `stateCode` (`''`) renders as "Select a state" rather
-// than FilterDropdown's own fallback of silently displaying the first real option's label -- that
-// fallback would make an empty, unvalidated selection look already filled in.
-const STATE_OPTIONS: FilterDropdownOption[] = [
-  { value: '', label: 'Select a state' },
-  ...INDIA_GST_STATE_CODES.map((entry) => ({ value: entry.code, label: entry.name })),
-];
+// No leading placeholder option: an unfilled `stateCode` (`''`) matches no real option, so
+// FilterDropdown's own `placeholder` prop shows "Select a state" (muted) instead of silently
+// displaying the first real option's label -- that fallback would make an empty, unvalidated
+// selection look already filled in. See Payments Phase 5 (docs/payments/phase-5-plan.md §5,
+// Unit C).
+const STATE_OPTIONS: FilterDropdownOption[] = INDIA_GST_STATE_CODES.map((entry) => ({
+  value: entry.code,
+  label: entry.name,
+}));
 
 export interface BillingDetailsDialogProps {
   open: boolean;
@@ -201,6 +203,8 @@ export default function BillingDetailsDialog({ open, profile, onClose, onSaved }
                     size="form"
                     mode="inline"
                     ariaLabel="Billing state"
+                    placeholder="Select a state"
+                    searchable
                   />
                 </div>
 
