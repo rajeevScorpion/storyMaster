@@ -15,6 +15,12 @@ Razorpay's own `subscription.cancelled` webhook came back 8 s later and processe
 Razorpay's cancellation SMS. `billing_admin_actions_enabled` is **on** on dev; the row did not exist
 until the owner first toggled it, which is why Re-run was greyed out at first.
 
+**Walk step 6, 2026-09-23: pass.** Reconcile run twice on the Preview; both 200. Ledger counts unchanged
+across both (orders 19, payments 2, refunds 1, subscriptions 2, webhook events 15, grants 11).
+`topups: 4` both times: four unpaid `created` top-up orders from 2026-09-17, re-checked and left
+unpaid. Two stale ones (April, June) were marked `abandoned`. The same cron also cleared a media-retention
+backlog on dev (24 originals, 5 reference sources) on the first run, since crons never run on Preview.
+
 **Open defect, fix before walk step 7: `recordRefund`'s update path (`lib/billing/ledger.ts`) blanks
 fields the webhook doesn't carry.** On a duplicate refund id it writes `reason`, `coin_adjustment_json`
 and `processed_at` unconditionally, as `null` when absent. An in-app refund records the admin's reason and
@@ -56,12 +62,11 @@ It matters once billing details are editable. It is recorded as a Phase 5 requir
 
 **Do next, in order:**
 1. **Fix the `recordRefund` update path** (open defect above), with tests. Small; one commit.
-2. **Owner: walk step 6** (reconcile; the PowerShell form is in the runbook). It can run before the fix.
-3. **Owner: walk step 7** (in-app refund, e.g. of a fresh top-up), after the fix is pushed. Then check
+2. **Owner: walk step 7** (in-app refund, e.g. of a fresh top-up), after the fix is pushed. Then check
    the refund row still has the admin's reason and `coin_adjustment_json`. Turn the kill switch off
    afterwards.
-4. **Owner: the refund policy copy.** It must now also state decisions 15-16.
-5. **Plan Phase 5.** Binding input: `phase-5-owner-requirements.md`, including the Razorpay-window and
+3. **Owner: the refund policy copy.** It must now also state decisions 15-16.
+4. **Plan Phase 5.** Binding input: `phase-5-owner-requirements.md`, including the Razorpay-window and
    payment-method notes. The required-field set is a proposal awaiting the owner.
 
 One scope call in Unit C's UI: re-sync is offered only on active, not-cancelling subscriptions, a
