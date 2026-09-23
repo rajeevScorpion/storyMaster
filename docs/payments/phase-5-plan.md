@@ -10,11 +10,11 @@ Living handoff: `audit-progress.md`. Written by Opus after the money walk passed
 | Unit | What | Depends on | Risk |
 |---|---|---|---|
 | **0** | Razorpay sandbox probe: what a cycle-end cancel looks like, and whether it can be undone | — | none (no code) |
-| **A** | Ledger correctness: write-once payment fields, subscription payment method, customer snapshot | — | **high** (money records) |
+| **A** | Ledger correctness: write-once payment fields, subscription payment method, customer snapshot. **BUILT `4da23f5`, reviewed line by line** | — | **high** (money records) |
 | **B** | `billing-profile.shared.ts`: one validation authority for client and server. **BUILT `c2f0e9c`, diff-reviewed** | — | low |
 | **C** | `FilterDropdown`: keyboard support for all, `searchable` opt-in. **BUILT `b818493` + review fix `549b40c`** | — | low (28 callers) |
 | **M** | Migration 134: record who asked for a cancellation, and when | — | low |
-| **D** | Billing-details dialog redesign: Personal/Business, sections, inline validation | B, C, **P1, P7** | low |
+| **D** | Billing-details dialog redesign: Personal/Business, sections, inline validation. **BUILT `6a1f661`, diff-reviewed; owner visual review on the Preview pending** | B, C, **P1, P7** | low |
 | **E1** | Checkout plumbing: timing, Razorpay options, failure handling, kids gate, attestation | **P6** | medium |
 | **E2** | Checkout UI: pre-payment summary, branded opening and confirming states | E1 | low |
 | **F** | Settings → Billing at `/account/billing`, with self-serve cancel | A, M, D, E1, **P3, P5** | medium |

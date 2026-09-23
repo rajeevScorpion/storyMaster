@@ -27,7 +27,32 @@ reaches the customer. Decision 6 (adult attestation, no checkout from kids mode)
   auto-height wrapper, so menus opened **8px tall** (measured in Chromium; unit tests and plain
   `toBeVisible` both passed over it). Escape inside a Modal also closed the dialog, and Tab left its
   focus trap. All fixed in `549b40c`, and the e2e now asserts real height and scrolling.
-- **Unit A** is running.
+- **Unit D** `6a1f661`: diff-reviewed and accepted. The Business state shows as a locked static box
+  (`FilterDropdown` has no `disabled` prop). The vitest environment is `node` with no DOM library, so the
+  form logic lives in `billing-details-form.shared.ts` with its tests. **Owner:** look at it on the
+  Preview (wallet → Billing details → Edit), both Personal and Business, and on a phone.
+- **Unit A** `4da23f5`: reviewed line by line and accepted.
+  - Payment updates are fill-only. The status never moves back from refunded or disputed.
+  - The tax split and customer snapshot are written once, under their own guards.
+  - The subscription method is fetched once per payment, falling back to the entity's `payment_method`.
+  - The sync no longer derives `cancel_at_period_end`.
+  - The admin cancel records `cancel_requested_*` (134, fail-closed).
+  - Renewals deliberately carry no purchase snapshot.
+  - The "set true from a marker field" clause waits on Unit 0.
+- **Gates on the final tree (`4da23f5` + docs):** tsc clean, lint clean, **2,084 tests / 170 files**,
+  `build:verify` compiled. e2e: 37/38; the one failure is the storyline item below, not Phase 5.
+- **Owner call at 67% usage: no new agents.** The session stopped after A.
+
+**Next session starts with:**
+1. The phase brief.
+2. **E1** (checkout plumbing) and then **E2**, **F** and **G** (plan §9).
+3. If the owner has run **Unit 0** by then, read the new subscription's `subscription.*` webhook rows in
+   `billing_webhook_events`, then write `research/11-cycle-end-cancel-probe.md`. They keep the full entity:
+   look at `charge_at`, `ended_at`, `has_scheduled_changes` and `change_scheduled_at` after a cycle-end
+   cancel. Then tell the owner to cancel the test subscription immediately.
+**Owner, still open:**
+- Unit 0 (steps in this session's chat, repeated in plan §5 Unit 0).
+- A visual review of the new billing dialog on the Preview.
 - **Unit 0** (the Razorpay cycle-end-cancel probe) is waiting on the owner.
 - Usage was **60%** when C was reviewed.
 **Open, not Phase 5:** `e2e/storyline-signin-return.spec.ts:36` fails every time on this branch. Clicking
