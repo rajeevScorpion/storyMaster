@@ -764,9 +764,12 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
 - **The money walk has started (2026-09-22).** One real test top-up flowed end to end on the Preview: charged
   price + GST, one ledger row, one grant, webhook processed, no double credit. Subscription, refunds and the
   reconcile backstop are still unwalked — `docs/payments/money-walk-runbook.md` steps 4-8.
-- **Phase 5 (user billing & checkout UX) has owner requirements recorded** in
-  `docs/payments/phase-5-owner-requirements.md`: billing-details redesign, searchable state picker,
-  Personal/Business billing, validation, and Settings → Billing.
+- **Phase 5 (user billing & checkout UX) is planned** in `docs/payments/phase-5-plan.md` (2026-09-23), built
+  on the owner's requirements in `docs/payments/phase-5-owner-requirements.md`. Owner decisions P1-P7 are answered
+  (2026-09-23). It adds migration 134 (cancel request on `billing_subscriptions`).
+  Planning found:
+  - `billing_payments` updates can rewrite a past charge's tax split and blank its method;
+  - adult attestation and the kids checkout block (owner decision 6) were never built.
 - The Story Bible LLM call is **unbilled** — it consumes tokens without a coin charge.
 - The full `ImageModelSnapshot` — including both `providerCost*Usd` fields — still reaches the client inside
   `beat.imageGenerationMetadata.imageModelSnapshot`. The picker leak was fixed by splitting

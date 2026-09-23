@@ -3,7 +3,24 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-23, night — money walk steps 1-7 all pass)
+## Next session starts here (updated 2026-09-23, late — Phase 5 planned)
+
+**Phase 5 is planned: `phase-5-plan.md`.** Ten units (0, A-G, M), migration 134 written out in full inside the
+plan (not yet as files). **Seven owner decisions, P1-P7 (plan §3), gate D, E1, F and G.** B, C and the Razorpay
+probe (Unit 0) can start cold, and A needs no decision.
+**Planning found seven defects** (plan §2), two of them in money records:
+- `recordPayment`'s duplicate update blanks the method and fees, and rewrites a past renewal's tax split
+  from the live profile.
+- The sync clears `cancel_at_period_end` on a scheduled cancel.
+
+Also: `payment.failed` settles the checkout, so a successful retry shows as failed. Raw Razorpay error text
+reaches the customer. Decision 6 (adult attestation, no checkout from kids mode) was never built.
+**P1-P7 answered 2026-09-23, all as recommended** (plan §3). Nothing in Phase 5 is blocked now.
+**Owner:** turn `billing_document_issuing_enabled` and `billing_admin_actions_enabled` **off** on dev, at
+`/admin/settings/billing-operations`. Session usage at planning end: **32%**.
+**Next session:** the phase brief, then Unit 0 plus B and C in parallel (plan §9).
+
+## Previous entry (2026-09-23, night — money walk steps 1-7 all pass)
 
 **State.** Migrations 124-133 applied on dev, none on prod. `payments` is pushed through `27cdd32`
 (the refund-row fix). Gates at `27cdd32`: tsc clean, lint clean,
@@ -527,7 +544,8 @@ session at natural checkpoints.
 | 2 Durable billing ledger | **done 2026-09-18** — every unit reviewed; migrations 125-128 applied on dev, none on prod. `phase-2-plan.md` §6 database half verified; the money walk and a throwaway deletion still owner-pending |
 | 3 Plans, entitlements, consumption | **code-complete 2026-09-19** — `phase-3-plan.md`. A `04c0ce4`, B `e7cea4d` (+ defect fix `7b5669b`), C `97b1c0f`, D `717f9bc`, E `db410ef`. Migrations 129 and 130 applied and verified on dev, neither on prod; 129 walked 8/8. Catalogue created and the quota switched on for dev. Outstanding: the Audience price is ₹0, so the upsell cannot be walked end to end |
 | 4 Admin, support ops, incident tooling | **unblocked half built 2026-09-20** — `phase-4-plan.md`. A `27a9fcd`, B `3bf3de5`, D `05cb6d3`+`56abc41`, F `c6f1725`+`89dbabf`. Migration 131 written, **applied nowhere**. **C and E deliberately not started** — blocked on owner decisions D1-D4. Nothing verified against real money data; dev's payment/refund/document/profile/watch-slot tables are all empty |
-| 5–8 | not started |
+| 5 User billing & checkout UX | **planned 2026-09-23** — `phase-5-plan.md`. Owner decisions P1-P7 answered, all as recommended; nothing blocked. Migration 134 designed, not yet written as files |
+| 6–8 | not started |
 
 **Delegation:** Opus plans/reviews, Sonnet executes; **at most 2 agents at once**; ask the owner for session usage at each phase boundary.
 
