@@ -31,9 +31,16 @@ vi.mock('@/lib/billing/tax-rules', () => ({
   getPublishedTaxRule: vi.fn(),
 }));
 
-vi.mock('@/lib/billing/billing-profile', () => ({
-  loadBillingProfile: vi.fn(),
-}));
+vi.mock('@/lib/billing/billing-profile', async (importOriginal) => {
+  // buildCustomerSnapshot (Payments Phase 5, Unit A) is left as the real, pure mapper so these tests
+  // exercise the exact snapshot pricing-checkout.ts freezes into purchase_snapshot_json.customer,
+  // rather than a third hand-copied version of it; only the DB-backed loadBillingProfile is stubbed.
+  const actual = await importOriginal<typeof import('@/lib/billing/billing-profile')>();
+  return {
+    ...actual,
+    loadBillingProfile: vi.fn(),
+  };
+});
 
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import { createClient } from '@/lib/supabase/server';
@@ -516,6 +523,28 @@ describe('prepareRazorpayCheckoutInternal — top-up checkout charges tax', () =
     });
   });
 
+  it('freezes the billing profile into the purchase snapshot as customer (Phase 5, Unit A)', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_topup_packs', 'select', { data: fakeTopupPackRow(), error: null });
+    taxAvailable();
+    billingProfileWithState('24');
+    createRazorpayOrderMock.mockResolvedValueOnce({ id: 'order_rzp_1', amount: 590, currency: 'INR', receipt: null, status: 'created', notes: {} });
+    enqueue('billing_orders', 'insert', { data: { id: 'order-1' }, error: null });
+
+    await prepareRazorpayCheckoutInternal({ kind: 'topup', topupPackId: 'pack-1' });
+
+    const insertCall = calls.find((call) => call.table === 'billing_orders' && call.op === 'insert');
+    const snapshot = (insertCall?.payload as any)?.purchase_snapshot_json;
+    expect(snapshot?.customer).toMatchObject({
+      profileType: 'personal',
+      legalName: 'Jane Doe',
+      stateCode: '24',
+      stateName: 'Gujarat',
+    });
+  });
+
   it('refuses checkout when a tax rule is published but no billing-profile state is declared', async () => {
     getFeatureFlagMock.mockResolvedValueOnce(true);
     const { supabase, enqueue } = createFakeSupabase();
@@ -709,6 +738,28 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax'
 
     expect(createRazorpayPlanMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 23482 }));
     expect(createRazorpaySubscriptionMock).toHaveBeenCalledWith(expect.objectContaining({ planId: 'plan_rzp_fresh' }));
+  });
+
+  it('freezes the billing profile into the subscription snapshot as customer (Phase 5, Unit A)', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue, enqueueRpc, calls } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_plan_versions', 'select', { data: fakePlanVersion({ provider_price_ref: null, provider_price_ref_mode: null }), error: null });
+    enqueue('pricing_plans', 'select', { data: fakePlan(), error: null });
+    taxAvailable();
+    billingProfileWithState('24');
+    enqueueRpc({ data: [{ order_id: 'order-new', reused: false, provider_checkout_session_id: null, superseded_session_ids: [], blocked_reason: null }], error: null });
+    createRazorpayPlanMock.mockResolvedValueOnce(fakeRazorpayPlan({ id: 'plan_rzp_gross' }));
+    enqueue('pricing_plan_versions', 'update', { data: null, error: null });
+    enqueue('pricing_plan_versions', 'select', { data: { provider_price_ref: 'plan_rzp_gross' }, error: null });
+    createRazorpaySubscriptionMock.mockResolvedValueOnce(fakeRazorpaySubscription());
+    enqueue('billing_orders', 'update', { data: null, error: null });
+
+    await prepareRazorpayCheckoutInternal({ kind: 'subscription', planVersionId: 'plan-version-1' });
+
+    const rpcCall = calls.find((call) => call.table === 'billing_begin_subscription_checkout');
+    const snapshot = (rpcCall?.payload as any)?.p_snapshot;
+    expect(snapshot?.customer).toMatchObject({ profileType: 'personal', legalName: 'Jane Doe', stateCode: '24' });
   });
 
   it('refuses subscription checkout without a declared billing-profile state', async () => {

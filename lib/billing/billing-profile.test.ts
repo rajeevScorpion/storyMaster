@@ -3,11 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import {
+  buildCustomerSnapshot,
   loadBillingProfile,
   resetBillingProfileSchemaLatchForTests,
   saveBillingProfile,
   validateBillingProfileInput,
 } from './billing-profile';
+import type { DbBillingProfile } from '@/lib/types/database';
 import type { BillingProfileInput } from '@/lib/types/pricing';
 
 interface QueryResult {
@@ -210,5 +212,64 @@ describe('saveBillingProfile', () => {
 
     expect(supabase.builder.upsertedRow?.company_name).toBeNull();
     expect(supabase.builder.upsertedRow?.gstin).toBeNull();
+  });
+});
+
+// Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): the frozen snapshot recorded against
+// a payment at the moment it is charged -- see ledger.ts's recordPayment write-once guard.
+function dbProfileRow(overrides: Partial<DbBillingProfile> = {}): DbBillingProfile {
+  return {
+    id: 'profile-1',
+    user_id: 'user-1',
+    legal_name: 'Jane Doe',
+    billing_email: 'jane@example.com',
+    phone: '+919876543210',
+    company_name: null,
+    gstin: null,
+    state_code: '24',
+    country_code: 'IN',
+    address_line_1: null,
+    address_line_2: null,
+    city: 'Gandhinagar',
+    postal_code: '382016',
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-02-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('buildCustomerSnapshot', () => {
+  it('returns null for no profile', () => {
+    expect(buildCustomerSnapshot(null)).toBeNull();
+  });
+
+  it('builds a personal snapshot with the profile row\'s own updated_at and the state name', () => {
+    const snapshot = buildCustomerSnapshot(dbProfileRow());
+
+    expect(snapshot).toMatchObject({
+      profileType: 'personal',
+      legalName: 'Jane Doe',
+      gstin: null,
+      companyName: null,
+      stateCode: '24',
+      stateName: 'Gujarat',
+      profileUpdatedAt: '2026-02-01T00:00:00.000Z',
+    });
+    expect(typeof snapshot?.capturedAt).toBe('string');
+    expect(Number.isNaN(Date.parse(snapshot!.capturedAt))).toBe(false);
+  });
+
+  it('derives profileType business iff a GSTIN is present', () => {
+    const snapshot = buildCustomerSnapshot(
+      dbProfileRow({ gstin: '24ACLFA8196N1ZN', company_name: 'Aavriti Design Studio' })
+    );
+
+    expect(snapshot).toMatchObject({ profileType: 'business', gstin: '24ACLFA8196N1ZN', companyName: 'Aavriti Design Studio' });
+  });
+
+  it('resolves stateName to null for a state code the lookup does not recognize', () => {
+    const snapshot = buildCustomerSnapshot(dbProfileRow({ state_code: '99' }));
+
+    expect(snapshot?.stateName).toBeNull();
   });
 });

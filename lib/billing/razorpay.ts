@@ -45,6 +45,11 @@ export interface RazorpaySubscription {
   start_at: number | null;
   total_count: number;
   notes?: Record<string, string>;
+  /** Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): Razorpay sends this on the
+   * subscription entity itself (e.g. "card"), separate from any individual payment/invoice. Used as
+   * the fallback rawMethod for a renewal when fetching the actual payment is skipped (a row already
+   * exists) or fails. */
+  payment_method?: string | null;
 }
 
 export interface RazorpayOrder {

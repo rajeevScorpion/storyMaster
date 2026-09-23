@@ -14,10 +14,11 @@ import { redactRazorpayPayload } from '@/lib/billing/razorpay-redact.shared';
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import { getPublishedTaxRule } from '@/lib/billing/tax-rules';
 import { computeTax, type TaxBreakdown } from '@/lib/billing/tax.shared';
-import { loadBillingProfile } from '@/lib/billing/billing-profile';
+import { buildCustomerSnapshot, loadBillingProfile } from '@/lib/billing/billing-profile';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import type {
+  DbBillingProfile,
   DbPricingPlan,
   DbPricingPlanVersion,
   DbPricingTopupPack,
@@ -55,6 +56,11 @@ interface CheckoutTaxContext {
   supplierStateCode: string | null;
   placeOfSupplyStateCode: string | null;
   schemaAvailable: boolean;
+  /** Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): the profile this same call already
+   * loaded to resolve place-of-supply, handed back so the caller can freeze it into the purchase
+   * snapshot's `customer` field without a second read. Null whenever tax wasn't resolved from a
+   * profile at all (schema unavailable). */
+  profile: DbBillingProfile | null;
 }
 
 /**
@@ -82,6 +88,7 @@ async function resolveCheckoutTax(input: {
       supplierStateCode: null,
       placeOfSupplyStateCode: null,
       schemaAvailable: false,
+      profile: null,
     };
   }
 
@@ -118,6 +125,7 @@ async function resolveCheckoutTax(input: {
     supplierStateCode: ruleResult.rule.supplierStateCode,
     placeOfSupplyStateCode: profile.state_code,
     schemaAvailable: true,
+    profile,
   };
 }
 
@@ -188,6 +196,10 @@ export async function prepareRazorpayCheckoutInternal(
       pricingMarketKey: version.pricing_market_key,
       providerMode,
       ...taxSnapshotFields(tax),
+      // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): who was billed, frozen at
+      // checkout time -- the ledger's recordPayment fills this into the payment row once and never
+      // rewrites it, so a later profile edit never reaches a past charge.
+      customer: buildCustomerSnapshot(tax.profile),
     };
 
     const beginResult = await supabase.rpc('billing_begin_subscription_checkout', {
@@ -365,6 +377,9 @@ export async function prepareRazorpayCheckoutInternal(
         pricingMarketKey: topup.pricing_market_key,
         providerMode,
         ...taxSnapshotFields(tax),
+        // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): see the matching comment on
+        // the subscription snapshot above.
+        customer: buildCustomerSnapshot(tax.profile),
       },
       raw_provider_payload_json: redactRazorpayPayload({
         kind: 'topup',

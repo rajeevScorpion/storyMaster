@@ -565,6 +565,43 @@ export async function cancelBillingSubscriptionAtCycleEnd(input: {
     status: cancelled.status,
   });
 
+  // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A; migration 134): record who asked for
+  // the cycle-end cancel and when, so "Cancels on <date>" survives a re-sync -- the sync itself never
+  // writes these two columns (razorpay-sync.ts's cancelAtPeriodEndPatch), only a cancel action does.
+  // Fails closed on 134 being unapplied: Razorpay has already cancelled and the audit row above
+  // already recorded it, so a missing column here must never surface as a thrown error -- it only
+  // means "who/when" is lost, the same trade the migration's own header documents.
+  const cancelMarkerUpdate = await admin
+    .from('billing_subscriptions')
+    .update({
+      cancel_at_period_end: true,
+      cancel_requested_at: new Date().toISOString(),
+      cancel_requested_by: 'admin',
+    })
+    .eq('id', subscription.id);
+
+  if (cancelMarkerUpdate.error) {
+    if (isMissingBillingSchemaError(cancelMarkerUpdate.error)) {
+      // Same fail-closed retry razorpay-sync.ts's insertBillingSubscriptionRow uses for subject_ref.
+      const retryUpdate = await admin
+        .from('billing_subscriptions')
+        .update({ cancel_at_period_end: true })
+        .eq('id', subscription.id);
+
+      if (retryUpdate.error) {
+        console.error('[admin-billing-actions] failed to set cancel_at_period_end after a successful Razorpay cancellation', {
+          subscriptionId: subscription.id,
+          message: retryUpdate.error.message,
+        });
+      }
+    } else {
+      console.error('[admin-billing-actions] failed to record the cancel request after a successful Razorpay cancellation', {
+        subscriptionId: subscription.id,
+        message: cancelMarkerUpdate.error.message,
+      });
+    }
+  }
+
   // Best-effort immediate convergence -- the webhook/reconcile backstop still owns the real state.
   try {
     await reconcilePricingSubscription({ providerSubscriptionId: cancelled.id });

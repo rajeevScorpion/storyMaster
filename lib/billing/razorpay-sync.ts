@@ -16,10 +16,11 @@ import {
 import { redactRazorpayPayload } from '@/lib/billing/razorpay-redact.shared';
 import { recordPayment } from '@/lib/billing/ledger';
 import { getPublishedTaxRule } from '@/lib/billing/tax-rules';
-import { loadBillingProfile } from '@/lib/billing/billing-profile';
+import { buildCustomerSnapshot, loadBillingProfile } from '@/lib/billing/billing-profile';
 import { computeTaxFromGross, type TaxBreakdown } from '@/lib/billing/tax.shared';
 import type {
   DbBillingOrder,
+  DbBillingProfile,
   DbBillingSubscription,
   DbPricingPlanVersion,
   DbPricingTopupPack,
@@ -45,6 +46,20 @@ const SETTLEMENT_EXCEPTION_ORDER_STATUSES = new Set(['refunded', 'partially_refu
 /** A later subscription sync must not erase a refund or dispute already recorded on the checkout order. */
 export function nextSubscriptionCheckoutOrderStatus(currentStatus: string, providerStatus: string): string {
   return SETTLEMENT_EXCEPTION_ORDER_STATUSES.has(currentStatus) ? currentStatus : providerStatus;
+}
+
+const LIVE_SUBSCRIPTION_STATUSES = new Set(['authenticated', 'active', 'pending', 'halted']);
+
+/**
+ * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): what the sync itself may write to
+ * cancel_at_period_end, independent of status. Migration 134 (cancel_requested_at/by) is the only
+ * writer of a *scheduled* cancel -- the sync only clears the flag once a subscription is terminal,
+ * and otherwise leaves it alone so it survives a re-sync in between (the defect this unit fixes: the
+ * old code derived it from status alone and cleared a cycle-end cancel on the very next webhook).
+ * Returns {} (omit the field entirely) while the subscription is still live.
+ */
+export function cancelAtPeriodEndPatch(status: string): { cancel_at_period_end?: false } {
+  return LIVE_SUBSCRIPTION_STATUSES.has(status) ? {} : { cancel_at_period_end: false };
 }
 
 export interface SettleTopupOrderResult {
@@ -195,6 +210,10 @@ export async function settleTopupOrder(input: {
       providerFeeMinor: payment.fee ?? null,
       providerTaxMinor: payment.tax ?? null,
       purchaseSnapshot: order.purchase_snapshot_json,
+      // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): frozen at checkout time into
+      // the order's own snapshot -- there is no live profile to re-derive from here, and the ledger's
+      // write-once guard means this only ever fills the row once anyway.
+      customerSnapshot: (order.purchase_snapshot_json as { customer?: Record<string, unknown> | null } | null)?.customer ?? null,
       capturedAt: payment.created_at ? razorpayUnixToIso(payment.created_at) : new Date().toISOString(),
     });
   }
@@ -332,6 +351,12 @@ interface SubscriptionPaymentMoney {
   taxMinor: number;
   grossMinor: number;
   taxBreakdown: TaxBreakdown | null;
+  /** Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): the profile this call loaded to
+   * derive the split, if it loaded one at all -- null on the first-charge fast path (the split comes
+   * from the checkout snapshot, not a live read) and whenever no profile/rule was resolvable. The
+   * caller reuses this same read to build the renewal's customer snapshot, so the tax split and the
+   * snapshot are never derived from two different moments in time. */
+  profile: DbBillingProfile | null;
 }
 
 /**
@@ -368,6 +393,7 @@ async function resolveSubscriptionPaymentMoney(input: {
         taxMinor: snapshot.taxMinor,
         grossMinor: snapshot.grossMinor,
         taxBreakdown: snapshot.tax?.breakdown ?? null,
+        profile: null,
       };
     }
   }
@@ -376,7 +402,8 @@ async function resolveSubscriptionPaymentMoney(input: {
     const ruleResult = await getPublishedTaxRule('IN', 'subscription');
     if (ruleResult.status === 'ok') {
       const profileResult = await loadBillingProfile(input.supabase, input.userId);
-      const stateCode = profileResult.status === 'ok' ? (profileResult.profile?.state_code ?? null) : null;
+      const profile = profileResult.status === 'ok' ? profileResult.profile : null;
+      const stateCode = profile?.state_code ?? null;
 
       if (stateCode) {
         const result = computeTaxFromGross({
@@ -385,7 +412,13 @@ async function resolveSubscriptionPaymentMoney(input: {
           supplierStateCode: ruleResult.rule.supplierStateCode,
           placeOfSupplyStateCode: stateCode,
         });
-        return { netMinor: result.netMinor, taxMinor: result.taxMinor, grossMinor: result.grossMinor, taxBreakdown: result.breakdown };
+        return {
+          netMinor: result.netMinor,
+          taxMinor: result.taxMinor,
+          grossMinor: result.grossMinor,
+          taxBreakdown: result.breakdown,
+          profile,
+        };
       }
     }
   } catch (err) {
@@ -394,7 +427,66 @@ async function resolveSubscriptionPaymentMoney(input: {
     });
   }
 
-  return { netMinor: input.grossMinor, taxMinor: 0, grossMinor: input.grossMinor, taxBreakdown: null };
+  return { netMinor: input.grossMinor, taxMinor: 0, grossMinor: input.grossMinor, taxBreakdown: null, profile: null };
+}
+
+interface SubscriptionPaymentMethod {
+  rawMethod: string | null;
+  providerFeeMinor: number | null;
+  providerTaxMinor: number | null;
+}
+
+/**
+ * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): the payment method to record for a
+ * subscription charge. Fetching the actual Razorpay payment gives the real method plus its fee/tax,
+ * but costs an API call, so it only happens once per payment -- the first time this sync observes it
+ * (no billing_payments row recorded for it yet). The daily reconcile re-observing an already-recorded
+ * payment must not re-fetch it every day: it reuses the subscription entity's own `payment_method`
+ * (present on every subscription webhook/fetch, e.g. "card"), which cost nothing extra to have. The
+ * same fallback covers a fetch failure. Never throws -- a payment method is not worth failing a
+ * coin grant over.
+ */
+async function resolveSubscriptionPaymentMethod(input: {
+  supabase: AdminClient;
+  providerPaymentId: string;
+  providerMode: 'test' | 'live';
+  subscriptionPaymentMethod: string | null | undefined;
+}): Promise<SubscriptionPaymentMethod> {
+  const fallback: SubscriptionPaymentMethod = {
+    rawMethod: input.subscriptionPaymentMethod ?? null,
+    providerFeeMinor: null,
+    providerTaxMinor: null,
+  };
+
+  const existing = await input.supabase
+    .from('billing_payments')
+    .select('id')
+    .eq('provider', 'razorpay')
+    .eq('provider_mode', input.providerMode)
+    .eq('provider_payment_id', input.providerPaymentId)
+    .maybeSingle();
+
+  // A query error here (including a missing-schema shape, e.g. 125 not applied) is treated the same
+  // as "the row already exists": skip the fetch rather than let an unrelated read failure burn an
+  // API call. recordPayment below independently re-checks its own schema availability regardless.
+  if (existing.error || existing.data) {
+    return fallback;
+  }
+
+  try {
+    const payment = await fetchRazorpayPayment(input.providerPaymentId);
+    return {
+      rawMethod: payment.method ?? fallback.rawMethod,
+      providerFeeMinor: payment.fee ?? null,
+      providerTaxMinor: payment.tax ?? null,
+    };
+  } catch (err) {
+    console.error(
+      '[razorpay-sync] failed to fetch a subscription payment for its method; falling back to the subscription entity',
+      { paymentId: input.providerPaymentId, message: err instanceof Error ? err.message : String(err) }
+    );
+    return fallback;
+  }
 }
 
 /** Inserts a new billing_subscriptions row, dropping `subject_ref` and retrying once if the column
@@ -474,7 +566,10 @@ export async function syncSubscriptionFromProvider(input: {
         currency_code: input.planVersion.currency_code,
         current_period_start: currentPeriodStart,
         current_period_end: currentPeriodEnd,
-        cancel_at_period_end: subscription.status === 'cancelled',
+        // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): the sync never derives a
+        // scheduled cancel from status -- see cancelAtPeriodEndPatch. Only a cancel action (migration
+        // 134's cancel_requested_at/by) sets it true.
+        ...cancelAtPeriodEndPatch(subscription.status),
         grace_period_ends_at: gracePeriodEndsAt,
         last_webhook_at: new Date().toISOString(),
         raw_provider_state_json: redactedPayload,
@@ -497,7 +592,8 @@ export async function syncSubscriptionFromProvider(input: {
       currency_code: input.planVersion.currency_code,
       current_period_start: currentPeriodStart,
       current_period_end: currentPeriodEnd,
-      cancel_at_period_end: subscription.status === 'cancelled',
+      // A brand-new subscription is never already scheduled to cancel.
+      cancel_at_period_end: false,
       grace_period_ends_at: gracePeriodEndsAt,
       last_webhook_at: new Date().toISOString(),
       raw_provider_state_json: redactedPayload,
@@ -555,6 +651,36 @@ export async function syncSubscriptionFromProvider(input: {
           userId: input.userId,
         });
 
+        const method = await resolveSubscriptionPaymentMethod({
+          supabase: input.supabase,
+          providerPaymentId: paidInvoice.payment_id,
+          providerMode: getRazorpayMode(),
+          subscriptionPaymentMethod: subscription.payment_method,
+        });
+
+        // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): who was billed, frozen the
+        // moment this charge is first recorded -- recordPayment's write-once guard means it is never
+        // rewritten by a later profile edit. A first charge's customer was already frozen into the
+        // checkout order's snapshot at checkout time; an order that predates this unit (no `customer`
+        // key) falls back to the live profile, same source a renewal uses, so the payment still gets
+        // *some* snapshot rather than none. A renewal reuses the exact profile resolveSubscription-
+        // PaymentMoney already read for the tax split above -- one read, not two.
+        let customerSnapshot: Record<string, unknown> | null;
+        if (isFirstCharge) {
+          const orderCustomer =
+            (checkoutOrder?.purchase_snapshot_json as { customer?: Record<string, unknown> | null } | null)
+              ?.customer ?? null;
+          if (orderCustomer) {
+            customerSnapshot = orderCustomer;
+          } else {
+            const fallbackProfileResult = await loadBillingProfile(input.supabase, input.userId);
+            const fallbackProfile = fallbackProfileResult.status === 'ok' ? fallbackProfileResult.profile : null;
+            customerSnapshot = buildCustomerSnapshot(fallbackProfile) as Record<string, unknown> | null;
+          }
+        } else {
+          customerSnapshot = buildCustomerSnapshot(money.profile) as Record<string, unknown> | null;
+        }
+
         await recordPayment({
           supabase: input.supabase,
           subjectRef,
@@ -573,6 +699,15 @@ export async function syncSubscriptionFromProvider(input: {
           taxMinor: money.taxMinor,
           grossMinor: money.grossMinor,
           taxBreakdown: money.taxBreakdown,
+          rawMethod: method.rawMethod,
+          providerFeeMinor: method.providerFeeMinor,
+          providerTaxMinor: method.providerTaxMinor,
+          // Only the first charge's own checkout order describes what was actually sold at that
+          // sitting -- a renewal has no order of its own (Razorpay charges the fixed plan amount on
+          // its own schedule), and `checkoutOrder` here is still the original checkout order, so
+          // attaching it to a renewal would misrepresent it as that renewal's purchase context.
+          purchaseSnapshot: isFirstCharge ? (checkoutOrder?.purchase_snapshot_json ?? null) : null,
+          customerSnapshot,
           cycleStart: razorpayUnixToIso(paidInvoice.billing_start),
           cycleEnd: razorpayUnixToIso(paidInvoice.billing_end),
           capturedAt: paidInvoice.paid_at ? razorpayUnixToIso(paidInvoice.paid_at) : new Date().toISOString(),

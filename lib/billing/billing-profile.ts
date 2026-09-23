@@ -7,6 +7,7 @@ import {
   stateCodeFromGstin,
   validateBillingProfile,
 } from '@/lib/billing/billing-profile.shared';
+import { indiaStateName } from '@/lib/billing/india-states.shared';
 import type { DbBillingProfile } from '@/lib/types/database';
 import type { BillingProfileDTO, BillingProfileInput } from '@/lib/types/pricing';
 
@@ -42,6 +43,54 @@ export function toBillingProfileDTO(row: DbBillingProfile): BillingProfileDTO {
     postalCode: row.postal_code,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+export interface BillingCustomerSnapshot {
+  profileType: 'personal' | 'business';
+  legalName: string | null;
+  companyName: string | null;
+  gstin: string | null;
+  billingEmail: string | null;
+  phone: string | null;
+  stateCode: string;
+  stateName: string | null;
+  countryCode: string;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  postalCode: string | null;
+  /** The profile row's own updated_at, so a snapshot can be told apart from a later edit. */
+  profileUpdatedAt: string;
+  /** When this snapshot was taken (payment time), separate from profileUpdatedAt above. */
+  capturedAt: string;
+}
+
+/** Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): a frozen copy of the billing profile
+ * at the moment a payment is recorded -- who was actually billed, not who the profile says today.
+ * Stored inside billing_payments.customer_snapshot_json (checkout writes it into
+ * purchase_snapshot_json.customer first; the ledger's recordPayment then fills it in, once, via its
+ * write-once guard -- see ledger.ts). `profileType` is derived the same way toBillingProfileDTO
+ * derives it: 'business' iff a GSTIN is present. */
+export function buildCustomerSnapshot(profile: DbBillingProfile | null): BillingCustomerSnapshot | null {
+  if (!profile) return null;
+
+  return {
+    profileType: profile.gstin ? 'business' : 'personal',
+    legalName: profile.legal_name,
+    companyName: profile.company_name,
+    gstin: profile.gstin,
+    billingEmail: profile.billing_email,
+    phone: profile.phone,
+    stateCode: profile.state_code,
+    stateName: indiaStateName(profile.state_code),
+    countryCode: profile.country_code,
+    addressLine1: profile.address_line_1,
+    addressLine2: profile.address_line_2,
+    city: profile.city,
+    postalCode: profile.postal_code,
+    profileUpdatedAt: profile.updated_at,
+    capturedAt: new Date().toISOString(),
   };
 }
 

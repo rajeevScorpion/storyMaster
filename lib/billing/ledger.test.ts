@@ -10,6 +10,7 @@ import { getFeatureFlag } from '@/lib/ai/model-config';
 import {
   deriveMethodCategory,
   issueDocumentIfEnabled,
+  paymentStatusRank,
   recordDispute,
   recordPayment,
   recordRefund,
@@ -129,6 +130,16 @@ describe('deriveMethodCategory', () => {
   });
 });
 
+describe('paymentStatusRank', () => {
+  it('ranks refunded, partially_refunded and disputed above captured and failed', () => {
+    expect(paymentStatusRank('captured')).toBe(0);
+    expect(paymentStatusRank('failed')).toBe(0);
+    expect(paymentStatusRank('refunded')).toBe(1);
+    expect(paymentStatusRank('partially_refunded')).toBe(1);
+    expect(paymentStatusRank('disputed')).toBe(1);
+  });
+});
+
 function basePaymentInput(supabase: any, overrides: Partial<Parameters<typeof recordPayment>[0]> = {}) {
   return {
     supabase,
@@ -172,6 +183,7 @@ describe('recordPayment', () => {
   it('is idempotent on the provider id: a 23505 on insert updates the existing row instead of duplicating', async () => {
     const { supabase, enqueue, calls } = createFakeSupabase();
     enqueue('billing_payments', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_payments', 'select', { data: { status: 'captured' }, error: null });
     enqueue('billing_payments', 'update', { data: { id: 'payment-1' }, error: null });
 
     const result = await recordPayment(basePaymentInput(supabase, { status: 'refunded' }));
@@ -188,6 +200,7 @@ describe('recordPayment', () => {
     // time -- and across 31 March, into the wrong financial year.
     const { supabase, enqueue, calls } = createFakeSupabase();
     enqueue('billing_payments', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_payments', 'select', { data: { status: 'captured' }, error: null });
     enqueue('billing_payments', 'update', { data: { id: 'payment-1' }, error: null });
 
     await recordPayment(basePaymentInput(supabase, { capturedAt: '2026-04-01T00:00:00.000Z' }));
@@ -202,11 +215,93 @@ describe('recordPayment', () => {
   it('does not attempt the captured_at fill-in when no capture time was supplied', async () => {
     const { supabase, enqueue, calls } = createFakeSupabase();
     enqueue('billing_payments', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_payments', 'select', { data: { status: 'captured' }, error: null });
     enqueue('billing_payments', 'update', { data: { id: 'payment-1' }, error: null });
 
     await recordPayment(basePaymentInput(supabase));
 
     expect(calls.filter((call) => call.table === 'billing_payments' && call.op === 'update')).toHaveLength(1);
+  });
+
+  it('does not blank a stored method_category when a later observation carries no rawMethod', async () => {
+    // e.g. reconcile re-fetches an invoice it already recorded, this time with no payment method
+    // information at hand -- it must not undo what the first, more informative write already set.
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_payments', 'select', { data: { status: 'captured' }, error: null });
+    enqueue('billing_payments', 'update', { data: { id: 'payment-1' }, error: null });
+
+    await recordPayment(basePaymentInput(supabase, { rawMethod: undefined }));
+
+    const updateCall = calls.find((call) => call.table === 'billing_payments' && call.op === 'update');
+    expect(updateCall?.payload).not.toHaveProperty('method_category');
+  });
+
+  it('never rewrites tax_breakdown_json through the main patch, and fills it only where it is still {}', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_payments', 'select', { data: { status: 'captured' }, error: null });
+    enqueue('billing_payments', 'update', { data: { id: 'payment-1' }, error: null });
+    enqueue('billing_payments', 'update', { data: null, error: null }); // the tax_breakdown_json fill
+
+    const taxBreakdown = { cgstMinor: 90, sgstMinor: 90, igstMinor: 0 } as any;
+    await recordPayment(basePaymentInput(supabase, { taxBreakdown }));
+
+    const updateCalls = calls.filter((call) => call.table === 'billing_payments' && call.op === 'update');
+    expect(updateCalls[0]?.payload).not.toHaveProperty('tax_breakdown_json');
+    expect(updateCalls[1]?.payload).toEqual({ tax_breakdown_json: taxBreakdown });
+    expect(updateCalls[1]?.filters).toContainEqual({ method: 'eq', args: ['tax_breakdown_json', '{}'] });
+  });
+
+  it('does not attempt the tax_breakdown_json fill when no breakdown was supplied', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_payments', 'select', { data: { status: 'captured' }, error: null });
+    enqueue('billing_payments', 'update', { data: { id: 'payment-1' }, error: null });
+
+    await recordPayment(basePaymentInput(supabase));
+
+    expect(calls.filter((call) => call.table === 'billing_payments' && call.op === 'update')).toHaveLength(1);
+  });
+
+  it('fills customer_snapshot_json only through the guarded null-check update, never the main patch', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_payments', 'select', { data: { status: 'captured' }, error: null });
+    enqueue('billing_payments', 'update', { data: { id: 'payment-1' }, error: null });
+    enqueue('billing_payments', 'update', { data: null, error: null }); // the customer_snapshot_json fill
+
+    const customerSnapshot = { legalName: 'Jane Doe', profileType: 'personal' } as any;
+    await recordPayment(basePaymentInput(supabase, { customerSnapshot }));
+
+    const updateCalls = calls.filter((call) => call.table === 'billing_payments' && call.op === 'update');
+    expect(updateCalls[0]?.payload).not.toHaveProperty('customer_snapshot_json');
+    expect(updateCalls[1]?.payload).toEqual({ customer_snapshot_json: customerSnapshot });
+    expect(updateCalls[1]?.filters).toContainEqual({ method: 'is', args: ['customer_snapshot_json', null] });
+  });
+
+  it('never regresses status: refunded stays refunded when a later call reports captured', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_payments', 'select', { data: { status: 'refunded' }, error: null });
+    enqueue('billing_payments', 'update', { data: { id: 'payment-1' }, error: null });
+
+    await recordPayment(basePaymentInput(supabase, { status: 'captured' }));
+
+    const updateCall = calls.find((call) => call.table === 'billing_payments' && call.op === 'update');
+    expect(updateCall?.payload).not.toHaveProperty('status');
+  });
+
+  it('allows status to move forward: captured to refunded is written', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_payments', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_payments', 'select', { data: { status: 'captured' }, error: null });
+    enqueue('billing_payments', 'update', { data: { id: 'payment-1' }, error: null });
+
+    await recordPayment(basePaymentInput(supabase, { status: 'refunded' }));
+
+    const updateCall = calls.find((call) => call.table === 'billing_payments' && call.op === 'update');
+    expect(updateCall?.payload).toMatchObject({ status: 'refunded' });
   });
 
   it('fails closed (does not throw) when migration 125 is absent, and latches for later calls', async () => {

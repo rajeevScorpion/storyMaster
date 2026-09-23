@@ -106,9 +106,21 @@ export interface RecordPaymentInput {
 }
 
 /**
+ * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): the two ranks a payment status can be
+ * in, for recordPayment's duplicate-update path. 'refunded', 'partially_refunded' and 'disputed' are
+ * all states a charge reaches only after (never instead of) being recorded -- a later, less-settled
+ * re-observe (a stale webhook redelivery, or the daily reconcile re-fetching an invoice it already
+ * saw) must not walk one of them back down to 'captured'/'failed'. Exported for ledger.test.ts.
+ */
+export function paymentStatusRank(status: BillingPaymentStatus): number {
+  return status === 'refunded' || status === 'partially_refunded' || status === 'disputed' ? 1 : 0;
+}
+
+/**
  * Records one confirmed charge. Idempotent on (provider, provider_mode, provider_payment_id): a
  * concurrent caller (verify/webhook race, same as Phase 1) hits 23505 on the insert and this
- * updates the mutable fields instead of duplicating the row.
+ * updates the mutable fields instead of duplicating the row. The update path fills gaps rather than
+ * overwriting -- see the comment above it -- mirroring recordRefund's fix (d42622b).
  */
 export async function recordPayment(input: RecordPaymentInput): Promise<LedgerWriteResult> {
   if (ledgerSchemaUnavailable) return { state: 'unavailable' };
@@ -161,17 +173,51 @@ export async function recordPayment(input: RecordPaymentInput): Promise<LedgerWr
     throw new Error(`Failed to record payment: ${insertResult.error.message}`);
   }
 
+  // Verify, the webhook and the daily reconcile all converge on the same row here, each potentially
+  // carrying only a subset of what it knows -- so this fills gaps instead of blanking whatever the
+  // first writer already set. Read the stored status first: unlike the other fields below, status
+  // must never move backwards (an incoming 'captured' must not undo a 'refunded'/'partially_refunded'/
+  // disputed' already recorded), and there is no single filtered UPDATE that both enforces that rank
+  // and still unconditionally fills the unrelated method/fee/webhook_event_id fields in the same call.
+  const storedResult = await input.supabase
+    .from('billing_payments')
+    .select('status')
+    .eq('provider', input.provider)
+    .eq('provider_mode', input.providerMode)
+    .eq('provider_payment_id', input.providerPaymentId)
+    .maybeSingle();
+
+  if (storedResult.error) {
+    throw new Error(`Failed to read an already-recorded payment's status: ${storedResult.error.message}`);
+  }
+
+  const storedStatus = (storedResult.data as { status: BillingPaymentStatus } | null)?.status ?? null;
+  const statusRegresses = storedStatus !== null && paymentStatusRank(input.status) < paymentStatusRank(storedStatus);
+
+  const updatePatch: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+  if (!statusRegresses) {
+    updatePatch.status = input.status;
+  }
+  // method_category: fill only -- an incoming 'unknown' (no rawMethod on this observation) must never
+  // blank a method a previous, more informative observation already recorded.
+  if (methodCategory !== 'unknown') {
+    updatePatch.method_category = methodCategory;
+  }
+  if (input.providerFeeMinor != null) {
+    updatePatch.provider_fee_minor = input.providerFeeMinor;
+  }
+  if (input.providerTaxMinor != null) {
+    updatePatch.provider_tax_minor = input.providerTaxMinor;
+  }
+  if (input.webhookEventId != null) {
+    updatePatch.webhook_event_id = input.webhookEventId;
+  }
+
   const updateResult = await input.supabase
     .from('billing_payments')
-    .update({
-      status: input.status,
-      tax_breakdown_json: input.taxBreakdown ?? {},
-      method_category: methodCategory,
-      provider_fee_minor: input.providerFeeMinor ?? null,
-      provider_tax_minor: input.providerTaxMinor ?? null,
-      webhook_event_id: input.webhookEventId ?? null,
-      updated_at: new Date().toISOString(),
-    })
+    .update(updatePatch)
     .eq('provider', input.provider)
     .eq('provider_mode', input.providerMode)
     .eq('provider_payment_id', input.providerPaymentId)
@@ -197,6 +243,43 @@ export async function recordPayment(input: RecordPaymentInput): Promise<LedgerWr
 
     if (backfillCapturedAt.error) {
       throw new Error(`Failed to stamp the capture time on an already-recorded payment: ${backfillCapturedAt.error.message}`);
+    }
+  }
+
+  // tax_breakdown_json is never in the patch above, and never updated once non-empty: a renewal's
+  // split is re-derived from the LIVE billing profile on every sync
+  // (razorpay-sync.ts's resolveSubscriptionPaymentMoney), so folding it into the ordinary fill-only
+  // patch would let a customer's later address edit rewrite a past charge's recorded CGST/SGST vs
+  // IGST split. It is filled exactly once, only where the stored value is still the untouched
+  // default -- the '{}' literal is cast to jsonb by PostgREST.
+  if (input.taxBreakdown != null && Object.keys(input.taxBreakdown).length > 0) {
+    const backfillTaxBreakdown = await input.supabase
+      .from('billing_payments')
+      .update({ tax_breakdown_json: input.taxBreakdown })
+      .eq('provider', input.provider)
+      .eq('provider_mode', input.providerMode)
+      .eq('provider_payment_id', input.providerPaymentId)
+      .eq('tax_breakdown_json', '{}');
+
+    if (backfillTaxBreakdown.error) {
+      throw new Error(`Failed to backfill an already-recorded payment's tax breakdown: ${backfillTaxBreakdown.error.message}`);
+    }
+  }
+
+  // customer_snapshot_json: same write-once reasoning as tax_breakdown_json above -- who was billed
+  // at the time of a past charge must never be rewritten by a later profile edit. Filled only where
+  // it is still null.
+  if (input.customerSnapshot != null) {
+    const backfillCustomerSnapshot = await input.supabase
+      .from('billing_payments')
+      .update({ customer_snapshot_json: input.customerSnapshot })
+      .eq('provider', input.provider)
+      .eq('provider_mode', input.providerMode)
+      .eq('provider_payment_id', input.providerPaymentId)
+      .is('customer_snapshot_json', null);
+
+    if (backfillCustomerSnapshot.error) {
+      throw new Error(`Failed to backfill an already-recorded payment's customer snapshot: ${backfillCustomerSnapshot.error.message}`);
     }
   }
 

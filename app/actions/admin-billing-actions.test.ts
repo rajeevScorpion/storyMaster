@@ -43,7 +43,8 @@ import { verifyAdmin, createAdminClient } from '@/lib/supabase/admin';
 import { getFeatureFlag, getFeatureFlagValue } from '@/lib/ai/model-config';
 import { cancelRazorpaySubscription, refundRazorpayPayment } from '@/lib/billing/razorpay';
 import { recordRefund } from '@/lib/billing/ledger';
-import { refundBillingPayment } from './admin-billing-actions';
+import { reconcilePricingSubscription } from '@/app/actions/pricing-admin';
+import { cancelBillingSubscriptionAtCycleEnd, refundBillingPayment } from './admin-billing-actions';
 
 const verifyAdminMock = vi.mocked(verifyAdmin);
 const createAdminClientMock = vi.mocked(createAdminClient);
@@ -52,6 +53,7 @@ const getFeatureFlagValueMock = vi.mocked(getFeatureFlagValue);
 const cancelRazorpaySubscriptionMock = vi.mocked(cancelRazorpaySubscription);
 const refundRazorpayPaymentMock = vi.mocked(refundRazorpayPayment);
 const recordRefundMock = vi.mocked(recordRefund);
+const reconcilePricingSubscriptionMock = vi.mocked(reconcilePricingSubscription);
 
 interface QueryResult {
   data?: unknown;
@@ -76,6 +78,7 @@ class FakeQueryBuilder implements PromiseLike<QueryResult> {
   }
 }
 
+
 /**
  * One fake admin client for the whole refundBillingPayment flow, including its two REAL
  * decision-15/16 collaborators (subscription-refund-end.ts, subscription-included-beats.ts), which
@@ -85,7 +88,7 @@ class FakeQueryBuilder implements PromiseLike<QueryResult> {
  */
 function createFakeSupabase() {
   const queues: Record<string, QueryResult[]> = {};
-  const calls: { table: string; op: Op }[] = [];
+  const calls: { table: string; op: Op; payload?: unknown }[] = [];
 
   function enqueue(table: string, op: Op, result: QueryResult) {
     (queues[`${table}:${op}`] ??= []).push(result);
@@ -109,12 +112,12 @@ function createFakeSupabase() {
           calls.push({ table, op: 'select' });
           return new FakeQueryBuilder(dequeue(table, 'select'));
         },
-        insert: (_row: unknown) => {
-          calls.push({ table, op: 'insert' });
+        insert: (row: unknown) => {
+          calls.push({ table, op: 'insert', payload: row });
           return new FakeQueryBuilder(dequeue(table, 'insert'));
         },
-        update: (_row: unknown) => {
-          calls.push({ table, op: 'update' });
+        update: (row: unknown) => {
+          calls.push({ table, op: 'update', payload: row });
           return new FakeQueryBuilder(dequeue(table, 'update'));
         },
       };
@@ -145,6 +148,7 @@ function fakePayment(overrides: Record<string, unknown> = {}) {
 }
 
 const PAYMENT_ID = '11111111-1111-4111-8111-111111111111';
+const SUBSCRIPTION_ID = '22222222-2222-4222-8222-222222222222';
 const REQUEST_KEY = 'manual:test-request-key';
 const REASON = 'test refund reason';
 const FUTURE_CYCLE_END = '2030-01-01T00:00:00.000Z';
@@ -375,5 +379,136 @@ describe('refundBillingPayment', () => {
       expect(result.subscriptionEnded).toBe(false);
       expect(result.subscriptionEndError).toMatch(/network error/);
     });
+  });
+});
+
+// Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A; migration 134): the post-cancel write
+// that lets "Cancels on <date>" survive a re-sync, and its fail-closed retry when 134 is unapplied.
+function fakeSubscriptionRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'sub-row-1',
+    user_id: 'user-1',
+    provider_subscription_id: 'sub_1',
+    status: 'active',
+    cancel_at_period_end: false,
+    ...overrides,
+  };
+}
+
+function fakeCancelledSubscription(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'sub_1', plan_id: 'plan_1', customer_id: null, status: 'active',
+    current_start: null, current_end: null, charge_at: null, start_at: null, total_count: 1200,
+    ...overrides,
+  };
+}
+
+/** The calls every cancel attempt makes before it can even reach Razorpay: the request-key replay
+ * check, then loading the subscription, then the "attempting" audit insert. */
+function withStandardCancelSetup(subscription: ReturnType<typeof fakeSubscriptionRow>) {
+  const fake = createFakeSupabase();
+  fake.enqueue('admin_user_audit_events', 'select', { data: null, error: null }); // no replay
+  fake.enqueue('billing_subscriptions', 'select', { data: subscription, error: null });
+  fake.enqueue('admin_user_audit_events', 'insert', { data: { id: 'audit-1' }, error: null });
+  return fake;
+}
+
+describe('cancelBillingSubscriptionAtCycleEnd', () => {
+  beforeEach(() => {
+    reconcilePricingSubscriptionMock.mockResolvedValue({ subscriptionStatus: 'active', grantedCoins: 0 } as any);
+  });
+
+  it('records cancel_at_period_end, cancel_requested_at and cancel_requested_by after Razorpay succeeds', async () => {
+    const fake = withStandardCancelSetup(fakeSubscriptionRow());
+    fake.enqueue('admin_user_audit_events', 'update', { data: null, error: null }); // patchAuditOutcome
+    fake.enqueue('billing_subscriptions', 'update', { data: null, error: null }); // the 134 marker write
+    createAdminClientMock.mockReturnValue(fake.supabase);
+    cancelRazorpaySubscriptionMock.mockResolvedValueOnce(fakeCancelledSubscription());
+
+    const result = await cancelBillingSubscriptionAtCycleEnd({
+      subscriptionId: SUBSCRIPTION_ID,
+      reason: REASON,
+      requestKey: REQUEST_KEY,
+    });
+
+    expect(result.alreadyApplied).toBe(false);
+    const markerUpdate = fake.calls.find((c) => c.table === 'billing_subscriptions' && c.op === 'update');
+    expect(markerUpdate?.payload).toMatchObject({ cancel_at_period_end: true, cancel_requested_by: 'admin' });
+    expect((markerUpdate?.payload as any)?.cancel_requested_at).toEqual(expect.any(String));
+    // Only one write to billing_subscriptions -- no fail-closed retry needed when 134 is present.
+    expect(fake.calls.filter((c) => c.table === 'billing_subscriptions' && c.op === 'update')).toHaveLength(1);
+  });
+
+  it('retries with only cancel_at_period_end when migration 134 is not yet applied (42703)', async () => {
+    const fake = withStandardCancelSetup(fakeSubscriptionRow());
+    fake.enqueue('admin_user_audit_events', 'update', { data: null, error: null });
+    fake.enqueue('billing_subscriptions', 'update', { data: null, error: { code: '42703', message: 'column "cancel_requested_at" does not exist' } });
+    fake.enqueue('billing_subscriptions', 'update', { data: null, error: null }); // the retry
+    createAdminClientMock.mockReturnValue(fake.supabase);
+    cancelRazorpaySubscriptionMock.mockResolvedValueOnce(fakeCancelledSubscription());
+
+    const result = await cancelBillingSubscriptionAtCycleEnd({
+      subscriptionId: SUBSCRIPTION_ID,
+      reason: REASON,
+      requestKey: REQUEST_KEY,
+    });
+
+    // The cancellation is still reported as a success -- Razorpay already cancelled, and the audit
+    // row already recorded it; only the "who/when" columns could not be written.
+    expect(result.alreadyApplied).toBe(false);
+    const markerUpdates = fake.calls.filter((c) => c.table === 'billing_subscriptions' && c.op === 'update');
+    expect(markerUpdates).toHaveLength(2);
+    expect(markerUpdates[1]?.payload).toEqual({ cancel_at_period_end: true });
+  });
+
+  it('does not throw, and still runs the best-effort reconcile, when the marker write fails for an unrelated reason', async () => {
+    const fake = withStandardCancelSetup(fakeSubscriptionRow());
+    fake.enqueue('admin_user_audit_events', 'update', { data: null, error: null });
+    fake.enqueue('billing_subscriptions', 'update', { data: null, error: { code: '55000', message: 'could not obtain lock' } });
+    createAdminClientMock.mockReturnValue(fake.supabase);
+    cancelRazorpaySubscriptionMock.mockResolvedValueOnce(fakeCancelledSubscription());
+
+    const result = await cancelBillingSubscriptionAtCycleEnd({
+      subscriptionId: SUBSCRIPTION_ID,
+      reason: REASON,
+      requestKey: REQUEST_KEY,
+    });
+
+    expect(result.alreadyApplied).toBe(false);
+    expect(reconcilePricingSubscriptionMock).toHaveBeenCalledWith({ providerSubscriptionId: 'sub_1' });
+  });
+
+  it('replays a prior success from the request key without calling Razorpay again', async () => {
+    const fake = createFakeSupabase();
+    fake.enqueue('admin_user_audit_events', 'select', {
+      data: {
+        action_type: 'subscription_cancelled_at_cycle_end',
+        after_json: { providerSubscriptionId: 'sub_1', status: 'active' },
+      },
+      error: null,
+    });
+    createAdminClientMock.mockReturnValue(fake.supabase);
+
+    const result = await cancelBillingSubscriptionAtCycleEnd({
+      subscriptionId: SUBSCRIPTION_ID,
+      reason: REASON,
+      requestKey: REQUEST_KEY,
+    });
+
+    expect(result.alreadyApplied).toBe(true);
+    expect(cancelRazorpaySubscriptionMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a subscription that is already cancelled, expired or completed', async () => {
+    const fake = createFakeSupabase();
+    fake.enqueue('admin_user_audit_events', 'select', { data: null, error: null });
+    fake.enqueue('billing_subscriptions', 'select', { data: fakeSubscriptionRow({ status: 'cancelled' }), error: null });
+    createAdminClientMock.mockReturnValue(fake.supabase);
+
+    await expect(
+      cancelBillingSubscriptionAtCycleEnd({ subscriptionId: SUBSCRIPTION_ID, reason: REASON, requestKey: REQUEST_KEY })
+    ).rejects.toThrow(/already "cancelled"/);
+
+    expect(cancelRazorpaySubscriptionMock).not.toHaveBeenCalled();
   });
 });
