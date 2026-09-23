@@ -278,7 +278,10 @@ export default function FilterDropdown({
         selectActive();
         return;
       case 'Escape':
+        // Stop here: Modal's panel closes on any Escape that bubbles to it, and an Escape meant for
+        // an open dropdown must not also dismiss the dialog around it.
         e.preventDefault();
+        e.stopPropagation();
         closeMenu(true);
         return;
       case 'Tab':
@@ -299,25 +302,25 @@ export default function FilterDropdown({
         e.preventDefault();
         moveActive(-1);
         return;
-      case 'Home':
-        e.preventDefault();
-        setActiveIndex(0);
-        return;
-      case 'End':
-        e.preventDefault();
-        setActiveIndex(Math.max(0, filteredOptions.length - 1));
-        return;
+      // Home/End are deliberately left to the text field, so they still move the caret in the query.
       case 'Enter':
         // Never let Enter fall through to a submit on a form this dropdown lives inside.
         e.preventDefault();
         selectActive();
         return;
       case 'Escape':
+        // React bubbles portal events through the component tree, so this would otherwise reach and
+        // close an enclosing Modal.
         e.preventDefault();
+        e.stopPropagation();
         closeMenu(true);
         return;
       case 'Tab':
-        closeMenu(false);
+        // The search box is portaled to <body>, outside any dialog's focus trap: a default Tab would
+        // carry focus out of the dialog. Close and hand focus back to the trigger instead.
+        e.preventDefault();
+        e.stopPropagation();
+        closeMenu(true);
         return;
       default:
         return;
@@ -349,7 +352,9 @@ export default function FilterDropdown({
       : opensUp ? 'rounded-xl rounded-b-none' : 'rounded-xl rounded-t-none',
   ].join(' ');
   const listboxClassName = [
-    'dropdown-scrollbar absolute inset-0 overflow-y-auto',
+    // In normal flow, not absolute: an absolute list adds no height, so its wrapper collapsed and
+    // every menu opened at its padding (8px). min-h-0 lets it shrink and scroll under maxHeight.
+    'dropdown-scrollbar min-h-0 overflow-y-auto',
     isForm ? 'py-1.5' : 'py-1',
   ].join(' ');
   const optionClassName = [
@@ -411,7 +416,7 @@ export default function FilterDropdown({
                 </div>
               </div>
             )}
-            <div className="relative min-h-0 flex-1">
+            <div className="relative flex min-h-0 flex-col">
               <div
                 ref={scrollRef}
                 id={listboxId}

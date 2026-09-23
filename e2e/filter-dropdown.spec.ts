@@ -31,6 +31,16 @@ test('keyboard opens the Genre dropdown, moves the highlight, and selects an opt
   await expect(listbox).toBeVisible();
   await expect(listbox.getByRole('option')).toHaveCount(9); // "All Genres" + 8 genres
 
+  // toBeVisible passes for options clipped by a collapsed overflow-hidden parent, so check the
+  // listbox actually has room: several option rows' worth of real height on screen.
+  await expect.poll(async () => (await listbox.boundingBox())?.height ?? 0).toBeGreaterThan(100);
+  // Nine rows exceed the 280px cap, so the list must scroll rather than overflow the card: End
+  // highlights the last option and scrolls it into view.
+  await expect.poll(async () => (await listbox.boundingBox())?.height ?? 0).toBeLessThanOrEqual(296);
+  await trigger.press('End');
+  await expect(listbox.getByRole('option').last()).toBeInViewport();
+  await trigger.press('Home');
+
   // Highlight starts on the selected option ("All Genres", index 0); one ArrowDown moves to
   // "Adventure" (index 1). Enter selects it and closes the menu.
   await trigger.press('ArrowDown');
