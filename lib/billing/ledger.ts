@@ -230,7 +230,8 @@ export interface RecordRefundInput {
 
 /**
  * Records one refund. Idempotent on (provider, provider_mode, provider_refund_id), same
- * insert-then-update-on-23505 shape as recordPayment.
+ * insert-then-update-on-23505 shape as recordPayment. The update path fills gaps rather than
+ * overwriting -- see the comment above it.
  */
 export async function recordRefund(input: RecordRefundInput): Promise<LedgerWriteResult> {
   if (ledgerSchemaUnavailable) return { state: 'unavailable' };
@@ -273,17 +274,28 @@ export async function recordRefund(input: RecordRefundInput): Promise<LedgerWrit
     throw new Error(`Failed to record refund: ${insertResult.error.message}`);
   }
 
+  // Admin's in-app refund, Razorpay's refund webhook, and the dispute webhook all converge on the
+  // same row here, each carrying only the fields it knows about -- so this fills in whatever the
+  // caller supplies instead of blanking the rest with its nulls. status only ever moves forward
+  // (an incoming 'pending' never regresses an already-processed/failed row), and processed_at is
+  // the tax point: it gets its own guarded update below, written once and never moved.
+  const fill: Record<string, unknown> = {
+    raw_payload_json: rawPayload,
+    updated_at: new Date().toISOString(),
+  };
+  if (input.paymentId != null) fill.payment_id = input.paymentId;
+  if (input.providerPaymentId != null) fill.provider_payment_id = input.providerPaymentId;
+  if (input.subjectRef != null) fill.subject_ref = input.subjectRef;
+  if (input.netMinor != null) fill.net_minor = input.netMinor;
+  if (input.taxMinor != null) fill.tax_minor = input.taxMinor;
+  if (input.reason != null) fill.reason = input.reason;
+  if (input.coinAdjustment != null) fill.coin_adjustment_json = input.coinAdjustment;
+  if (input.actorUserRef != null) fill.actor_user_ref = input.actorUserRef;
+  if (input.status !== 'pending') fill.status = input.status;
+
   const updateResult = await input.supabase
     .from('billing_refunds')
-    .update({
-      status: input.status,
-      payment_id: input.paymentId ?? null,
-      reason: input.reason ?? null,
-      coin_adjustment_json: input.coinAdjustment ?? null,
-      raw_payload_json: rawPayload,
-      processed_at: input.processedAt ?? null,
-      updated_at: new Date().toISOString(),
-    })
+    .update(fill)
     .eq('provider', provider)
     .eq('provider_mode', input.providerMode)
     .eq('provider_refund_id', input.providerRefundId)
@@ -292,6 +304,20 @@ export async function recordRefund(input: RecordRefundInput): Promise<LedgerWrit
 
   if (updateResult.error) {
     throw new Error(`Failed to update already-recorded refund: ${updateResult.error.message}`);
+  }
+
+  if (input.processedAt != null) {
+    const backfillProcessedAt = await input.supabase
+      .from('billing_refunds')
+      .update({ processed_at: input.processedAt })
+      .eq('provider', provider)
+      .eq('provider_mode', input.providerMode)
+      .eq('provider_refund_id', input.providerRefundId)
+      .is('processed_at', null);
+
+    if (backfillProcessedAt.error) {
+      throw new Error(`Failed to update refund processed_at: ${backfillProcessedAt.error.message}`);
+    }
   }
 
   return { state: 'already_recorded', id: (updateResult.data as { id: string } | null)?.id ?? null };

@@ -26,11 +26,16 @@ interface QueryResult {
   error?: { code?: string; message: string } | null;
 }
 
+interface RecordedFilter {
+  method: 'eq' | 'is';
+  args: unknown[];
+}
+
 class FakeQueryBuilder implements PromiseLike<QueryResult> {
-  constructor(private readonly result: QueryResult) {}
+  constructor(private readonly result: QueryResult, private readonly filters?: RecordedFilter[]) {}
   select() { return this; }
-  eq() { return this; }
-  is() { return this; }
+  eq(...args: unknown[]) { this.filters?.push({ method: 'eq', args }); return this; }
+  is(...args: unknown[]) { this.filters?.push({ method: 'is', args }); return this; }
   maybeSingle(): Promise<QueryResult> { return Promise.resolve(this.result); }
   single(): Promise<QueryResult> { return Promise.resolve(this.result); }
   then<TResult1 = QueryResult, TResult2 = never>(
@@ -45,6 +50,7 @@ interface RecordedCall {
   table: string;
   op: 'select' | 'insert' | 'update';
   payload?: unknown;
+  filters?: RecordedFilter[];
 }
 
 function createFakeSupabase() {
@@ -74,16 +80,19 @@ function createFakeSupabase() {
     from(table: string) {
       return {
         select: (..._args: unknown[]) => {
-          calls.push({ table, op: 'select' });
-          return new FakeQueryBuilder(dequeue(table, 'select'));
+          const filters: RecordedFilter[] = [];
+          calls.push({ table, op: 'select', filters });
+          return new FakeQueryBuilder(dequeue(table, 'select'), filters);
         },
         insert: (row: unknown) => {
-          calls.push({ table, op: 'insert', payload: row });
-          return new FakeQueryBuilder(dequeue(table, 'insert'));
+          const filters: RecordedFilter[] = [];
+          calls.push({ table, op: 'insert', payload: row, filters });
+          return new FakeQueryBuilder(dequeue(table, 'insert'), filters);
         },
         update: (row: unknown) => {
-          calls.push({ table, op: 'update', payload: row });
-          return new FakeQueryBuilder(dequeue(table, 'update'));
+          const filters: RecordedFilter[] = [];
+          calls.push({ table, op: 'update', payload: row, filters });
+          return new FakeQueryBuilder(dequeue(table, 'update'), filters);
         },
       };
     },
@@ -278,6 +287,92 @@ describe('recordRefund', () => {
 
     const result = await recordRefund(baseRefundInput(supabase));
     expect(result).toEqual({ state: 'unavailable' });
+  });
+
+  it('on a webhook-shaped duplicate, fills the fields the webhook carries and leaves the admin-only ones alone', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_refunds', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_refunds', 'update', { data: { id: 'refund-1' }, error: null });
+
+    await recordRefund(
+      baseRefundInput(supabase, {
+        paymentId: 'payment-1',
+        netMinor: 1000,
+        taxMinor: 180,
+        status: 'processed',
+      })
+    );
+
+    const updateCall = calls.find((call) => call.table === 'billing_refunds' && call.op === 'update');
+    expect(updateCall?.payload).toMatchObject({
+      net_minor: 1000,
+      tax_minor: 180,
+      payment_id: 'payment-1',
+      status: 'processed',
+    });
+    expect(updateCall?.payload).not.toHaveProperty('reason');
+    expect(updateCall?.payload).not.toHaveProperty('coin_adjustment_json');
+    expect(updateCall?.payload).not.toHaveProperty('actor_user_ref');
+  });
+
+  it('on an admin-shaped duplicate, fills reason/coinAdjustment/actorUserRef and issues no processed_at update', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_refunds', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_refunds', 'update', { data: { id: 'refund-1' }, error: null });
+
+    await recordRefund(
+      baseRefundInput(supabase, {
+        reason: 'requested by customer',
+        coinAdjustment: { beatsClawedBack: 3 },
+        actorUserRef: 'admin-1',
+        status: 'processed',
+      })
+    );
+
+    const updateCalls = calls.filter((call) => call.table === 'billing_refunds' && call.op === 'update');
+    expect(updateCalls).toHaveLength(1); // no second (processed_at) update -- none was supplied
+    expect(updateCalls[0]?.payload).toMatchObject({
+      reason: 'requested by customer',
+      coin_adjustment_json: { beatsClawedBack: 3 },
+      actor_user_ref: 'admin-1',
+    });
+  });
+
+  it('never regresses status: a pending duplicate write carries no status key at all', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_refunds', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_refunds', 'update', { data: { id: 'refund-1' }, error: null });
+
+    await recordRefund(baseRefundInput(supabase, { status: 'pending' }));
+
+    const updateCall = calls.find((call) => call.table === 'billing_refunds' && call.op === 'update');
+    expect(updateCall?.payload).not.toHaveProperty('status');
+  });
+
+  it('writes processed_at only through the guarded second update, filtered to rows where it is still null', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_refunds', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_refunds', 'update', { data: { id: 'refund-1' }, error: null });
+    enqueue('billing_refunds', 'update', { data: null, error: null });
+
+    await recordRefund(baseRefundInput(supabase, { processedAt: '2026-09-23T00:00:00.000Z' }));
+
+    const updateCalls = calls.filter((call) => call.table === 'billing_refunds' && call.op === 'update');
+    expect(updateCalls).toHaveLength(2);
+    expect(updateCalls[0]?.payload).not.toHaveProperty('processed_at');
+    expect(updateCalls[1]?.payload).toEqual({ processed_at: '2026-09-23T00:00:00.000Z' });
+    expect(updateCalls[1]?.filters).toContainEqual({ method: 'is', args: ['processed_at', null] });
+  });
+
+  it('leaves payment_id alone on a duplicate when the caller has none to give (a still-unmatched renewal refund)', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    enqueue('billing_refunds', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_refunds', 'update', { data: { id: 'refund-1' }, error: null });
+
+    await recordRefund(baseRefundInput(supabase, { paymentId: null }));
+
+    const updateCall = calls.find((call) => call.table === 'billing_refunds' && call.op === 'update');
+    expect(updateCall?.payload).not.toHaveProperty('payment_id');
   });
 });
 
