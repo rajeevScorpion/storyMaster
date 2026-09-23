@@ -11,8 +11,8 @@ Living handoff: `audit-progress.md`. Written by Opus after the money walk passed
 |---|---|---|---|
 | **0** | Razorpay sandbox probe: what a cycle-end cancel looks like, and whether it can be undone | — | none (no code) |
 | **A** | Ledger correctness: write-once payment fields, subscription payment method, customer snapshot | — | **high** (money records) |
-| **B** | `billing-profile.shared.ts`: one validation authority for client and server | — | low |
-| **C** | `FilterDropdown`: keyboard support for all, `searchable` opt-in | — | low (28 callers) |
+| **B** | `billing-profile.shared.ts`: one validation authority for client and server. **BUILT `c2f0e9c`, diff-reviewed** | — | low |
+| **C** | `FilterDropdown`: keyboard support for all, `searchable` opt-in. **BUILT `b818493` + review fix `549b40c`** | — | low (28 callers) |
 | **M** | Migration 134: record who asked for a cancellation, and when | — | low |
 | **D** | Billing-details dialog redesign: Personal/Business, sections, inline validation | B, C, **P1, P7** | low |
 | **E1** | Checkout plumbing: timing, Razorpay options, failure handling, kids gate, attestation | **P6** | medium |
@@ -451,6 +451,12 @@ Rewrite `components/pricing/BillingDetailsDialog.tsx`. Keep its props (`open, pr
 - `WalletPage.tsx:343-344`: `requiresBillingDetails` becomes `requiresBillingState &&
   !isBillingProfileComplete(profile)` (P7).
 - Motion only through `motion` variants that honour `useReducedMotion`. No new animation library.
+- **From Unit B's review:** under Personal, the dialog must submit `companyName: null` and `gstin: null`,
+  not hide them and resend stale values. Otherwise an old personal profile with a company name
+  fails `validateBillingProfile` ("Switch to Business to add a GSTIN."), and `isBillingProfileComplete`
+  keeps reopening the dialog.
+- **Until D lands**, the old dialog sends Unit B's stricter server rules a Personal-shaped input, and a
+  save missing a phone, city or PIN is refused with the first message. That is expected on the branch.
 
 ### Unit E1 — checkout plumbing (Sonnet; Opus reviews)
 

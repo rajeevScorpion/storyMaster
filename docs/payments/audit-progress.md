@@ -21,7 +21,19 @@ reaches the customer. Decision 6 (adult attestation, no checkout from kids mode)
 - **Migration 134 (`b8e3131`) applied on dev** 17:44 UTC. Verified: the ledger row, both columns, and the
   terminal rows reset. **Frozen.** Not on prod.
 - Session usage at planning end: **32%**.
-**Next session:** the phase brief, then Unit 0 plus B and C in parallel (plan §9).
+**Phase 5 execution, 2026-09-23:**
+- **Unit B** `c2f0e9c`: diff-reviewed and accepted.
+- **Unit C** `b818493`: the review found it broke **every** dropdown. The list was `absolute` inside an
+  auto-height wrapper, so menus opened **8px tall** (measured in Chromium; unit tests and plain
+  `toBeVisible` both passed over it). Escape inside a Modal also closed the dialog, and Tab left its
+  focus trap. All fixed in `549b40c`, and the e2e now asserts real height and scrolling.
+- **Unit A** is running.
+- **Unit 0** (the Razorpay cycle-end-cancel probe) is waiting on the owner.
+- Usage was **60%** when C was reviewed.
+**Open, not Phase 5:** `e2e/storyline-signin-return.spec.ts:36` fails every time on this branch. Clicking
+"Start watching" signed out navigates to `/storyline/<id>` instead of opening sign-in on `/`. The other 37
+e2e tests pass. No gallery or auth code has changed on `payments` since 2026-09-15, so the failure
+predates Phase 5. This was not proven against a clean tree, because an agent was mid-edit.
 
 ## Previous entry (2026-09-23, night — money walk steps 1-7 all pass)
 
