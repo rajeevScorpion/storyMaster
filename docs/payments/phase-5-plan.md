@@ -254,9 +254,9 @@ complete for its type", not just "has a state". *Shapes D and E1.*
 
 ---
 
-## 4. Migration 134 (Unit M)
+## 4. Migration 134 (Unit M) — BUILT `b8e3131`, applied on dev 2026-09-23, frozen
 
-Complete SQL. The owner applies it by hand, dev first.
+Complete SQL. The owner applies it by hand, dev first. **Not on prod.**
 
 `supabase/migrations/134_subscription_cancel_request.sql`:
 
@@ -354,8 +354,10 @@ ends. That gap is recorded in PROJECT_STATE. **If there is no undo, Phase 5 offe
 3. **The subscription payment method.** In `razorpay-sync.ts` before 558, when `paidInvoice.payment_id` is set
    and **no ledger row exists yet** for it, call `fetchRazorpayPayment(paidInvoice.payment_id)` once (it
    exists in `lib/billing/razorpay.ts`). Pass `rawMethod: payment.method`, `providerFeeMinor: payment.fee` and
-   `providerTaxMinor: payment.tax`. A fetch failure is logged and recorded as `unknown`, never thrown: a
-   method is not worth failing a grant over. Skip the fetch when the row exists, so reconcile doesn't make an
+   `providerTaxMinor: payment.tax`. On a fetch failure, fall back to the subscription entity's own
+   `payment_method` (Razorpay sends it on every subscription webhook, e.g. `"card"`; seen in dev's
+   `billing_webhook_events` 2026-09-23). Log the failure, and record `unknown` only if both are missing.
+   Never throw: a method is not worth failing a grant over. Skip the fetch when the row exists, so reconcile doesn't make an
    API call per renewal per day.
 4. **`cancel_at_period_end` in the sync** (`razorpay-sync.ts:477`, `:500`): stop deriving it from status.
    - Insert: `false`.

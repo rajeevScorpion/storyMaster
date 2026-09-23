@@ -16,8 +16,11 @@ probe (Unit 0) can start cold, and A needs no decision.
 Also: `payment.failed` settles the checkout, so a successful retry shows as failed. Raw Razorpay error text
 reaches the customer. Decision 6 (adult attestation, no checkout from kids mode) was never built.
 **P1-P7 answered 2026-09-23, all as recommended** (plan §3). Nothing in Phase 5 is blocked now.
-**Owner:** turn `billing_document_issuing_enabled` and `billing_admin_actions_enabled` **off** on dev, at
-`/admin/settings/billing-operations`. Session usage at planning end: **32%**.
+**Done 2026-09-23:**
+- `billing_document_issuing_enabled` and `billing_admin_actions_enabled` are **off** on dev (verified).
+- **Migration 134 (`b8e3131`) applied on dev** 17:44 UTC. Verified: the ledger row, both columns, and the
+  terminal rows reset. **Frozen.** Not on prod.
+- Session usage at planning end: **32%**.
 **Next session:** the phase brief, then Unit 0 plus B and C in parallel (plan §9).
 
 ## Previous entry (2026-09-23, night — money walk steps 1-7 all pass)
