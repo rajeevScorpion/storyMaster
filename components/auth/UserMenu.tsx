@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
-import { User, LogOut, LogIn, BookMarked, Loader2, Coins, Wallet, LifeBuoy, ClipboardCheck, Trash2 } from 'lucide-react';
+import { User, LogOut, LogIn, BookMarked, Loader2, Coins, Wallet, LifeBuoy, ClipboardCheck, Receipt, Trash2 } from 'lucide-react';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import Link from 'next/link';
@@ -238,6 +238,16 @@ export default function UserMenu({ onMyStories, openWalletInNewTab = false }: Us
               >
                 <Wallet className="w-4 h-4" />
                 Wallet & Billing
+              </Link>
+              <Link
+                href="/account/billing"
+                target={openWalletInNewTab ? '_blank' : undefined}
+                rel={openWalletInNewTab ? 'noopener' : undefined}
+                onClick={() => setIsOpen(false)}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-neutral-100 transition-colors"
+              >
+                <Receipt className="w-4 h-4" />
+                Billing
               </Link>
               <Link
                 href="/help-legal"

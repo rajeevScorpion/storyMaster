@@ -384,7 +384,7 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout', () => {
         { kind: 'subscription', planVersionId: 'plan-version-1' },
         { adultAttested: true, audienceMode: 'all' }
       )
-    ).rejects.toThrow('already have a Razorpay subscription in progress');
+    ).rejects.toThrow('You already have a plan. To switch, cancel it in Billing.');
 
     expect(createRazorpaySubscriptionMock).not.toHaveBeenCalled();
   });

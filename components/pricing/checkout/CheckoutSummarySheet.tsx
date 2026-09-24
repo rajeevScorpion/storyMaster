@@ -336,9 +336,14 @@ export default function CheckoutSummarySheet({
           <div className="space-y-4 py-4 text-center">
             <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-300" />
             <p className="text-sm text-neutral-200">{resultMessage ?? describeSuccessFromQuote(quote)}</p>
-            <button type="button" onClick={onClose} className={SECONDARY_BUTTON_CLASS}>
-              Done
-            </button>
+            <div className="flex justify-center gap-3">
+              <Link href="/account/billing" onClick={onClose} className={SECONDARY_BUTTON_CLASS}>
+                View receipt and billing
+              </Link>
+              <button type="button" onClick={onClose} className={SECONDARY_BUTTON_CLASS}>
+                Done
+              </button>
+            </div>
           </div>
         )}
 

@@ -263,7 +263,7 @@ export async function prepareRazorpayCheckoutInternal(
 
     if (beginRow.blocked_reason === 'subscription_exists') {
       throw new CheckoutRefusalError(
-        'You already have a Razorpay subscription in progress. Subscription changes will stay manual until account management is live.',
+        'You already have a plan. To switch, cancel it in Billing. You can choose a new plan once it ends.',
         'subscription_exists',
         409
       );

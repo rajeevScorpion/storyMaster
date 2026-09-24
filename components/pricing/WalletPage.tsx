@@ -130,7 +130,7 @@ function getPlanCtaLabel(input: {
   }
 
   if (isDowngrade) {
-    return 'Downgrade support coming soon';
+    return 'Switch after your plan ends';
   }
 
   if (!checkoutEnabled) {
@@ -562,16 +562,24 @@ export default function WalletPage() {
                       : 'Add your legal name and GST state before you check out.'}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setBillingDialogContext('manage');
-                    setBillingDialogOpen(true);
-                  }}
-                  className="cursor-pointer rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-neutral-300 transition-all duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/10 hover:text-neutral-100"
-                >
-                  {walletData.billingProfile ? 'Edit' : 'Add billing details'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <Link
+                    href="/account/billing"
+                    className="cursor-pointer rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-neutral-300 transition-all duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/10 hover:text-neutral-100"
+                  >
+                    Manage billing →
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBillingDialogContext('manage');
+                      setBillingDialogOpen(true);
+                    }}
+                    className="cursor-pointer rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-neutral-300 transition-all duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/10 hover:text-neutral-100"
+                  >
+                    {walletData.billingProfile ? 'Edit' : 'Add billing details'}
+                  </button>
+                </div>
               </div>
             )}
           </section>
