@@ -186,6 +186,43 @@ release, and the Phase 7 go-live checklist must carry every one of them.
 - **Owner actions** are in plan §8: apply 135 on dev, set up Resend and its DNS, add `refund.processed` to
   the Razorpay test webhook, confirm the Vercel plan's cron limit, and ask the CA the §7 questions.
 
+**Phase 6 execution, 2026-09-24:**
+- `3f4ccbf`: the shared document types (Opus).
+- **Unit A** (`5852ed6` + `c1c0fe1`, Sonnet): atomic issuing, the refund-status fix and the pending-refund
+  sweep, the content builders and the issuers. The review fixes are in `8cab6a7`:
+  - a credit note only for a processed refund;
+  - the refund's own GST split, since a partial dashboard refund printed the whole invoice's IGST;
+  - the invoice's own buyer and subject;
+  - the full webhook payload kept on the refund row.
+- **Unit B** (`14fa82d`, Sonnet): pdf-lib with vendored Noto Sans, deterministic PDFs, private R2 caching,
+  the signed-in download (404 for anyone else), and Download links on `/account/billing` and the admin
+  user page. The review fixes are in `d70f2b8`:
+  - the buyer's name was hidden below ₹50,000, though the rule is a minimum;
+  - amounts now print as ₹450.00;
+  - the cache write is now awaited, since a serverless function can freeze before a fire-and-forget
+    write lands.
+- **Owner, 2026-09-24:**
+  - **135 applied on dev.** Verified by query: the ledger row, `billing_issue_document`, the old allocator
+    gone, the jobs table, `billing_emails_enabled` off, and the three new document columns.
+  - **Resend:** the account exists, `RESEND_API_KEY` is set locally and in Vercel, and the domain is
+    verified. `BILLING_EMAIL_FROM` is not set, so the code default `billing@kissago.cc` applies.
+  - **Razorpay's test webhook** includes `refund.created`, `refund.processed` and `refund.failed`.
+  - **Vercel is on Hobby,** so there are no sub-daily crons. The worker piggybacks on the daily
+    `/api/batch/reconcile` plus a kick on every enqueue. The owner will move to a paid plan later; add a
+    `*/15` worker cron then.
+- **CA questions (plan §7): building on assumed answers.** The owner will ask the CA later.
+  **Reminder: before issuing goes live on prod, replace each assumption with the CA's real answer.**
+  1. The format `KG/26-27/000001` and `KGC/26-27/000001` is acceptable.
+  2. "Computer-generated, authorised signatory" is enough, with no digital signature.
+  3. One PDF marked "Original for recipient", plus our retained record, satisfies Rule 48.
+  4. A credit note is issued when the refund is processed, worded "Refund against invoice …".
+  5. Turnover is under ₹5 crore (no e-invoicing), and SAC 998439 at 18% applies.
+  6. The live series starts on go-live day, at 000001.
+  **Phase 7's go-live checklist must carry this list.**
+- **Known, not changed:** `refund.created` still flips the old `billing_orders.status` to `refunded`,
+  because Razorpay's `amount_refunded` counts pending refunds. The ledger payment now waits for
+  `processed`. Only the legacy orders table reads early.
+
 **Next session starts with:**
 1. The phase brief.
 2. Whatever the owner picks from the "left" list above, and the subscribe/cancel walk if the OTP limit has
