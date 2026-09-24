@@ -689,3 +689,148 @@ test:e2e` (smoke). Opus reads each diff.
 **Vercel plan:** if it allows crons more often than daily, say so, and a 15-minute worker cron gets added.
 
 **The CA:** the questions in §7.
+
+---
+
+## 10. C2 and D execution specs — anchored at `8102bc1` (2026-09-24); these supersede §4 where they differ
+
+**What exists:**
+- C1's queue, worker and templates: `lib/billing/notifications/{queue,runner,processors,deliver,types.shared}.ts`,
+  `lib/billing/email/{resend,templates.shared}.ts`.
+- A's issuers: `lib/billing/documents/issue.ts`.
+- B's PDF: `ensureDocumentPdf(documentId)` in `lib/billing/documents/storage.ts`, which returns
+  `{bytes, row}`.
+
+**Owner facts:**
+- Vercel is on Hobby, so there is no sub-daily cron. The worker runs on every enqueue kick and in the daily
+  reconcile.
+- Resend is configured.
+
+### C2 — processors and hooks (Sonnet; Opus reviews)
+
+**Processors** (`lib/billing/notifications/processors.ts`, replacing the no-ops).
+- **Every processor:**
+  - returns `ProcessorResult`, and sends through `deliverJobEmail(job, content, attachment?)`;
+  - throws to retry, or throws `PermanentBillingJobError` for a job that can never succeed (for example
+    the row it points at is gone).
+- **Attachments:** `{ filename: 'Kissago-<number with / replaced by ->.pdf', content: base64(bytes) }`.
+
+**The kinds:**
+- **`payment_receipt`:**
+  1. `issueInvoiceForPayment(job.payment_id)`.
+  2. If there's a `documentId`, get the PDF with `ensureDocumentPdf`.
+  3. Load the payment and build `buildPaymentReceiptEmail`:
+     - `variant: 'renewal'` for `subscription_renewal`;
+     - `itemLabel` is the top-up's `purchase_snapshot_json.packName`, or `"Kissago <Plan> plan"`;
+     - `planName` comes from `resolvePlanLineItemFields` (export it from `issue.ts`);
+     - `grossMinor` is the payment's; `hasInvoice` is true when a document exists.
+  4. The result carries `documentId`, `documentOutcome` (the issuer's outcome), `emailStatus` and
+     `providerMessageId`.
+- **`refund_processed`:**
+  1. `issueCreditNoteForRefund(job.refund_id)`; the PDF if a document exists.
+  2. `buildRefundProcessedEmail({grossMinor: refund.amount_minor, hasCreditNote})`.
+- **`subscription_payment_failed`:**
+  - Load `billing_subscriptions` by `job.billing_subscription_id` (the plan name from its
+    `plan_version_id`).
+  - `graceEndsAt = payload.graceEndsAt ?? sub.grace_period_ends_at ?? sub.current_period_end`, and
+    `shortUrl = payload.shortUrl`.
+- **`cancel_scheduled`:** `accessUntil = payload.accessUntil ?? sub.current_period_end`.
+- **`subscription_ended`:** the plan name from the subscription.
+- **`renewal_reminder`:**
+  - the plan name, and `renewsAt = payload.renewsAt ?? sub.current_period_end`;
+  - `grossMinor` is the **latest `billing_payments.gross_minor` for this subscription** (the last price
+    actually charged, GST included);
+  - with no payment row, throw `PermanentBillingJobError('no charged amount to quote')`.
+- **`document_resend`:** `ensureDocumentPdf(job.document_id)` → `buildDocumentResendEmail`.
+
+**The template fix** (`templates.shared.ts`):
+- `subject` and `text` must use the **unescaped** names.
+- Only the HTML takes escaped values.
+- Today the subject reuses the escaped heading, so "A&B" arrives as "A&amp;B".
+- Add a test.
+
+**The hooks.** Each is best-effort, since `enqueueBillingJob` never throws. Put `payload.billingEmail` from
+the frozen customer snapshot where one exists.
+1. **`lib/billing/razorpay-sync.ts` `settleTopupOrder`, the `recordPayment` call (~`:192`):**
+   - keep the result; on `state === 'inserted'`, enqueue `payment_receipt`;
+   - `dedupeKey: payment:<id>`, `subjectRef`, `userId: order.user_id`, `paymentId`;
+   - `payload: {billingEmail: <snapshot>.billingEmail ?? null}`.
+2. **`syncSubscriptionFromProvider`, the `recordPayment` call (~`:684`):** the same, with
+   `userId: input.userId` and `billingSubscriptionId`.
+3. **Also `syncSubscriptionFromProvider`, after the update/insert block (~`:558-599`)**, with
+   `prev = existing?.status ?? null`, `next = subscription.status`, and only when `billingSubscriptionId`
+   is set.
+   - Put the rule in a pure helper, `subscriptionTransitionJobs(prev, next)`, in a `.shared.ts`:
+     - `next` in (`pending`, `halted`) and `prev` not in (`pending`, `halted`) →
+       `subscription_payment_failed`:
+       - `dedupeKey: sub_failed:<billingSubscriptionId>:<currentPeriodEnd>`;
+       - `payload: {graceEndsAt: gracePeriodEndsAt, shortUrl: subscription.short_url ?? null}`.
+     - `next` in (`cancelled`, `completed`, `expired`) and `prev` non-null and not terminal →
+       `subscription_ended`, `dedupeKey: sub_ended:<billingSubscriptionId>`.
+   - Add `short_url?: string | null` to `RazorpaySubscription` (`lib/billing/razorpay.ts:37`).
+4. **`lib/billing/razorpay-webhook.ts` `applyRefundOutcome`,** after a successful `recordRefund`:
+   - when `status === 'processed' && recordResult.id`, enqueue `refund_processed`, `dedupeKey:
+     refund:<recordResult.id>`, `refundId`, `userId: payment.user_id`, `subjectRef: payment.subject_ref`,
+     `payload: {billingEmail: payment.customer_snapshot_json?.billingEmail ?? null}`.
+   - That one place covers both the webhook and the pending-refund sweep.
+5. **`app/actions/admin-billing-actions.ts`, the best-effort `recordRefund` (~`:408`):**
+   - keep its result, and when `refund.status === 'processed'` and the result has an id, enqueue the same
+     job (the same dedupe key, so the later webhook adds nothing);
+   - covers a processed admin refund whose webhook never arrives.
+6. **The cancel markers:**
+   - `app/actions/billing-account.ts` after the marker write (~`:609-631`): `cancel_scheduled`,
+     `dedupeKey: cancel:<candidate.id>:<candidate.current_period_end>`, `payload: {accessUntil:
+     candidate.current_period_end}`;
+   - `admin-billing-actions.ts` after its marker write (~`:574-600`): the same with `subscription.*`.
+   - Use `subject_ref` if already selected, else `user_id`: both are the same person while the account
+     exists.
+7. **`customer_notify`:**
+   - `createRazorpaySubscription` (`lib/billing/razorpay.ts:165`) gains `customerNotify: boolean`, which
+     sends `customer_notify: customerNotify ? 1 : 0`;
+   - `app/actions/pricing-checkout.ts:335` passes `!(await getFeatureFlag('billing_emails_enabled', false))`;
+   - update the existing tests.
+8. **Sweeps**, new `lib/billing/notifications/sweeps.ts` (`server-only`), with tests:
+   - `sweepMissingReceiptJobs()`: if `!shouldEnqueue()` return 0. Otherwise take the payments
+     `captured_at >= now-3d` in `captured/refunded/partially_refunded/disputed` (limit 200) and enqueue
+     `payment_receipt` for each; the dedupe key makes repeats free.
+   - `sweepRenewalReminders()`: subscriptions with `status='active' AND billing_interval='annual' AND
+     cancel_at_period_end=false AND current_period_end` between now+6d and now+8d → `renewal_reminder`,
+     `dedupeKey: renew:<id>:<current_period_end>`, `payload: {renewsAt}`.
+   - `app/api/batch/reconcile/route.ts`: after `reconcilePendingRefunds`, run both sweeps, then
+     `runBillingJobsOnce()`, each `.catch`-wrapped. Report their counts in the JSON.
+
+**Tests:**
+- one per processor (the issuer, the PDF, deliver and `ProcessorResult` all mocked);
+- the transition helper and the sweeps;
+- the hooks' enqueue calls in the existing razorpay-sync, webhook and admin test files.
+
+### D — admin support (Sonnet, in parallel with C2)
+
+**The files are disjoint from C2's:** `app/actions/admin-billing-jobs.ts` (new, `'use server'`),
+`lib/admin/user-management.shared.ts`, `app/actions/admin-users.ts`,
+`components/admin/users/AdminUserDetail.tsx`, and `lib/billing/notifications/deliver.ts`.
+
+**The Billing emails list:**
+- On the admin user page, the newest 20 `billing_notification_jobs` for the user's `subject_ref`: kind (a
+  readable label), status, email status, document outcome, `last_error`, created.
+- Load it in `admin-users.ts` next to the documents; map it in `user-management.shared.ts` with tests.
+- It fails closed to "unavailable" when 135 is missing.
+
+**Retry** (failed jobs only):
+- `retryBillingJob(jobId)`: `verifyAdmin`; update `status='pending', attempt_count=0,
+  next_attempt_at=now(), last_error=null`, merge `{adminRetryAt: now}` into `payload_json`, where
+  `status='failed'`; then write an `admin_user_audit_events` row and call `kickBillingJobs()`.
+- **`deliver.ts`:** the 72h staleness clock starts at the later of `created_at` and
+  `payload.adminRetryAt`. An admin's explicit retry must send.
+
+**Resend** (each issued document on the page):
+- `resendBillingDocument(documentId)`: `verifyAdmin`; load the document; enqueue `document_resend` with
+  `dedupeKey: resend:<documentId>:<Date.now()>`, `documentId`, and `subjectRef`/`userId` from the document.
+- If that auth user no longer exists, refuse with "This account was deleted."
+- Write an audit row, and kick.
+
+**Both actions:**
+- They are **not** behind `billing_admin_actions_enabled`, because neither moves money.
+- They go through the existing audit-row pattern (read `admin-billing-actions.ts` for its shape).
+- They return fixed sentences only.
+- The UI uses the `RowActionsMenu` (⋮) pattern (WORKING_AGREEMENTS UI conventions).
