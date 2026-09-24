@@ -14,6 +14,14 @@
     `feat(payments): Phase 6 Unit C2 --` and `Unit D --`).
   - At 90% usage both were told to commit what they had, prefixed **`wip(payments): … Unit C2/D --`**. A
     wip commit's body says what's done and what isn't.
+  - **Unit D finished:** `69b65e9`, `7cb6175`, `f75278e`, `0193d03`, `46551bd`. Gates were green at 2,398
+    tests. **Not yet reviewed by Opus.** Review these points:
+    - **The audit table rejects the new actions.** `admin_user_audit_events.action_type`'s CHECK (131) does
+      not allow `billing_job_retried` or `billing_document_resent`, so those audit inserts fail with 23514
+      and are only logged. **A migration must add both values to the CHECK.** Fold it into 136 (Phase 7) as
+      its own statement, or write it as 137.
+    - `admin-billing-jobs.ts` has no test file. Model one on `admin-billing-actions.test.ts`.
+    - Retry and Resend use the existing no-reason `ConfirmDialog`.
   - Check `git status` for uncommitted leftovers from a cut-off agent. Review what landed by **reading the
     diff against plan §10**, then finish whatever is missing.
 - **Then the walk** (plan §5): turn `billing_document_issuing_enabled` and `billing_emails_enabled` on
