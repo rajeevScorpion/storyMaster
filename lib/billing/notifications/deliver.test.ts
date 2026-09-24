@@ -119,6 +119,40 @@ describe('deliverJobEmail', () => {
     expect(result.emailStatus).toBe('sent');
   });
 
+  it('is not stale when payload.adminRetryAt is recent, even though created_at is long past 72h (an admin retry must send)', async () => {
+    getFeatureFlagMock.mockResolvedValue(true);
+    adminState.client = makeFakeAdmin({ profileEmail: undefined, authEmail: 'user@example.com' }).client;
+    const oldCreatedAt = new Date(Date.now() - 200 * 60 * 60 * 1000).toISOString();
+    const recentRetryAt = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+    const result = await deliverJobEmail(
+      fakeJob({ created_at: oldCreatedAt, payload_json: { adminRetryAt: recentRetryAt } }),
+      CONTENT
+    );
+    expect(result.emailStatus).toBe('sent');
+  });
+
+  it('is still stale when payload.adminRetryAt is itself older than 72 hours', async () => {
+    getFeatureFlagMock.mockResolvedValue(true);
+    const oldCreatedAt = new Date(Date.now() - 200 * 60 * 60 * 1000).toISOString();
+    const oldRetryAt = new Date(Date.now() - 100 * 60 * 60 * 1000).toISOString();
+    const result = await deliverJobEmail(
+      fakeJob({ created_at: oldCreatedAt, payload_json: { adminRetryAt: oldRetryAt } }),
+      CONTENT
+    );
+    expect(result).toEqual({ emailStatus: 'skipped_stale', providerMessageId: null });
+    expect(sendBillingEmailMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to created_at when payload.adminRetryAt is malformed', async () => {
+    getFeatureFlagMock.mockResolvedValue(true);
+    const oldCreatedAt = new Date(Date.now() - 200 * 60 * 60 * 1000).toISOString();
+    const result = await deliverJobEmail(
+      fakeJob({ created_at: oldCreatedAt, payload_json: { adminRetryAt: 'not-a-date' } }),
+      CONTENT
+    );
+    expect(result).toEqual({ emailStatus: 'skipped_stale', providerMessageId: null });
+  });
+
   it('skips with skipped_no_address when no source has an email', async () => {
     getFeatureFlagMock.mockResolvedValue(true);
     adminState.client = makeFakeAdmin({ profileEmail: undefined, authEmail: undefined }).client;

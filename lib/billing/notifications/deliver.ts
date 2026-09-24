@@ -33,6 +33,26 @@ function extractSnapshotEmail(job: BillingNotificationJobRow): string | null {
   return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : null;
 }
 
+/**
+ * Payments Phase 6 (docs/payments/phase-6-plan.md §10 "D -- admin support"): the staleness clock
+ * starts at the LATER of `created_at` and `payload_json.adminRetryAt` -- app/actions/admin-
+ * billing-jobs.ts's retryBillingJob stamps `adminRetryAt` when an admin explicitly resets a failed
+ * job to pending, precisely so that retry can still send even though the job's original
+ * `created_at` is already well past 72h old. A malformed or missing `adminRetryAt` falls back to
+ * `created_at` alone, unchanged from before this admin path existed.
+ */
+function resolveStaleClockStartMs(job: BillingNotificationJobRow): number {
+  const createdMs = new Date(job.created_at).getTime();
+  const rawRetryAt = (job.payload_json as { adminRetryAt?: unknown } | null)?.adminRetryAt;
+  if (typeof rawRetryAt === 'string') {
+    const retryMs = new Date(rawRetryAt).getTime();
+    if (Number.isFinite(retryMs)) {
+      return Number.isFinite(createdMs) ? Math.max(createdMs, retryMs) : retryMs;
+    }
+  }
+  return createdMs;
+}
+
 async function lookupBillingProfileEmail(admin: AdminClient, userId: string): Promise<string | null> {
   const result = await admin.from('billing_profiles').select('billing_email').eq('user_id', userId).maybeSingle();
   if (result.error || !result.data) return null;
@@ -80,7 +100,7 @@ export async function deliverJobEmail(
     return { emailStatus: 'skipped_deleted', providerMessageId: null };
   }
 
-  const ageMs = Date.now() - new Date(job.created_at).getTime();
+  const ageMs = Date.now() - resolveStaleClockStartMs(job);
   if (Number.isFinite(ageMs) && ageMs > STALE_JOB_MS) {
     return { emailStatus: 'skipped_stale', providerMessageId: null };
   }
