@@ -58,15 +58,16 @@ export function resetBillingJobsSchemaLatchForTests(): void {
 }
 
 /** Reclaims jobs whose worker died mid-run (crashed instance, killed function) so they become
- * claimable again instead of sitting in `processing` forever. */
+ * claimable again instead of sitting in `processing` forever. A job that has already used all its
+ * attempts is failed instead: every claim counts an attempt, so a job that kills its worker each time
+ * would otherwise be reclaimed and re-run forever without ever reaching the retry-or-fail path. */
 export async function reclaimStaleBillingJobs(admin: AdminClient): Promise<number> {
   const cutoff = new Date(Date.now() - STALE_CLAIM_MINUTES * 60 * 1000).toISOString();
   const { data, error } = await admin
     .from('billing_notification_jobs')
-    .update({ status: 'pending' })
+    .select('id, attempt_count, max_attempts')
     .eq('status', 'processing')
-    .lt('claimed_at', cutoff)
-    .select('id');
+    .lt('claimed_at', cutoff);
 
   if (error) {
     if (isMissingBillingSchemaError(error)) {
@@ -75,7 +76,22 @@ export async function reclaimStaleBillingJobs(admin: AdminClient): Promise<numbe
     }
     throw new Error(`Failed to reclaim stale billing jobs: ${error.message}`);
   }
-  return data?.length ?? 0;
+
+  const stale = (data ?? []) as Array<{ id: string; attempt_count: number; max_attempts: number }>;
+  let reclaimed = 0;
+  for (const row of stale) {
+    const exhausted = row.attempt_count >= row.max_attempts;
+    const update = exhausted
+      ? { status: 'failed', completed_at: new Date().toISOString(), last_error: 'The worker stopped mid-run on every attempt.' }
+      : { status: 'pending' };
+    const result = await admin
+      .from('billing_notification_jobs')
+      .update(update)
+      .eq('id', row.id)
+      .eq('status', 'processing');
+    if (!result.error && !exhausted) reclaimed += 1;
+  }
+  return reclaimed;
 }
 
 interface ClaimCandidateRow {

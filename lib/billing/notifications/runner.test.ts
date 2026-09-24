@@ -190,6 +190,16 @@ describe('reclaimStaleBillingJobs', () => {
     expect(rows[0].status).toBe('pending');
   });
 
+  it('fails a stale row that has used every attempt, instead of reclaiming it forever', async () => {
+    const staleClaim = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+    const rows = [fakeJob({ id: 'stale', status: 'processing', claimed_at: staleClaim, attempt_count: 5, max_attempts: 5 })];
+    const admin = makeFakeAdmin(rows) as any;
+    const count = await reclaimStaleBillingJobs(admin);
+    expect(count).toBe(0);
+    expect(rows[0].status).toBe('failed');
+    expect(rows[0].last_error).toContain('stopped mid-run');
+  });
+
   it('leaves a fresh processing row alone', async () => {
     const freshClaim = new Date().toISOString();
     const rows = [fakeJob({ id: 'fresh', status: 'processing', claimed_at: freshClaim })];
