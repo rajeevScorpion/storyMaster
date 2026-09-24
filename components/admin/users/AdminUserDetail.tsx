@@ -23,11 +23,13 @@ import {
   GitBranch,
   Landmark,
   Loader2,
+  Mail,
   MoreVertical,
   RefreshCw,
   Repeat,
   RotateCcw,
   RotateCw,
+  Send,
   ShieldAlert,
   ShoppingCart,
   Undo2,
@@ -46,6 +48,10 @@ import {
   resyncBillingSubscriptionFromProviderSettled,
   resyncBillingTopupFromProviderSettled,
 } from '@/app/actions/admin-billing-ui-actions';
+import {
+  resendBillingDocumentSettled,
+  retryBillingJobSettled,
+} from '@/app/actions/admin-billing-jobs';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { isCurrentCycleSubscriptionPayment } from '@/lib/billing/subscription-refund-end.shared';
 import RowActionsMenu, { type RowAction } from '@/components/ui/RowActionsMenu';
@@ -57,9 +63,12 @@ import {
 } from '@/lib/admin/billing-admin-ui.shared';
 import { paginateAdminTableRows } from '@/lib/admin/table-pagination.shared';
 import {
+  describeBillingEmailStatus,
+  describeBillingJobKind,
   describeBillingSectionState,
   type AdminAccountStatus,
   type AdminBillingDocument,
+  type AdminBillingNotificationJob,
   type AdminBillingOrder,
   type AdminBillingPayment,
   type AdminBillingProfile,
@@ -97,7 +106,9 @@ type BillingDialogState =
   | { kind: 'cancel'; subscription: AdminBillingSubscription }
   | { kind: 'resyncSubscription'; subscription: AdminBillingSubscription }
   | { kind: 'resyncTopup'; order: AdminBillingOrder }
-  | { kind: 'reprocess'; event: AdminBillingWebhookEvent };
+  | { kind: 'reprocess'; event: AdminBillingWebhookEvent }
+  | { kind: 'retryJob'; job: AdminBillingNotificationJob }
+  | { kind: 'resendDocument'; document: AdminBillingDocument };
 
 export default function AdminUserDetail({
   initialData,
@@ -221,6 +232,16 @@ export default function AdminUserDetail({
         case 'reprocess': {
           const result = unwrap(await reprocessBillingWebhookEventByIdSettled({ eventId: billingDialog.event.id }));
           successMessage = `Reprocessed -- status: ${result.status}${result.outcome ? ` · outcome: ${result.outcome}` : ''}.`;
+          break;
+        }
+        case 'retryJob': {
+          unwrap(await retryBillingJobSettled({ jobId: billingDialog.job.id }));
+          successMessage = 'The billing email job was reset to pending and the worker was kicked.';
+          break;
+        }
+        case 'resendDocument': {
+          unwrap(await resendBillingDocumentSettled({ documentId: billingDialog.document.id }));
+          successMessage = 'A resend of this document was queued.';
           break;
         }
       }
@@ -374,15 +395,35 @@ export default function AdminUserDetail({
         lines: ['Re-runs the same idempotent reconcile the daily cron uses for this order.'],
       };
     }
+    if (billingDialog.kind === 'reprocess') {
+      return {
+        title: 'Reprocess webhook event',
+        tone: 'default' as const,
+        confirmLabel: 'Reprocess',
+        requiresReason: false,
+        lines: [
+          'Re-runs this webhook event through the same handler live traffic uses.',
+          'Safe to repeat: a payment, grant or refund already recorded is not recorded again. A full refund of a current-cycle subscription payment ends that subscription.',
+        ],
+      };
+    }
+    if (billingDialog.kind === 'retryJob') {
+      return {
+        title: 'Retry billing email',
+        tone: 'default' as const,
+        confirmLabel: 'Retry',
+        requiresReason: false,
+        lines: [
+          `Resets this "${describeBillingJobKind(billingDialog.job.kind)}" job to pending and kicks the worker to run it again now.`,
+        ],
+      };
+    }
     return {
-      title: 'Reprocess webhook event',
+      title: 'Resend document email',
       tone: 'default' as const,
-      confirmLabel: 'Reprocess',
+      confirmLabel: 'Resend',
       requiresReason: false,
-      lines: [
-        'Re-runs this webhook event through the same handler live traffic uses.',
-        'Safe to repeat: a payment, grant or refund already recorded is not recorded again. A full refund of a current-cycle subscription payment ends that subscription.',
-      ],
+      lines: ['Queues a fresh email for this document, with the PDF attached again.'],
     };
   }, [billingDialog, data.walletActivity]);
 
@@ -971,28 +1012,83 @@ export default function AdminUserDetail({
           status={data.billing.documents.status}
           items={data.billing.documents.items}
           headerCells={['Number', 'Type', 'Amount', 'Status', 'Issued', '']}
-          renderRow={(doc) => (
-            <tr key={doc.id} className="border-b border-white/5 last:border-0">
-              <td className="py-3 pr-4 text-neutral-200">{doc.documentNumber}</td>
-              <td className="px-4 py-3 capitalize text-neutral-500">{doc.documentType.replaceAll('_', ' ')}</td>
-              <td className="px-4 py-3 text-neutral-300">{formatCurrencyMinor(doc.currencyCode, doc.grossMinor)}</td>
-              <td className="px-4 py-3 capitalize text-neutral-500">{doc.status}</td>
-              <td className="px-4 py-3 text-neutral-500">{formatDate(doc.issuedAt)}</td>
-              <td className="py-3 pl-4 text-right">
-                <a
-                  href={`/api/billing/documents/${doc.id}/pdf`}
-                  download
-                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-neutral-300 transition-colors hover:border-white/20 hover:bg-white/10 hover:text-neutral-100"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Download
-                </a>
-              </td>
-            </tr>
-          )}
+          renderRow={(doc) => {
+            // Resend only makes sense for a document that was actually issued -- a void document
+            // has nothing to re-email (plan §10 D: "Resend (each issued document on the page)").
+            const actions: RowAction[] = doc.status === 'issued'
+              ? [
+                  {
+                    key: 'resend',
+                    label: 'Resend email…',
+                    icon: Send,
+                    onSelect: () => openBillingDialog({ kind: 'resendDocument', document: doc }),
+                  },
+                ]
+              : [];
+            return (
+              <tr key={doc.id} className="border-b border-white/5 last:border-0">
+                <td className="py-3 pr-4 text-neutral-200">{doc.documentNumber}</td>
+                <td className="px-4 py-3 capitalize text-neutral-500">{doc.documentType.replaceAll('_', ' ')}</td>
+                <td className="px-4 py-3 text-neutral-300">{formatCurrencyMinor(doc.currencyCode, doc.grossMinor)}</td>
+                <td className="px-4 py-3 capitalize text-neutral-500">{doc.status}</td>
+                <td className="px-4 py-3 text-neutral-500">{formatDate(doc.issuedAt)}</td>
+                <td className="py-3 pl-4 text-right">
+                  <div className="flex items-center justify-end gap-2">
+                    <a
+                      href={`/api/billing/documents/${doc.id}/pdf`}
+                      download
+                      className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-neutral-300 transition-colors hover:border-white/20 hover:bg-white/10 hover:text-neutral-100"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Download
+                    </a>
+                    <RowActionsMenu ariaLabel={`Billing actions for document ${doc.documentNumber}`} actions={actions} />
+                  </div>
+                </td>
+              </tr>
+            );
+          }}
         />
 
         <BillingProfileCard status={data.billing.profile.status} profile={data.billing.profile.profile} />
+
+        <BillingListSection<AdminBillingNotificationJob>
+          title="Billing emails"
+          icon={Mail}
+          sectionKey="notificationJobs"
+          status={data.billing.notificationJobs.status}
+          items={data.billing.notificationJobs.items}
+          headerCells={['Kind', 'Status', 'Email', 'Document', 'Error', 'Created', '']}
+          renderRow={(job) => {
+            // Retry only makes sense once a job has actually failed -- a pending/processing/done job
+            // has nothing to retry (plan §10 D: "Retry (failed jobs only)").
+            const actions: RowAction[] = job.status === 'failed'
+              ? [
+                  {
+                    key: 'retry',
+                    label: 'Retry',
+                    icon: RotateCw,
+                    onSelect: () => openBillingDialog({ kind: 'retryJob', job }),
+                  },
+                ]
+              : [];
+            return (
+              <tr key={job.id} className="border-b border-white/5 last:border-0">
+                <td className="py-3 pr-4 text-neutral-200">{describeBillingJobKind(job.kind)}</td>
+                <td className="px-4 py-3 capitalize text-neutral-500">{job.status}</td>
+                <td className="px-4 py-3 text-neutral-500">{describeBillingEmailStatus(job.emailStatus)}</td>
+                <td className="px-4 py-3 capitalize text-neutral-500">{job.documentOutcome?.replaceAll('_', ' ') ?? '—'}</td>
+                <td className="max-w-[200px] truncate px-4 py-3 text-neutral-500" title={job.lastError ?? undefined}>
+                  {job.lastError ?? '—'}
+                </td>
+                <td className="px-4 py-3 text-neutral-500">{formatDateTime(job.createdAt)}</td>
+                <td className="py-3 pl-4 text-right">
+                  <RowActionsMenu ariaLabel={`Billing actions for job ${job.id}`} actions={actions} />
+                </td>
+              </tr>
+            );
+          }}
+        />
 
         <BillingListSection<AdminBillingWebhookEvent>
           title="Webhook events"
