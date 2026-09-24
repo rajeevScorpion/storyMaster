@@ -105,6 +105,11 @@ export async function POST(request: Request) {
 
       throwIfQueryFailed(updateResult.error, 'Failed to update subscription billing order');
 
+      // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E2): the same condition the message
+      // below already branches on, surfaced as its own flag so the client can drive its own progress
+      // UI (CheckoutSummarySheet) instead of pattern-matching the message text.
+      const pending = syncResult.grantedCoins === 0 && !syncResult.firstChargeConfirmed;
+
       const message =
         syncResult.grantedCoins > 0
           ? `Your plan is active and ${syncResult.grantedCoins.toLocaleString()} coins were added.`
@@ -115,6 +120,7 @@ export async function POST(request: Request) {
       return NextResponse.json({
         ok: true,
         grantedCoins: syncResult.grantedCoins,
+        pending,
         message,
       });
     }
@@ -158,6 +164,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ok: true,
       grantedCoins: settleResult.grantedCoins,
+      pending: settleResult.state === 'pending',
       message,
     });
   } catch (err: any) {

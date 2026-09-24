@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
-import { checkoutStateFromOrder, dismissOutcomeAtTimeout, endsDismissPoll } from './checkout-status.shared';
+import { checkoutStateFromOrder, dismissOutcomeAtTimeout, endsDismissPoll, isCheckoutPaid } from './checkout-status.shared';
+import type { CheckoutOrderState } from './checkout-status.shared';
 
 /**
  * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, defect 10): a top-up's `failed` status
@@ -78,5 +79,14 @@ describe('dismissOutcomeAtTimeout', () => {
 
   it('reports a failed order with no failure seen in the window as confirming, since it can still turn paid', () => {
     expect(dismissOutcomeAtTimeout({ lastState: 'failed', failureRecorded: false })).toBe('confirming');
+  });
+});
+
+describe('isCheckoutPaid', () => {
+  it('is true only for paid', () => {
+    const states: CheckoutOrderState[] = ['open', 'confirming', 'paid', 'failed', 'abandoned'];
+    for (const state of states) {
+      expect(isCheckoutPaid(state)).toBe(state === 'paid');
+    }
   });
 });

@@ -185,6 +185,38 @@ describe('POST /api/billing/razorpay/verify — subscription', () => {
     const json = await response.json();
     expect(json.grantedCoins).toBe(1000);
     expect(json.message).toContain('1,000 coins');
+    expect(json.pending).toBe(false);
+  });
+
+  it('reports pending when the first charge has not confirmed yet', async () => {
+    createAdminClientMock.mockReturnValue(
+      createFakeAdmin({
+        'billing_orders:select': [{ data: fakeBillingOrder(), error: null }],
+        'pricing_plan_versions:select': [{ data: { id: 'plan-version-1' }, error: null }],
+        'billing_orders:update': [{ data: null, error: null }],
+      })
+    );
+    verifyRazorpaySubscriptionSignatureMock.mockReturnValueOnce(true);
+    syncSubscriptionFromProviderMock.mockResolvedValueOnce({
+      billingSubscriptionId: 'billing-sub-1',
+      grantedCoins: 0,
+      firstChargeConfirmed: false,
+      status: 'authenticated',
+    });
+
+    const response = await POST(
+      postRequest({
+        kind: 'subscription',
+        internalOrderId: 'order-1',
+        razorpayPaymentId: 'pay_1',
+        razorpaySignature: 'sig_1',
+        razorpaySubscriptionId: 'sub_stored',
+      })
+    );
+
+    expect(response.status).toBe(200);
+    const json = await response.json();
+    expect(json.pending).toBe(true);
   });
 });
 
@@ -211,6 +243,7 @@ describe('POST /api/billing/razorpay/verify — top-up', () => {
     expect(response.status).toBe(200);
     const json = await response.json();
     expect(json.ok).toBe(true);
+    expect(json.pending).toBe(true);
     expect(json.message).toMatch(/confirming/i);
   });
 

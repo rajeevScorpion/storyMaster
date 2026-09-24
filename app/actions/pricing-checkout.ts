@@ -60,7 +60,7 @@ interface BillingBeginSubscriptionCheckoutRow {
  * callers use it to decide whether it's safe to write `subject_ref` on a new billing_orders /
  * billing_subscriptions row (that column doesn't exist without 125 either, same migration file).
  */
-interface CheckoutTaxContext {
+export interface CheckoutTaxContext {
   netMinor: number;
   taxMinor: number;
   grossMinor: number;
@@ -83,7 +83,12 @@ interface CheckoutTaxContext {
  *  - 125 present with a published rule: require a declared billing-profile state (place of supply
  *    is a legal requirement, not a preference) and compute tax on top.
  */
-async function resolveCheckoutTax(input: {
+/**
+ * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E2): exported so `quoteCheckout`
+ * (app/actions/billing-account.ts) can price a checkout -- tax included -- without creating a
+ * Razorpay order or subscription. Behaviour is unchanged for prepare's own callers.
+ */
+export async function resolveCheckoutTax(input: {
   supabase: ReturnType<typeof createAdminClient>;
   userId: string;
   appliesTo: 'subscription' | 'topup';
@@ -469,13 +474,13 @@ export async function prepareRazorpayCheckoutInternal(
   };
 }
 
-async function assertBetaMarketAllowed(pricingMarketKey: PricingMarketKey): Promise<void> {
+export async function assertBetaMarketAllowed(pricingMarketKey: PricingMarketKey): Promise<void> {
   if (pricingMarketKey !== 'IN' && await getFeatureFlag('pricing_india_only_beta_enabled', true)) {
     throw new CheckoutRefusalError('Kissago paid beta checkout is currently available in India only.', 'market_restricted', 400);
   }
 }
 
-async function getAuthenticatedUser(): Promise<{
+export async function getAuthenticatedUser(): Promise<{
   userId: string;
   userEmail: string | null;
   userName: string | null;
@@ -503,7 +508,7 @@ async function getAuthenticatedUser(): Promise<{
   };
 }
 
-async function loadPlanVersionForCheckout(
+export async function loadPlanVersionForCheckout(
   supabase: ReturnType<typeof createAdminClient>,
   planVersionId: string,
   pricingMarketKey: PricingMarketKey | null
@@ -530,7 +535,7 @@ async function loadPlanVersionForCheckout(
   return version;
 }
 
-async function loadPlanById(
+export async function loadPlanById(
   supabase: ReturnType<typeof createAdminClient>,
   planId: string
 ): Promise<DbPricingPlan> {
@@ -550,7 +555,7 @@ async function loadPlanById(
   return plan;
 }
 
-async function loadTopupPackForCheckout(
+export async function loadTopupPackForCheckout(
   supabase: ReturnType<typeof createAdminClient>,
   topupPackId: string,
   pricingMarketKey: PricingMarketKey | null
@@ -680,6 +685,6 @@ function throwIfQueryFailed(error: { message: string } | null, context: string):
   }
 }
 
-function labelInterval(value: DbPricingPlanVersion['billing_interval']): string {
+export function labelInterval(value: DbPricingPlanVersion['billing_interval']): string {
   return value === 'annual' ? 'Yearly' : 'Monthly';
 }

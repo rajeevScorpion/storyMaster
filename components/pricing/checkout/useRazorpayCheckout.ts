@@ -5,7 +5,12 @@ import Script from 'next/script';
 import { RAZORPAY_CHECKOUT_SCRIPT_URL } from '@/lib/billing/razorpay-shared';
 import { describeCheckoutFailure, type RazorpayCheckoutFailure } from '@/lib/billing/checkout-errors.shared';
 import { getMyCheckoutStatus } from '@/app/actions/billing-account';
-import { dismissOutcomeAtTimeout, endsDismissPoll, type CheckoutOrderState } from '@/lib/billing/checkout-status.shared';
+import {
+  dismissOutcomeAtTimeout,
+  endsDismissPoll,
+  isCheckoutPaid,
+  type CheckoutOrderState,
+} from '@/lib/billing/checkout-status.shared';
 import type {
   PrepareRazorpayCheckoutInput,
   PreparedRazorpayCheckout,
@@ -32,17 +37,27 @@ declare global {
  * What a checkout attempt ends in, once Razorpay's window has actually opened. Deliberately never a
  * rejection for a dismissal (defect 5) -- `startRazorpayCheckout` only rejects for a prepare failure,
  * whose message is already sanitised by the server (app/api/billing/razorpay/prepare/route.ts).
+ * `confirming` always carries `internalOrderId` -- from the handler (verify said pending) or from the
+ * dismiss poll -- so the caller (CheckoutSummarySheet, Unit E2) can hand it straight to `pollUntilPaid`.
  */
 export type CheckoutOutcome =
   | { kind: 'success'; message: string }
-  | { kind: 'confirming' }
+  | { kind: 'confirming'; internalOrderId: string }
   | { kind: 'failed'; message: string }
   | { kind: 'dismissed' };
+
+/** Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E2): fine-grained progress for the
+ * checkout summary sheet's `CheckoutProgress`. Fires in this order (verifying and checking are
+ * mutually exclusive, not sequential): preparing -> window -> (verifying | checking). */
+export type CheckoutProgressPhase = 'preparing' | 'window' | 'verifying' | 'checking';
 
 const GENERIC_PREPARE_ERROR = "We couldn't start checkout. Please try again in a moment.";
 
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 20000;
+
+const CONFIRM_POLL_INTERVAL_MS = 3000;
+const CONFIRM_POLL_TIMEOUT_MS = 90000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -106,7 +121,7 @@ async function pollAfterDismiss(
       if (endsDismissPoll(status.state)) {
         return status.state === 'paid'
           ? { kind: 'success', message: "Payment received. It's being applied to your account." }
-          : { kind: 'confirming' };
+          : { kind: 'confirming', internalOrderId };
       }
     } catch {
       // A transient read failure keeps polling rather than giving up early.
@@ -119,11 +134,46 @@ async function pollAfterDismiss(
     case 'dismissed':
       return { kind: 'dismissed' };
     case 'confirming':
-      return { kind: 'confirming' };
+      return { kind: 'confirming', internalOrderId };
   }
 }
 
-function openRazorpayCheckoutWindow(checkout: PreparedRazorpayCheckout): Promise<CheckoutOutcome> {
+/**
+ * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E2): polls after verify (or the dismiss
+ * poll) has already said "confirming" -- the checkout summary sheet's `CheckoutProgress` calls this to
+ * find out whether a pending payment has landed yet. Never returns `'failed'` (see
+ * checkout-status.shared.ts's `isCheckoutPaid`): once confirming, the only endings are paid or still
+ * confirming, since a top-up's `failed` and a subscription's `authenticated`/`pending` can still turn
+ * into `paid` on a later sync.
+ */
+export async function pollUntilPaid(
+  internalOrderId: string,
+  options: { intervalMs?: number; timeoutMs?: number } = {}
+): Promise<'paid' | 'still_confirming'> {
+  const intervalMs = options.intervalMs ?? CONFIRM_POLL_INTERVAL_MS;
+  const timeoutMs = options.timeoutMs ?? CONFIRM_POLL_TIMEOUT_MS;
+  const attempts = Math.max(1, Math.floor(timeoutMs / intervalMs));
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    await sleep(intervalMs);
+
+    try {
+      const status = await getMyCheckoutStatus(internalOrderId);
+      if (isCheckoutPaid(status.state)) {
+        return 'paid';
+      }
+    } catch {
+      // A transient read failure keeps polling rather than giving up early.
+    }
+  }
+
+  return 'still_confirming';
+}
+
+function openRazorpayCheckoutWindow(
+  checkout: PreparedRazorpayCheckout,
+  onProgress?: (phase: CheckoutProgressPhase) => void
+): Promise<CheckoutOutcome> {
   const RazorpayCtor = window.Razorpay;
 
   if (!RazorpayCtor) {
@@ -165,10 +215,12 @@ function openRazorpayCheckoutWindow(checkout: PreparedRazorpayCheckout): Promise
       modal: {
         confirm_close: true,
         ondismiss: () => {
+          onProgress?.('checking');
           void pollAfterDismiss(checkout.internalOrderId, lastFailure).then(settle);
         },
       },
       handler: async (response: any) => {
+        onProgress?.('verifying');
         try {
           const verifyResponse = await fetch('/api/billing/razorpay/verify', {
             method: 'POST',
@@ -207,7 +259,15 @@ function openRazorpayCheckoutWindow(checkout: PreparedRazorpayCheckout): Promise
             return;
           }
 
-          settle({ kind: 'success', message: payload?.message || 'Checkout completed successfully.' });
+          // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E2): verify's own `pending` flag
+          // (payment captured but not yet confirmed -- a subscription's first charge, or a top-up
+          // still settling) resolves as `confirming`, not `success`, so the sheet keeps polling rather
+          // than telling the customer they're done before the grant has actually landed.
+          if (payload?.pending) {
+            settle({ kind: 'confirming', internalOrderId: checkout.internalOrderId });
+          } else {
+            settle({ kind: 'success', message: payload?.message || 'Checkout completed successfully.' });
+          }
         } catch {
           settle({ kind: 'failed', message: describeCheckoutFailure(null) });
         }
@@ -233,6 +293,7 @@ function openRazorpayCheckoutWindow(checkout: PreparedRazorpayCheckout): Promise
     }
 
     try {
+      onProgress?.('window');
       instance.open();
     } catch (err) {
       settleReject(err instanceof Error ? err : new Error('Failed to open Razorpay checkout'));
@@ -243,15 +304,18 @@ function openRazorpayCheckoutWindow(checkout: PreparedRazorpayCheckout): Promise
 /**
  * The one entry point /wallet, /plans and /account/billing all call. Rejects only when preparing the
  * checkout failed (an already-sanitised message); every outcome after Razorpay's window opens comes
- * back as a resolved CheckoutOutcome instead, dismissal included.
+ * back as a resolved CheckoutOutcome instead, dismissal included. `onProgress` (Unit E2) is optional so
+ * a caller with no fine-grained progress UI can still call this exactly as before.
  */
 export async function startRazorpayCheckout(payload: {
   input: PrepareRazorpayCheckoutInput;
   pricingMarketKey: PricingMarketKey;
   adultAttested: boolean;
+  onProgress?: (phase: CheckoutProgressPhase) => void;
 }): Promise<CheckoutOutcome> {
+  payload.onProgress?.('preparing');
   const checkout = await requestPreparedRazorpayCheckout(payload);
-  return openRazorpayCheckoutWindow(checkout);
+  return openRazorpayCheckoutWindow(checkout, payload.onProgress);
 }
 
 export interface UseRazorpayCheckoutResult {

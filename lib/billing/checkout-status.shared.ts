@@ -51,6 +51,18 @@ export function endsDismissPoll(state: CheckoutOrderState): boolean {
 }
 
 /**
+ * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E2): the rule `pollUntilPaid`
+ * (useRazorpayCheckout.ts) polls against once verify or the dismiss poll has already said
+ * "confirming" -- every state except `paid` keeps polling, including a top-up's non-final `failed`
+ * (defect 10) and a subscription retrying under `authenticated`/`pending`. `pollUntilPaid` never
+ * returns `'failed'`; on a timeout it reports `'still_confirming'` instead, so this predicate is the
+ * whole rule that makes that true.
+ */
+export function isCheckoutPaid(state: CheckoutOrderState): boolean {
+  return state === 'paid';
+}
+
+/**
  * What the dismiss poll reports when it times out without reaching `paid` or `confirming`.
  * `lastState` is null when every poll failed to read.
  */
