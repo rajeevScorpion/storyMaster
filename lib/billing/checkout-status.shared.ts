@@ -44,3 +44,21 @@ export function checkoutStateFromOrder(input: CheckoutOrderStatusInput): Checkou
   if (SUBSCRIPTION_ABANDONED_STATUSES.has(input.status)) return 'abandoned';
   return 'open'; // preparing, created, or anything unrecognised
 }
+
+/** The dismiss poll stops early only on these. A top-up's `failed` is not one (defect 10). */
+export function endsDismissPoll(state: CheckoutOrderState): boolean {
+  return state === 'paid' || state === 'confirming';
+}
+
+/**
+ * What the dismiss poll reports when it times out without reaching `paid` or `confirming`.
+ * `lastState` is null when every poll failed to read.
+ */
+export function dismissOutcomeAtTimeout(input: {
+  lastState: CheckoutOrderState | null;
+  failureRecorded: boolean;
+}): 'failed' | 'dismissed' | 'confirming' {
+  if (input.failureRecorded) return 'failed';
+  if (input.lastState === null || input.lastState === 'open' || input.lastState === 'abandoned') return 'dismissed';
+  return 'confirming';
+}

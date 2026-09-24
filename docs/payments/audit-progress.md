@@ -3,7 +3,7 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-23, late — A-D done, E1 spec ready)
+## Next session starts here (updated 2026-09-24 — E1 done, E2 next)
 
 **Phase 5 is planned: `phase-5-plan.md`.** Ten units (0, A-G, M), migration 134 written out in full inside the
 plan (not yet as files). **Seven owner decisions, P1-P7 (plan §3), gate D, E1, F and G.** B, C and the Razorpay
@@ -60,11 +60,28 @@ Two scope calls in the spec, **both approved by the owner 2026-09-24**:
 **Razorpay's `image` (owner, 2026-09-24):** the favicon's "k" mark, rendered at 256px from the same drawing as
 `app/icon.tsx` (spec step 7). No binary file.
 **Owner, 2026-09-24:** the billing dialog visual review on the Preview **passed**. Usage at the start of E1: **83%**.
+**E1 done, 2026-09-24.** The server half is `5b53b21` (Sonnet). The agent was cut off mid-client, and Opus
+reviewed the server half, finished the client half, and committed both follow-ups.
+Review found three things:
+- **`pricing-checkout.ts` was still `'use server'`.** So `prepareRazorpayCheckoutInternal` was itself a
+  public server action that trusted a caller-supplied `audienceMode`, and the kids gate could be skipped.
+  It is now `server-only` (its one caller is the prepare route).
+- A non-JSON prepare response (a platform timeout page) rendered its raw body. It now shows the generic
+  sentence, and so does a network error.
+- At the dismiss-poll timeout, an `abandoned` order read as "Payment received". It now counts as
+  dismissed. The rule lives in `checkout-status.shared.ts` with tests.
+Steps 9-10 (the attestation row and the kids line on `/wallet`) were written fresh.
+**Gates:** tsc and lint clean, **2,141 tests / 175 files**, `build:verify` compiled, `e2e/smoke.spec.ts` 8/8.
+`/brand/checkout-mark` serves a 256px PNG with a one-year cache.
+**Owner, on the Preview:**
+- `/wallet` shows the "I'm 18 or older" row, and every buy button stays disabled until it is ticked.
+- Run three subscribes and three top-ups, then read the `[checkout-timing]` lines in the Vercel logs.
+  Those numbers decide whether the plan ref is pre-created at publish time.
+- Walk steps 12-14. Close the Razorpay window mid-UPI: the page waits up to 20s before it reports.
 
 **Next session starts with:**
 1. The phase brief.
-2. **E1**, from the E1 execution spec in plan §5, then **E2**, **F** and **G** (plan §9). Execute it on Sonnet
-   (one agent, one commit), and have Opus review the diff against the spec's "Review focus" list.
+2. **E2**, then **F** and **G** (plan §9). Execute on Sonnet, and have Opus review the diff.
 3. If the owner has run **Unit 0** by then, read the new subscription's `subscription.*` webhook rows in
    `billing_webhook_events`, then write `research/11-cycle-end-cancel-probe.md`. They keep the full entity:
    look at `charge_at`, `ended_at`, `has_scheduled_changes` and `change_scheduled_at` after a cycle-end

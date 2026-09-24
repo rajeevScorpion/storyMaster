@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import Script from 'next/script';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, BookOpen, CheckCircle2, Coins, CreditCard, Loader2, Sparkles, Star, Wallet as WalletIcon } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -10,7 +9,7 @@ import KissagoLogo from '@/components/ui/KissagoLogo';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import BillingDetailsDialog from '@/components/pricing/BillingDetailsDialog';
-import { RAZORPAY_CHECKOUT_SCRIPT_URL } from '@/lib/billing/razorpay-shared';
+import { RazorpayScript, useRazorpayCheckout, type CheckoutOutcome } from '@/components/pricing/checkout/useRazorpayCheckout';
 import { formatPriceWithTaxLine } from '@/lib/billing/wallet-tax.shared';
 import { indiaStateName } from '@/lib/billing/india-states.shared';
 import { isBillingProfileComplete } from '@/lib/billing/billing-profile.shared';
@@ -20,21 +19,11 @@ import { getPricingWalletPageData } from '@/app/actions/pricing-runtime';
 import type {
   BillingInterval,
   BillingProfileDTO,
-  PreparedRazorpayCheckout,
   PricingPlanOfferCard,
   PricingWalletPageData,
 } from '@/lib/types/pricing';
 import { COINS_PER_BEAT } from '@/lib/types/pricing';
 import { buildPlanFeatures, getPlanDescription } from '@/lib/pricing/plan-copy.shared';
-
-declare global {
-  interface Window {
-    Razorpay?: new (options: Record<string, unknown>) => {
-      open: () => void;
-      on?: (event: string, handler: (payload: any) => void) => void;
-    };
-  }
-}
 
 function formatPrice(currencyCode: string, amountMinor: number | null) {
   if (amountMinor == null) {
@@ -189,48 +178,6 @@ function getSelectedPlanPriceMinor(offer: PricingPlanOfferCard, interval: Billin
     : offer.monthlyPriceMinor;
 }
 
-async function requestPreparedRazorpayCheckout(
-  payload: {
-    input: {
-      kind: 'subscription';
-      planVersionId: string;
-    } | {
-      kind: 'topup';
-      topupPackId: string;
-    };
-    pricingMarketKey: 'IN' | 'ROW';
-  }
-): Promise<PreparedRazorpayCheckout> {
-  const response = await fetch('/api/billing/razorpay/prepare', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
-
-  const rawText = await response.text();
-  let data: { ok?: boolean; error?: string; checkout?: PreparedRazorpayCheckout } | null = null;
-
-  if (rawText) {
-    try {
-      data = JSON.parse(rawText) as { ok?: boolean; error?: string; checkout?: PreparedRazorpayCheckout };
-    } catch {
-      data = null;
-    }
-  }
-
-  if (!response.ok || !data?.ok) {
-    const fallbackError =
-      rawText && !data
-        ? rawText.slice(0, 500)
-        : 'Failed to prepare Razorpay checkout';
-    throw new Error(data?.error || fallbackError);
-  }
-
-  return data.checkout as PreparedRazorpayCheckout;
-}
-
 export default function WalletPage() {
   const router = useRouter();
   const pricing = usePricingRuntime();
@@ -251,13 +198,19 @@ export default function WalletPage() {
   const [checkoutStatus, setCheckoutStatus] = useState<string | null>(null);
   const [selectedPlanInterval, setSelectedPlanInterval] = useState<BillingInterval>('monthly');
   const [checkoutBusyKey, setCheckoutBusyKey] = useState<string | null>(null);
-  const [razorpayReady, setRazorpayReady] = useState(false);
+  const razorpay = useRazorpayCheckout();
+  const razorpayReady = razorpay.ready;
+  const startCheckout = razorpay.start;
   const [billingDialogOpen, setBillingDialogOpen] = useState(false);
   // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit D): the dialog's submit label and
   // "future invoices" line depend on whether it opened to unblock a pending checkout or from the
   // wallet's own billing-details row.
   const [billingDialogContext, setBillingDialogContext] = useState<'checkout' | 'manage'>('manage');
   const [pendingCheckoutAction, setPendingCheckoutAction] = useState<(() => void) | null>(null);
+  // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, owner decision P6): the interim
+  // attestation checkbox. E2 replaces this with the pre-payment summary sheet's own checkbox; until
+  // then this is the only place the customer can satisfy the server's adultAttested requirement.
+  const [adultAttested, setAdultAttested] = useState(false);
 
   useEffect(() => {
     if (
@@ -336,11 +289,19 @@ export default function WalletPage() {
   const currentPlan = offers.find((offer) => offer.isCurrentPlan) ?? null;
   const primaryTopup = topups[0] ?? null;
   const marketLabel = pricingData.snapshot.pricingMarketKey === 'IN' ? 'India' : 'Outside India';
+  // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, owner decision P6): kids mode hides
+  // every buy button behind a "switch profiles" line -- the server refuses regardless, but the client
+  // shows the same thing up front rather than letting the customer discover it after opening Razorpay.
+  const isKidsMode = walletData?.audienceMode === 'kids';
+
+  // The interim attestation row shows only where a purchase is otherwise possible.
+  const showAttestation = Boolean(pricingData.userId) && checkoutEnabled && usingRazorpayMarket && !isKidsMode;
   const headlineActionDisabled =
     !checkoutEnabled ||
     !pricingData.userId ||
     !usingRazorpayMarket ||
-    !razorpayReady;
+    !razorpayReady ||
+    !adultAttested;
 
   // Payments Phase 2, Unit B2a: once a tax rule is published, checkout requires a declared billing
   // state (the GST place of supply). Both checkout handlers below gate on this before they ever call
@@ -350,6 +311,33 @@ export default function WalletPage() {
   const requiresBillingDetails =
     Boolean(walletData?.taxPreview?.requiresBillingState) &&
     !isBillingProfileComplete(walletData?.billingProfile ?? null);
+
+  // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1): shared by runPlanCheckout and
+  // runTopupCheckout so the CheckoutOutcome switch lives in exactly one place. 'failed' and 'dismissed'
+  // change nothing else -- there is nothing new to refresh.
+  const applyCheckoutOutcome = useCallback(async (outcome: CheckoutOutcome) => {
+    switch (outcome.kind) {
+      case 'success':
+        setCheckoutStatus(outcome.message);
+        await refreshPricing();
+        await loadWalletData();
+        router.refresh();
+        break;
+      case 'confirming':
+        setCheckoutStatus(
+          "Payment received. We're confirming it. This can take a few minutes with UPI, and it applies automatically."
+        );
+        await refreshPricing();
+        await loadWalletData();
+        router.refresh();
+        break;
+      case 'failed':
+        setCheckoutError(outcome.message);
+        break;
+      case 'dismissed':
+        break;
+    }
+  }, [loadWalletData, refreshPricing, router]);
 
   const runPlanCheckout = useCallback(async (offer: PricingPlanOfferCard) => {
     const planVersionId = getSelectedPlanVersionId(offer, selectedPlanInterval);
@@ -379,27 +367,23 @@ export default function WalletPage() {
     setCheckoutStatus(null);
 
     try {
-      const checkout = await requestPreparedRazorpayCheckout({
+      const outcome = await startCheckout({
         input: {
           kind: 'subscription',
           planVersionId,
         },
         pricingMarketKey: pricingData.snapshot.pricingMarketKey,
+        adultAttested,
       });
-
-      const message = await openRazorpayCheckout(checkout);
-      setCheckoutStatus(message);
-      await refreshPricing();
-      await loadWalletData();
-      router.refresh();
+      await applyCheckoutOutcome(outcome);
     } catch (err: any) {
-      if (err?.message !== 'Razorpay checkout dismissed') {
-        setCheckoutError(err?.message || 'Failed to start Razorpay checkout');
-      }
+      // razorpay.start only rejects for a prepare failure now -- its message is already sanitised
+      // (app/api/billing/razorpay/prepare/route.ts), so no dismissal string-check is needed any more.
+      setCheckoutError(err?.message || 'Failed to start Razorpay checkout');
     } finally {
       setCheckoutBusyKey(null);
     }
-  }, [loadWalletData, pricingData.snapshot.pricingMarketKey, pricingData.snapshot.routingProvider, refreshPricing, router, selectedPlanInterval]);
+  }, [adultAttested, applyCheckoutOutcome, pricingData.snapshot.pricingMarketKey, pricingData.snapshot.routingProvider, selectedPlanInterval, startCheckout]);
 
   const handlePlanCheckout = useCallback((offer: PricingPlanOfferCard) => {
     if (requiresBillingDetails) {
@@ -422,27 +406,21 @@ export default function WalletPage() {
     setCheckoutStatus(null);
 
     try {
-      const checkout = await requestPreparedRazorpayCheckout({
+      const outcome = await startCheckout({
         input: {
           kind: 'topup',
           topupPackId,
         },
         pricingMarketKey: pricingData.snapshot.pricingMarketKey,
+        adultAttested,
       });
-
-      const message = await openRazorpayCheckout(checkout);
-      setCheckoutStatus(message);
-      await refreshPricing();
-      await loadWalletData();
-      router.refresh();
+      await applyCheckoutOutcome(outcome);
     } catch (err: any) {
-      if (err?.message !== 'Razorpay checkout dismissed') {
-        setCheckoutError(err?.message || 'Failed to start Razorpay checkout');
-      }
+      setCheckoutError(err?.message || 'Failed to start Razorpay checkout');
     } finally {
       setCheckoutBusyKey(null);
     }
-  }, [loadWalletData, pricingData.snapshot.pricingMarketKey, refreshPricing, router]);
+  }, [adultAttested, applyCheckoutOutcome, pricingData.snapshot.pricingMarketKey, startCheckout]);
 
   const handleTopupCheckout = useCallback((topupPackId: string, packKey: string, provider: string | null) => {
     if (requiresBillingDetails) {
@@ -464,14 +442,14 @@ export default function WalletPage() {
 
   return (
     <main className="relative min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
-      {checkoutEnabled && usingRazorpayMarket && (
-        <Script
-          src={RAZORPAY_CHECKOUT_SCRIPT_URL}
-          strategy="afterInteractive"
-          onLoad={() => setRazorpayReady(true)}
-          onError={() => setCheckoutError('Failed to load Razorpay checkout. Please refresh and try again.')}
-        />
-      )}
+      <RazorpayScript
+        enabled={checkoutEnabled && usingRazorpayMarket}
+        onLoad={razorpay.onScriptLoad}
+        onError={() => {
+          razorpay.onScriptError();
+          setCheckoutError('Failed to load Razorpay checkout. Please refresh and try again.');
+        }}
+      />
 
       <div
         aria-hidden="true"
@@ -570,55 +548,57 @@ export default function WalletPage() {
                 </p>
               </div>
 
-              <div className="flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  disabled={headlineActionDisabled || checkoutBusyKey !== null}
-                  onClick={() => {
-                    const nextPlan = offers.find((offer) => !offer.isCurrentPlan && getSelectedPlanProvider(offer, selectedPlanInterval) === 'razorpay') ?? null;
-                    if (nextPlan) {
-                      void handlePlanCheckout(nextPlan);
-                    }
-                  }}
-                  className="cursor-pointer rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-2.5 text-sm text-emerald-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-400/40 hover:bg-emerald-500/15 hover:shadow-[0_14px_35px_rgba(16,185,129,0.16)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none"
-                >
-                  {!pricingData.userId
-                    ? 'Sign in to continue'
-                    : !checkoutEnabled
-                    ? 'Upgrade coming soon'
-                    : !usingRazorpayMarket
-                    ? 'India checkout first'
-                    : yearlyCheckoutDeferred && checkoutBusyKey === null
-                    ? 'Upgrade plan'
-                    : !razorpayReady
-                    ? 'Loading checkout'
-                    : checkoutBusyKey !== null
-                    ? 'Opening checkout...'
-                    : 'Upgrade plan'}
-                </button>
-                <button
-                  type="button"
-                  disabled={headlineActionDisabled || !primaryTopup || checkoutBusyKey !== null}
-                  onClick={() => {
-                    if (primaryTopup) {
-                      void handleTopupCheckout(primaryTopup.topupPackId, primaryTopup.packKey, primaryTopup.provider);
-                    }
-                  }}
-                  className="cursor-pointer rounded-2xl border border-white/10 bg-neutral-900/60 px-4 py-2.5 text-sm text-neutral-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-neutral-800/80 hover:shadow-[0_14px_35px_rgba(255,255,255,0.06)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none"
-                >
-                  {!pricingData.userId
-                    ? 'Sign in to continue'
-                    : !checkoutEnabled
-                    ? 'Top-ups coming soon'
-                    : !usingRazorpayMarket
-                    ? 'India checkout first'
-                    : !razorpayReady
-                    ? 'Loading checkout'
-                    : checkoutBusyKey !== null
-                    ? 'Opening checkout...'
-                    : 'Buy coins'}
-                </button>
-              </div>
+              {!isKidsMode && (
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    disabled={headlineActionDisabled || checkoutBusyKey !== null}
+                    onClick={() => {
+                      const nextPlan = offers.find((offer) => !offer.isCurrentPlan && getSelectedPlanProvider(offer, selectedPlanInterval) === 'razorpay') ?? null;
+                      if (nextPlan) {
+                        void handlePlanCheckout(nextPlan);
+                      }
+                    }}
+                    className="cursor-pointer rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-2.5 text-sm text-emerald-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-400/40 hover:bg-emerald-500/15 hover:shadow-[0_14px_35px_rgba(16,185,129,0.16)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+                  >
+                    {!pricingData.userId
+                      ? 'Sign in to continue'
+                      : !checkoutEnabled
+                      ? 'Upgrade coming soon'
+                      : !usingRazorpayMarket
+                      ? 'India checkout first'
+                      : yearlyCheckoutDeferred && checkoutBusyKey === null
+                      ? 'Upgrade plan'
+                      : !razorpayReady
+                      ? 'Loading checkout'
+                      : checkoutBusyKey !== null
+                      ? 'Opening checkout...'
+                      : 'Upgrade plan'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={headlineActionDisabled || !primaryTopup || checkoutBusyKey !== null}
+                    onClick={() => {
+                      if (primaryTopup) {
+                        void handleTopupCheckout(primaryTopup.topupPackId, primaryTopup.packKey, primaryTopup.provider);
+                      }
+                    }}
+                    className="cursor-pointer rounded-2xl border border-white/10 bg-neutral-900/60 px-4 py-2.5 text-sm text-neutral-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-neutral-800/80 hover:shadow-[0_14px_35px_rgba(255,255,255,0.06)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+                  >
+                    {!pricingData.userId
+                      ? 'Sign in to continue'
+                      : !checkoutEnabled
+                      ? 'Top-ups coming soon'
+                      : !usingRazorpayMarket
+                      ? 'India checkout first'
+                      : !razorpayReady
+                      ? 'Loading checkout'
+                      : checkoutBusyKey !== null
+                      ? 'Opening checkout...'
+                      : 'Buy coins'}
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="mt-6 grid gap-3 md:grid-cols-3">
@@ -687,6 +667,36 @@ export default function WalletPage() {
             </div>
           </section>
         </div>
+
+        {isKidsMode && (
+          <p className="mt-6 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-neutral-300">
+            Switch to an adult profile to buy plans or coins.
+          </p>
+        )}
+
+        {/* Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, owner decision P6): interim.
+            E2's checkout summary sheet takes this checkbox over and this row is deleted. */}
+        {showAttestation && (
+          <label className="mt-6 flex cursor-pointer items-start gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-neutral-300">
+            <input
+              type="checkbox"
+              checked={adultAttested}
+              onChange={(event) => setAdultAttested(event.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-emerald-500"
+            />
+            <span>
+              I&apos;m 18 or older and I&apos;m the one paying for this purchase. See the{' '}
+              <Link href="/terms" target="_blank" rel="noopener noreferrer" className="text-emerald-300 underline-offset-2 hover:underline">
+                Terms
+              </Link>{' '}
+              and the{' '}
+              <Link href="/refund-policy" target="_blank" rel="noopener noreferrer" className="text-emerald-300 underline-offset-2 hover:underline">
+                Refund Policy
+              </Link>
+              .
+            </span>
+          </label>
+        )}
 
         {(walletError || checkoutError || checkoutStatus || (checkoutEnabled && !usingRazorpayMarket)) && (
           <div className="mt-6 space-y-3">
@@ -767,6 +777,7 @@ export default function WalletPage() {
                   selectedProvider == null ||
                   selectedProvider !== 'razorpay' ||
                   !razorpayReady ||
+                  !adultAttested ||
                   checkoutBusyKey !== null;
                 const features = buildPlanFeatures(offer, walletData, offers);
                 const description = getPlanDescription(offer);
@@ -836,14 +847,16 @@ export default function WalletPage() {
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      disabled={buttonDisabled}
-                      onClick={() => void handlePlanCheckout(offer)}
-                      className="mt-6 w-full cursor-pointer rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-neutral-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/10 hover:shadow-[0_14px_35px_rgba(255,255,255,0.06)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none"
-                    >
-                      {ctaLabel}
-                    </button>
+                    {!isKidsMode && (
+                      <button
+                        type="button"
+                        disabled={buttonDisabled}
+                        onClick={() => void handlePlanCheckout(offer)}
+                        className="mt-6 w-full cursor-pointer rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-neutral-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/10 hover:shadow-[0_14px_35px_rgba(255,255,255,0.06)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+                      >
+                        {ctaLabel}
+                      </button>
+                    )}
                   </article>
                 );
               })}
@@ -883,30 +896,33 @@ export default function WalletPage() {
                     {topupTaxLine && (
                       <p className="mt-1 text-xs text-emerald-300/80">{topupTaxLine}</p>
                     )}
-                    <button
-                      type="button"
-                      disabled={
-                        !pricingData.userId ||
-                        !checkoutEnabled ||
-                        pack.provider !== 'razorpay' ||
-                        !razorpayReady ||
-                        checkoutBusyKey !== null
-                      }
-                      onClick={() => void handleTopupCheckout(pack.topupPackId, pack.packKey, pack.provider)}
-                      className="mt-6 w-full cursor-pointer rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-neutral-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-300/30 hover:bg-white/10 hover:shadow-[0_14px_35px_rgba(16,185,129,0.14)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none"
-                    >
-                      {!pricingData.userId
-                        ? 'Sign in to continue'
-                        : !checkoutEnabled
-                        ? 'Top-up coming soon'
-                        : pack.provider !== 'razorpay'
-                        ? 'Stripe comes next'
-                        : !razorpayReady
-                        ? 'Loading checkout'
-                        : checkoutBusyKey === `topup:${pack.packKey}`
-                        ? 'Opening checkout...'
-                        : 'Buy coins'}
-                    </button>
+                    {!isKidsMode && (
+                      <button
+                        type="button"
+                        disabled={
+                          !pricingData.userId ||
+                          !checkoutEnabled ||
+                          pack.provider !== 'razorpay' ||
+                          !razorpayReady ||
+                          !adultAttested ||
+                          checkoutBusyKey !== null
+                        }
+                        onClick={() => void handleTopupCheckout(pack.topupPackId, pack.packKey, pack.provider)}
+                        className="mt-6 w-full cursor-pointer rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-neutral-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-300/30 hover:bg-white/10 hover:shadow-[0_14px_35px_rgba(16,185,129,0.14)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+                      >
+                        {!pricingData.userId
+                          ? 'Sign in to continue'
+                          : !checkoutEnabled
+                          ? 'Top-up coming soon'
+                          : pack.provider !== 'razorpay'
+                          ? 'Stripe comes next'
+                          : !razorpayReady
+                          ? 'Loading checkout'
+                          : checkoutBusyKey === `topup:${pack.packKey}`
+                          ? 'Opening checkout...'
+                          : 'Buy coins'}
+                      </button>
+                    )}
                   </article>
                   );
                 })}
@@ -1016,102 +1032,5 @@ function MarketButton({
       {label}
     </button>
   );
-}
-
-async function openRazorpayCheckout(checkout: PreparedRazorpayCheckout): Promise<string> {
-  const RazorpayCtor = window.Razorpay;
-
-  if (!RazorpayCtor) {
-    throw new Error('Razorpay checkout is not ready yet');
-  }
-
-  return new Promise((resolve, reject) => {
-    let settled = false;
-
-    const settleResolve = (message: string) => {
-      if (settled) return;
-      settled = true;
-      resolve(message);
-    };
-
-    const settleReject = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      reject(error);
-    };
-
-    const options: Record<string, unknown> = {
-      key: checkout.keyId,
-      name: checkout.displayName,
-      description: checkout.description,
-      prefill: {
-        name: checkout.userName ?? undefined,
-        email: checkout.userEmail ?? undefined,
-      },
-      theme: {
-        color: '#10b981',
-      },
-      modal: {
-        ondismiss: () => settleReject(new Error('Razorpay checkout dismissed')),
-      },
-      handler: async (response: any) => {
-        try {
-          const verifyResponse = await fetch('/api/billing/razorpay/verify', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(
-              checkout.kind === 'subscription'
-                ? {
-                    kind: 'subscription',
-                    internalOrderId: checkout.internalOrderId,
-                    razorpayPaymentId: response.razorpay_payment_id,
-                    razorpaySignature: response.razorpay_signature,
-                    razorpaySubscriptionId: response.razorpay_subscription_id,
-                  }
-                : {
-                    kind: 'topup',
-                    internalOrderId: checkout.internalOrderId,
-                    razorpayPaymentId: response.razorpay_payment_id,
-                    razorpaySignature: response.razorpay_signature,
-                    razorpayOrderId: response.razorpay_order_id,
-                  }
-            ),
-          });
-
-          const payload = await verifyResponse.json();
-          if (!verifyResponse.ok) {
-            throw new Error(payload?.error || 'Failed to verify Razorpay checkout');
-          }
-
-          settleResolve(payload?.message || 'Checkout completed successfully.');
-        } catch (err: any) {
-          settleReject(new Error(err?.message || 'Failed to verify Razorpay checkout'));
-        }
-      },
-    };
-
-    if (checkout.kind === 'subscription') {
-      options.subscription_id = checkout.razorpaySubscriptionId;
-    } else {
-      options.order_id = checkout.razorpayOrderId;
-      options.amount = checkout.amountMinor;
-      options.currency = checkout.currencyCode;
-    }
-
-    const instance = new RazorpayCtor(options);
-    if (typeof instance.on === 'function') {
-      instance.on('payment.failed', (event: any) => {
-        const description =
-          event?.error?.description ||
-          event?.error?.reason ||
-          'Razorpay reported a payment failure.';
-        settleReject(new Error(description));
-      });
-    }
-
-    instance.open();
-  });
 }
 

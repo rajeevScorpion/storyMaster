@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { checkoutStateFromOrder } from './checkout-status.shared';
+import { checkoutStateFromOrder, dismissOutcomeAtTimeout, endsDismissPoll } from './checkout-status.shared';
 
 /**
  * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, defect 10): a top-up's `failed` status
@@ -52,5 +52,31 @@ describe('checkoutStateFromOrder — subscription', () => {
 
   it.each(['preparing', 'created'])('reports %s as open', (status) => {
     expect(checkoutStateFromOrder({ orderType, status, firstChargeConfirmedAt: null })).toBe('open');
+  });
+});
+
+describe('endsDismissPoll', () => {
+  it('stops on paid and confirming only', () => {
+    expect(endsDismissPoll('paid')).toBe(true);
+    expect(endsDismissPoll('confirming')).toBe(true);
+    expect(endsDismissPoll('failed')).toBe(false);
+    expect(endsDismissPoll('open')).toBe(false);
+    expect(endsDismissPoll('abandoned')).toBe(false);
+  });
+});
+
+describe('dismissOutcomeAtTimeout', () => {
+  it('reports a recorded failure as failed, whatever the order state', () => {
+    for (const lastState of [null, 'open', 'failed', 'abandoned'] as const) {
+      expect(dismissOutcomeAtTimeout({ lastState, failureRecorded: true })).toBe('failed');
+    }
+  });
+
+  it.each([null, 'open', 'abandoned'] as const)('reports %s with no recorded failure as dismissed', (lastState) => {
+    expect(dismissOutcomeAtTimeout({ lastState, failureRecorded: false })).toBe('dismissed');
+  });
+
+  it('reports a failed order with no failure seen in the window as confirming, since it can still turn paid', () => {
+    expect(dismissOutcomeAtTimeout({ lastState: 'failed', failureRecorded: false })).toBe('confirming');
   });
 });
