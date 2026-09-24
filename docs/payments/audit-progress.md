@@ -3,7 +3,7 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-24 — E1 done, E2 next)
+## Next session starts here (updated 2026-09-24 — E1 and E2 done, F next)
 
 **Phase 5 is planned: `phase-5-plan.md`.** Ten units (0, A-G, M), migration 134 written out in full inside the
 plan (not yet as files). **Seven owner decisions, P1-P7 (plan §3), gate D, E1, F and G.** B, C and the Razorpay
@@ -73,15 +73,39 @@ Review found three things:
 Steps 9-10 (the attestation row and the kids line on `/wallet`) were written fresh.
 **Gates:** tsc and lint clean, **2,141 tests / 175 files**, `build:verify` compiled, `e2e/smoke.spec.ts` 8/8.
 `/brand/checkout-mark` serves a 256px PNG with a one-year cache.
-**Owner, on the Preview:**
-- `/wallet` shows the "I'm 18 or older" row, and every buy button stays disabled until it is ticked.
-- Run three subscribes and three top-ups, then read the `[checkout-timing]` lines in the Vercel logs.
-  Those numbers decide whether the plan ref is pre-created at publish time.
-- Walk steps 12-14. Close the Razorpay window mid-UPI: the page waits up to 20s before it reports.
+**E2 done, 2026-09-24.** The E2 execution spec (plan §5) was written at `eaa6d02` and built by Sonnet in
+`6d88270`. Opus reviewed it and fixed four things in `6e3c9de`:
+- The sheet could get stuck on "Complete the payment" if Razorpay's `open()` threw.
+- A poll left running from a closed sheet could write into a reopened one.
+- The success line now comes from the quote. When the webhook lands first, verify says "already applied".
+- A watch-only plan showed "0 coins".
+**Gates:** tsc and lint clean, 2,169 tests / 177 files, `build:verify` compiled, smoke e2e 8/8.
+**Opus drove it signed in** (Playwright on the local agent server, dev DB, Razorpay test mode, as `testuser`).
+These all worked:
+- The sheet's price: ₹450 + IGST ₹81 = ₹531. The ₹200 plan shows ₹236.
+- At 360px wide, there is no horizontal scroll.
+- Continue stays disabled until the box is ticked.
+- An account without billing details gets the billing dialog first.
+- The phone number is prefilled, and `confirm_close` works.
+- A card top-up went through end to end. Order `9b8ce364…` has one payment, one grant, and `adultAttestedAt`.
+- A failed card, then closing the window: the sheet waits ~20s, then shows our own sentence, not
+  Razorpay's. While the window stays open after a failure, the sheet stays on "complete the payment".
+**Timing (local → Razorpay test):**
+- A top-up prepare takes ~0.8s. Of that, creating the order at Razorpay is 0.18s.
+- A subscribe prepare: `plan_ref` 0.3ms (cached), and creating the subscription at Razorpay **1.7s**.
+  **So pre-creating plan refs at publish time is not worth it.** A reused session skips the provider.
+**Not verified, still open:**
+- **The Razorpay logo**: Razorpay's https page can't fetch it from `http://localhost`. Check on the Preview.
+- **The subscribe walk:** Razorpay's card-save step sends a **real SMS OTP** to the profile's phone, even in
+  test mode, and `testuser`'s profile holds the owner's real number. Before a subscribe is walked again,
+  the owner should put a dummy phone on the `testuser` profile, or be present for the OTP.
+- A real UPI approval after closing the window. It needs a phone.
+- The Refund Policy copy must be final before Phase 5 ships to prod (plan §8). The sheet links to it.
 
 **Next session starts with:**
 1. The phase brief.
-2. **E2**, then **F** and **G** (plan §9). Execute on Sonnet, and have Opus review the diff.
+2. **F**, then **G** (plan §9). Re-anchor F's spec to the current tree first (as for E1 and E2), execute on
+   Sonnet, and have Opus review the diff and walk it signed in.
 3. If the owner has run **Unit 0** by then, read the new subscription's `subscription.*` webhook rows in
    `billing_webhook_events`, then write `research/11-cycle-end-cancel-probe.md`. They keep the full entity:
    look at `charge_at`, `ended_at`, `has_scheduled_changes` and `change_scheduled_at` after a cycle-end
