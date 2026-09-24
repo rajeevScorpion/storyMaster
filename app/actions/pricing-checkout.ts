@@ -1,4 +1,4 @@
-'use server';
+import 'server-only';
 
 import {
   cancelRazorpaySubscription,
@@ -168,10 +168,9 @@ function taxSnapshotFields(tax: CheckoutTaxContext) {
 
 /**
  * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, defect 8): the whole checkout surface
- * runs through this one function, called only from app/api/billing/razorpay/prepare/route.ts. There is
- * deliberately no thin `'use server'`-exported wrapper any more -- every `'use server'` export is a
- * public POST endpoint, and the previous wrapper (`prepareRazorpayCheckout`) had no caller in the repo,
- * so a kids/attestation gate placed only in the route could have been bypassed straight through it.
+ * runs through this one function, called only from app/api/billing/razorpay/prepare/route.ts. This
+ * module is `server-only`, not `'use server'`: every `'use server'` export is a public POST endpoint,
+ * and this function trusts its caller for `audienceMode` and `adultAttested`, so it must not be one.
  */
 export async function prepareRazorpayCheckoutInternal(
   input: PrepareRazorpayCheckoutInput,
