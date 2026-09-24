@@ -27,7 +27,7 @@ import { fetchRazorpayPayment, getRazorpayMode } from '@/lib/billing/razorpay';
 import { settleTopupOrder, syncSubscriptionFromProvider } from '@/lib/billing/razorpay-sync';
 import { recordDispute, recordRefund } from '@/lib/billing/ledger';
 import { endSubscriptionAfterFullRefund } from '@/lib/billing/subscription-refund-end';
-import { processRazorpayWebhookEvent, type RazorpayWebhookPayload } from './razorpay-webhook';
+import { processRazorpayWebhookEvent, resolveRefundStatus, type RazorpayWebhookPayload } from './razorpay-webhook';
 
 const fetchRazorpayPaymentMock = vi.mocked(fetchRazorpayPayment);
 const getRazorpayModeMock = vi.mocked(getRazorpayMode);
@@ -368,13 +368,16 @@ describe('processRazorpayWebhookEvent — refunds', () => {
       });
       recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-1' });
 
+      // refund.processed (not .created) so this exercises the 'processed' branch -- see the A2
+      // status-mapping describe block below for .created's own (now pending) outcome.
       const payload: RazorpayWebhookPayload = {
-        event: 'refund.created',
-        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180 } } },
+        event: 'refund.processed',
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180, status: 'processed' } } },
       };
       const result = await processRazorpayWebhookEvent({ supabase, payload });
 
       expect(result.outcome).toBe('refund_recorded');
+      expect(result.relatedRefundId).toBe('refund-1');
       expect(recordRefundMock).toHaveBeenCalledWith(
         expect.objectContaining({
           subjectRef: 'user-1',
@@ -404,8 +407,8 @@ describe('processRazorpayWebhookEvent — refunds', () => {
       recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-2' });
 
       const payload: RazorpayWebhookPayload = {
-        event: 'refund.created',
-        payload: { refund: { entity: { id: 'rfnd_2', payment_id: 'pay_1', amount: 590 } } },
+        event: 'refund.processed',
+        payload: { refund: { entity: { id: 'rfnd_2', payment_id: 'pay_1', amount: 590, status: 'processed' } } },
       };
       await processRazorpayWebhookEvent({ supabase, payload });
 
@@ -434,6 +437,107 @@ describe('processRazorpayWebhookEvent — refunds', () => {
       await processRazorpayWebhookEvent({ supabase, payload });
 
       expect(recordRefundMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 590 }));
+    });
+  });
+
+  describe('resolveRefundStatus (Payments Phase 6, Unit A2 — the refund-status fix)', () => {
+    it('a bare refund.created (no entity status) is pending, not processed', () => {
+      // This is the exact defect being fixed: the old code recorded every non-refund.failed event as
+      // 'processed', which stamped processed_at and flipped the payment to refunded before Razorpay
+      // had actually returned the money.
+      expect(resolveRefundStatus('refund.created', null)).toBe('pending');
+    });
+
+    it('refund.processed is processed even with no entity status', () => {
+      expect(resolveRefundStatus('refund.processed', null)).toBe('processed');
+    });
+
+    it('a created event whose entity already says processed is processed', () => {
+      expect(resolveRefundStatus('refund.created', 'processed')).toBe('processed');
+    });
+
+    it('refund.failed is failed regardless of the entity', () => {
+      expect(resolveRefundStatus('refund.failed', 'processed')).toBe('failed');
+      expect(resolveRefundStatus('refund.failed', null)).toBe('failed');
+    });
+
+    it('an entity reporting failed with no event name (the reconcile sweep) is failed', () => {
+      expect(resolveRefundStatus(null, 'failed')).toBe('failed');
+    });
+
+    it('an entity reporting processed with no event name (the reconcile sweep) is processed', () => {
+      expect(resolveRefundStatus(null, 'processed')).toBe('processed');
+    });
+
+    it('no event name and no recognized entity status defaults to pending', () => {
+      expect(resolveRefundStatus(null, null)).toBe('pending');
+      expect(resolveRefundStatus(null, 'created')).toBe('pending');
+    });
+  });
+
+  describe('processRazorpayWebhookEvent — the A2 status fix end to end', () => {
+    it('records a bare refund.created as pending and never touches the payment status', async () => {
+      const { supabase, enqueue, calls } = createFakeSupabase();
+      enqueue('billing_payments', 'select', { data: fakeLedgerPayment(), error: null });
+      enqueue('billing_orders', 'select', { data: null, error: null });
+      fetchRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'pay_1', order_id: null, status: 'captured', amount: 1180, currency: 'INR',
+        amount_refunded: 1180, refund_status: 'full', invoice_id: null, captured: true,
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-1' });
+
+      const payload: RazorpayWebhookPayload = {
+        event: 'refund.created',
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180 } } },
+      };
+      const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+      expect(recordRefundMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending', processedAt: null }));
+      expect(result.relatedRefundId).toBe('refund-1');
+      // No payment-status update: that only happens once a refund is actually processed.
+      expect(calls.some((call) => call.table === 'billing_payments' && call.op === 'update')).toBe(false);
+    });
+
+    it('a redelivered refund.created arriving after refund.processed already settled does not regress the ledger', async () => {
+      // resolveRefundStatus still maps this redelivery to 'pending' on its own -- recordRefund's own
+      // forward-only status guard (ledger.test.ts) is what stops it from undoing an already-processed
+      // row. This test only proves the webhook feeds recordRefund the 'pending' it should, same as any
+      // other .created delivery; it doesn't re-test recordRefund's guard itself.
+      const { supabase, enqueue } = createFakeSupabase();
+      enqueue('billing_payments', 'select', { data: fakeLedgerPayment({ status: 'refunded' }), error: null });
+      enqueue('billing_orders', 'select', { data: null, error: null });
+      fetchRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'pay_1', order_id: null, status: 'captured', amount: 1180, currency: 'INR',
+        amount_refunded: 1180, refund_status: 'full', invoice_id: null, captured: true,
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'already_recorded', id: 'refund-1' });
+
+      const payload: RazorpayWebhookPayload = {
+        event: 'refund.created',
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180 } } },
+      };
+      const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+      expect(recordRefundMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending' }));
+      expect(result.outcome).toBe('refund_recorded');
+    });
+
+    it('records refund.failed on a matched payment as failed, with no processedAt and no payment-status update', async () => {
+      const { supabase, enqueue, calls } = createFakeSupabase();
+      enqueue('billing_payments', 'select', { data: fakeLedgerPayment(), error: null });
+      enqueue('billing_orders', 'select', { data: null, error: null });
+      recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-1' });
+
+      const payload: RazorpayWebhookPayload = {
+        event: 'refund.failed',
+        payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_1', amount: 1180 } } },
+      };
+      const result = await processRazorpayWebhookEvent({ supabase, payload });
+
+      expect(fetchRazorpayPaymentMock).not.toHaveBeenCalled();
+      expect(recordRefundMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed', processedAt: null }));
+      expect(result.relatedRefundId).toBe('refund-1');
+      expect(calls.some((call) => call.table === 'billing_payments' && call.op === 'update')).toBe(false);
     });
   });
 

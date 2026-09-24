@@ -7,7 +7,7 @@ import { cleanupExpiredOriginals } from '@/lib/media/cleanup';
 import { cleanupAbandonedReferenceSetups } from '@/lib/references/reference-cleanup';
 import { drainAgentRuns } from '@/lib/agentic/orchestrator';
 import { getAgenticFlags } from '@/lib/agentic/flags';
-import { reconcileRazorpayBilling } from '@/lib/billing/razorpay-reconcile';
+import { reconcilePendingRefunds, reconcileRazorpayBilling } from '@/lib/billing/razorpay-reconcile';
 
 // Reconciliation downloads + compresses images; give it room but stay bounded.
 export const maxDuration = 300;
@@ -104,6 +104,14 @@ async function handle(request: Request): Promise<Response> {
       console.error('Reference cleanup failed:', error instanceof Error ? error.message : error);
       return { setupsScanned: 0, sourcesDeleted: 0, adoptionsDeleted: 0, objectsDeleted: 0 };
     });
+    // Payments Phase 6 (docs/payments/phase-6-plan.md §4 Unit A2): the pending-refund backstop, run
+    // after everything above. Gated behind billing_reconcile_enabled inside the function itself, so
+    // this is a zero-result no-op until the owner turns it on -- and, like billingReconcile above,
+    // never allowed to reach (or fail) this route.
+    const pendingRefundsProcessed = await reconcilePendingRefunds().catch((error) => {
+      console.error('Pending refund reconcile failed:', error instanceof Error ? error.message : error);
+      return 0;
+    });
     return NextResponse.json({
       ok: true,
       ...images,
@@ -116,6 +124,7 @@ async function handle(request: Request): Promise<Response> {
       originalsDeleted: cleanup.deleted,
       referenceSourcesDeleted: referenceCleanup.sourcesDeleted,
       billingReconcile,
+      pendingRefundsProcessed,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Reconcile failed.';

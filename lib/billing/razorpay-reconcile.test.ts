@@ -15,6 +15,7 @@ vi.mock('@/lib/billing/razorpay', async (importOriginal) => {
   return {
     ...actual,
     fetchRazorpaySubscription: vi.fn(),
+    fetchRazorpayRefund: vi.fn(),
     getRazorpayMode: vi.fn(),
   };
 });
@@ -26,24 +27,46 @@ vi.mock('@/lib/billing/razorpay-sync', () => ({
     ['refunded', 'partially_refunded', 'disputed'].includes(current) ? current : provider,
 }));
 
-vi.mock('@/lib/billing/razorpay-webhook', () => ({
-  processRazorpayWebhookEvent: vi.fn(),
+// applyRefundOutcome/resolveRefundStatus are the real thing here (Payments Phase 6, Unit A2): the
+// point of reconcilePendingRefunds is that it runs the identical tail a redelivered webhook would, so
+// only processRazorpayWebhookEvent itself (the webhook-route entry point, irrelevant to the refund
+// sweep) is mocked. applyRefundOutcome's own calls to recordRefund / endSubscriptionAfterFullRefund
+// are mocked below, same as razorpay-webhook.test.ts does for the webhook side of the same tail.
+vi.mock('@/lib/billing/razorpay-webhook', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/billing/razorpay-webhook')>();
+  return {
+    ...actual,
+    processRazorpayWebhookEvent: vi.fn(),
+  };
+});
+
+vi.mock('@/lib/billing/ledger', () => ({
+  recordRefund: vi.fn(),
+}));
+
+vi.mock('@/lib/billing/subscription-refund-end', () => ({
+  endSubscriptionAfterFullRefund: vi.fn(),
 }));
 
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { RazorpayConfigError, fetchRazorpaySubscription, getRazorpayMode } from '@/lib/billing/razorpay';
+import { RazorpayConfigError, fetchRazorpayRefund, fetchRazorpaySubscription, getRazorpayMode } from '@/lib/billing/razorpay';
 import { settleTopupOrder, syncSubscriptionFromProvider } from '@/lib/billing/razorpay-sync';
 import { processRazorpayWebhookEvent } from '@/lib/billing/razorpay-webhook';
-import { reconcileRazorpayBilling } from './razorpay-reconcile';
+import { recordRefund } from '@/lib/billing/ledger';
+import { endSubscriptionAfterFullRefund } from '@/lib/billing/subscription-refund-end';
+import { reconcilePendingRefunds, reconcileRazorpayBilling } from './razorpay-reconcile';
 
 const getFeatureFlagMock = vi.mocked(getFeatureFlag);
 const createAdminClientMock = vi.mocked(createAdminClient);
 const fetchRazorpaySubscriptionMock = vi.mocked(fetchRazorpaySubscription);
+const fetchRazorpayRefundMock = vi.mocked(fetchRazorpayRefund);
 const getRazorpayModeMock = vi.mocked(getRazorpayMode);
 const settleTopupOrderMock = vi.mocked(settleTopupOrder);
 const syncSubscriptionFromProviderMock = vi.mocked(syncSubscriptionFromProvider);
 const processRazorpayWebhookEventMock = vi.mocked(processRazorpayWebhookEvent);
+const recordRefundMock = vi.mocked(recordRefund);
+const endSubscriptionAfterFullRefundMock = vi.mocked(endSubscriptionAfterFullRefund);
 
 interface QueryResult {
   data?: unknown;
@@ -160,6 +183,52 @@ function fakeWebhookEvent(overrides: Record<string, unknown> = {}) {
     attempt_count: 3,
     last_attempt_at: null,
     outcome: null,
+    ...overrides,
+  };
+}
+
+function fakeRefund(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'refund-1',
+    subject_ref: 'user-1',
+    payment_id: 'payment-1',
+    provider: 'razorpay',
+    provider_mode: 'test',
+    provider_refund_id: 'rfnd_1',
+    provider_payment_id: 'pay_1',
+    amount_minor: 1180,
+    net_minor: 1000,
+    tax_minor: 180,
+    currency_code: 'INR',
+    status: 'pending',
+    reason: null,
+    initiated_by: 'provider',
+    actor_user_ref: null,
+    coin_adjustment_json: null,
+    raw_payload_json: {},
+    processed_at: null,
+    created_at: '2026-09-01T00:00:00.000Z',
+    updated_at: '2026-09-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function fakePayment(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'payment-1',
+    subject_ref: 'user-1',
+    user_id: 'user-1',
+    provider: 'razorpay',
+    provider_mode: 'test',
+    provider_payment_id: 'pay_1',
+    net_minor: 1000,
+    tax_minor: 180,
+    gross_minor: 1180,
+    currency_code: 'INR',
+    status: 'captured',
+    kind: 'topup',
+    provider_subscription_id: null,
+    cycle_end: null,
     ...overrides,
   };
 }
@@ -328,5 +397,143 @@ describe('reconcileRazorpayBilling — mode isolation', () => {
     expect(result).toEqual({ checkouts: 0, subscriptions: 0, topups: 0, webhooks: 0 });
     expect(fetchRazorpaySubscriptionMock).not.toHaveBeenCalled();
     expect(syncSubscriptionFromProviderMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('reconcilePendingRefunds (Payments Phase 6, Unit A2)', () => {
+  it('does nothing, and touches no table, when the flag is off', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(false);
+
+    const result = await reconcilePendingRefunds();
+
+    expect(result).toBe(0);
+    expect(createAdminClientMock).not.toHaveBeenCalled();
+  });
+
+  it('returns zero and logs when the Razorpay key prefix cannot be classified', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    getRazorpayModeMock.mockImplementationOnce(() => {
+      throw new RazorpayConfigError('unknown_key_prefix');
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await reconcilePendingRefunds();
+
+    expect(result).toBe(0);
+    expect(createAdminClientMock).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('settles a pending refund Razorpay now reports processed, through the same tail the webhook uses', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    getRazorpayModeMock.mockReturnValueOnce('test');
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('billing_refunds', 'select', { data: [fakeRefund()], error: null });
+    enqueue('billing_payments', 'select', { data: fakePayment(), error: null });
+    enqueue('billing_payments', 'update', { data: null, error: null }); // payment status sync to refunded
+    fetchRazorpayRefundMock.mockResolvedValueOnce({
+      id: 'rfnd_1', payment_id: 'pay_1', amount: 1180, currency: 'INR', status: 'processed',
+    });
+    recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-1' });
+
+    const result = await reconcilePendingRefunds();
+
+    expect(result).toBe(1);
+    expect(fetchRazorpayRefundMock).toHaveBeenCalledWith('pay_1', 'rfnd_1');
+    expect(recordRefundMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'processed', providerRefundId: 'rfnd_1', paymentId: 'payment-1' })
+    );
+  });
+
+  it('records a refund Razorpay now reports failed, with no processed_at', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    getRazorpayModeMock.mockReturnValueOnce('test');
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('billing_refunds', 'select', { data: [fakeRefund()], error: null });
+    enqueue('billing_payments', 'select', { data: fakePayment(), error: null });
+    fetchRazorpayRefundMock.mockResolvedValueOnce({
+      id: 'rfnd_1', payment_id: 'pay_1', amount: 1180, currency: 'INR', status: 'failed',
+    });
+    recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-1' });
+
+    const result = await reconcilePendingRefunds();
+
+    expect(result).toBe(1);
+    expect(recordRefundMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed', processedAt: null }));
+  });
+
+  it('leaves a refund Razorpay still reports pending for the next sweep', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    getRazorpayModeMock.mockReturnValueOnce('test');
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('billing_refunds', 'select', { data: [fakeRefund()], error: null });
+    enqueue('billing_payments', 'select', { data: fakePayment(), error: null });
+    fetchRazorpayRefundMock.mockResolvedValueOnce({
+      id: 'rfnd_1', payment_id: 'pay_1', amount: 1180, currency: 'INR', status: 'pending',
+    });
+
+    const result = await reconcilePendingRefunds();
+
+    expect(result).toBe(0);
+    expect(recordRefundMock).not.toHaveBeenCalled();
+  });
+
+  it('skips a refund with no local payment match (an unmatched renewal refund) without calling Razorpay', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    getRazorpayModeMock.mockReturnValueOnce('test');
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('billing_refunds', 'select', { data: [fakeRefund({ payment_id: null })], error: null });
+
+    const result = await reconcilePendingRefunds();
+
+    expect(result).toBe(0);
+    expect(fetchRazorpayRefundMock).not.toHaveBeenCalled();
+  });
+
+  it('logs and continues past one failing item, without throwing or losing the others', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    getRazorpayModeMock.mockReturnValueOnce('test');
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('billing_refunds', 'select', {
+      data: [
+        fakeRefund({ id: 'refund-1', provider_refund_id: 'rfnd_1' }),
+        fakeRefund({ id: 'refund-2', provider_refund_id: 'rfnd_2' }),
+      ],
+      error: null,
+    });
+    enqueue('billing_payments', 'select', { data: fakePayment(), error: null });
+    enqueue('billing_payments', 'select', { data: fakePayment(), error: null });
+    enqueue('billing_payments', 'update', { data: null, error: null });
+    fetchRazorpayRefundMock.mockRejectedValueOnce(new Error('network blip'));
+    fetchRazorpayRefundMock.mockResolvedValueOnce({
+      id: 'rfnd_2', payment_id: 'pay_1', amount: 1180, currency: 'INR', status: 'processed',
+    });
+    recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-2' });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await reconcilePendingRefunds();
+
+    expect(result).toBe(1);
+    errorSpy.mockRestore();
+  });
+
+  it('filters by provider_mode, pending status and the 1-hour age cutoff', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    getRazorpayModeMock.mockReturnValueOnce('live');
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('billing_refunds', 'select', { data: [], error: null });
+
+    await reconcilePendingRefunds();
+
+    const select = calls.find((call) => call.table === 'billing_refunds' && call.op === 'select');
+    expect(select?.filters.some((f) => f.method === 'eq' && f.args[0] === 'provider_mode' && f.args[1] === 'live')).toBe(true);
+    expect(select?.filters.some((f) => f.method === 'eq' && f.args[0] === 'status' && f.args[1] === 'pending')).toBe(true);
+    expect(select?.filters.some((f) => f.method === 'lt' && f.args[0] === 'created_at')).toBe(true);
   });
 });

@@ -488,17 +488,22 @@ function baseDocumentInput(supabase: any, overrides: Partial<Parameters<typeof i
   return {
     supabase,
     subjectRef: 'user-1',
-    documentType: 'receipt' as const,
-    financialYear: '2026-27',
+    documentType: 'tax_invoice' as const,
+    providerMode: 'test' as const,
     paymentId: 'payment-1',
     currencyCode: 'INR',
     netMinor: 1000,
     taxMinor: 180,
     grossMinor: 1180,
+    lineItems: [{ description: 'Kissago coins top-up', sac: '998439', quantity: 1, unit: 'NOS', netMinor: 1000 }],
     customerSnapshot: { legalName: 'Test User' },
     businessSnapshot: { legalName: 'Aavriti Design Studio' },
     ...overrides,
   };
+}
+
+function fakeIssueRow(overrides: Partial<{ o_document_id: string; o_document_number: string; o_already_issued: boolean }> = {}) {
+  return { o_document_id: 'doc-1', o_document_number: 'TEST-KG/26-27/000001', o_already_issued: false, ...overrides };
 }
 
 describe('issueDocumentIfEnabled', () => {
@@ -513,51 +518,71 @@ describe('issueDocumentIfEnabled', () => {
     expect(rpcCalls).toHaveLength(0);
   });
 
-  it('issues a document using the number the database function returns, once switched on', async () => {
+  it('issues a document through one RPC call, passing providerMode/lineItems/originalDocumentId through', async () => {
     getFeatureFlagMock.mockResolvedValue(true);
-    const { supabase, enqueue, enqueueRpc, calls, rpcCalls } = createFakeSupabase();
-    enqueue('billing_documents', 'select', { data: null, error: null }); // no existing document
-    enqueueRpc({ data: 'RCPT/2026-27/000001', error: null });
-    enqueue('billing_documents', 'insert', { data: { id: 'doc-1' }, error: null });
+    const { supabase, enqueueRpc, rpcCalls } = createFakeSupabase();
+    enqueueRpc({ data: [fakeIssueRow()], error: null });
 
-    const result = await issueDocumentIfEnabled(baseDocumentInput(supabase));
+    const lineItems = [{ description: 'Kissago coins top-up', sac: '998439', quantity: 1, unit: 'NOS', netMinor: 1000 }];
+    const result = await issueDocumentIfEnabled(baseDocumentInput(supabase, { lineItems }));
 
-    expect(result).toEqual({ issued: true, documentId: 'doc-1', documentNumber: 'RCPT/2026-27/000001' });
+    expect(result).toEqual({
+      issued: true,
+      documentId: 'doc-1',
+      documentNumber: 'TEST-KG/26-27/000001',
+      alreadyIssued: false,
+    });
     expect(rpcCalls).toEqual([
-      { name: 'billing_next_document_number', args: { p_financial_year: '2026-27', p_document_type: 'receipt' } },
+      {
+        name: 'billing_issue_document',
+        args: expect.objectContaining({
+          p_document_type: 'tax_invoice',
+          p_provider_mode: 'test',
+          p_payment_id: 'payment-1',
+          p_refund_id: null,
+          p_original_document_id: null,
+          p_line_items: lineItems,
+        }),
+      },
     ]);
-    const insertCall = calls.find((call) => call.table === 'billing_documents' && call.op === 'insert');
-    expect(insertCall?.payload).toMatchObject({ document_number: 'RCPT/2026-27/000001', payment_id: 'payment-1' });
   });
 
-  it('never invents its own number across repeated calls -- each document gets exactly what the database returned', async () => {
+  it('passes originalDocumentId through for a credit note', async () => {
     getFeatureFlagMock.mockResolvedValue(true);
+    const { supabase, enqueueRpc, rpcCalls } = createFakeSupabase();
+    enqueueRpc({ data: [fakeIssueRow({ o_document_number: 'TEST-KGC/26-27/000001' })], error: null });
 
-    const { supabase: firstSupabase, enqueue: enqueueFirst, enqueueRpc: enqueueRpcFirst } = createFakeSupabase();
-    enqueueFirst('billing_documents', 'select', { data: null, error: null });
-    enqueueRpcFirst({ data: 'RCPT/2026-27/000001', error: null });
-    enqueueFirst('billing_documents', 'insert', { data: { id: 'doc-1' }, error: null });
-    const first = await issueDocumentIfEnabled(baseDocumentInput(firstSupabase, { paymentId: 'payment-1' }));
+    await issueDocumentIfEnabled(
+      baseDocumentInput(supabase, {
+        documentType: 'credit_note',
+        paymentId: null,
+        refundId: 'refund-1',
+        originalDocumentId: 'doc-1',
+      })
+    );
 
-    const { supabase: secondSupabase, enqueue: enqueueSecond, enqueueRpc: enqueueRpcSecond } = createFakeSupabase();
-    enqueueSecond('billing_documents', 'select', { data: null, error: null });
-    enqueueRpcSecond({ data: 'RCPT/2026-27/000002', error: null });
-    enqueueSecond('billing_documents', 'insert', { data: { id: 'doc-2' }, error: null });
-    const second = await issueDocumentIfEnabled(baseDocumentInput(secondSupabase, { paymentId: 'payment-2' }));
-
-    expect(first).toMatchObject({ documentNumber: 'RCPT/2026-27/000001' });
-    expect(second).toMatchObject({ documentNumber: 'RCPT/2026-27/000002' });
+    expect(rpcCalls[0]?.args).toMatchObject({
+      p_document_type: 'credit_note',
+      p_refund_id: 'refund-1',
+      p_payment_id: null,
+      p_original_document_id: 'doc-1',
+    });
   });
 
-  it('does not double-issue: an already-issued document short-circuits before allocating a number', async () => {
+  it('reports an already-issued document via the RPC flag, without a second RPC call', async () => {
     getFeatureFlagMock.mockResolvedValue(true);
-    const { supabase, enqueue, rpcCalls } = createFakeSupabase();
-    enqueue('billing_documents', 'select', { data: { id: 'doc-1', document_number: 'RCPT/2026-27/000001' }, error: null });
+    const { supabase, enqueueRpc, rpcCalls } = createFakeSupabase();
+    enqueueRpc({ data: [fakeIssueRow({ o_already_issued: true })], error: null });
 
     const result = await issueDocumentIfEnabled(baseDocumentInput(supabase));
 
-    expect(result).toEqual({ issued: false, reason: 'already_issued' });
-    expect(rpcCalls).toHaveLength(0);
+    expect(result).toEqual({
+      issued: true,
+      documentId: 'doc-1',
+      documentNumber: 'TEST-KG/26-27/000001',
+      alreadyIssued: true,
+    });
+    expect(rpcCalls).toHaveLength(1);
   });
 
   it('requires exactly one of paymentId or refundId', async () => {
@@ -572,12 +597,28 @@ describe('issueDocumentIfEnabled', () => {
     ).rejects.toThrow();
   });
 
-  it('fails closed when migration 125 is absent', async () => {
+  it('requires an originalDocumentId for a credit note before ever calling the database', async () => {
     getFeatureFlagMock.mockResolvedValue(true);
-    const { supabase, enqueue } = createFakeSupabase();
-    enqueue('billing_documents', 'select', { data: null, error: { code: '42P01', message: 'missing' } });
+    const { supabase, rpcCalls } = createFakeSupabase();
 
-    const result = await issueDocumentIfEnabled(baseDocumentInput(supabase));
-    expect(result).toEqual({ issued: false, reason: 'unavailable' });
+    await expect(
+      issueDocumentIfEnabled(
+        baseDocumentInput(supabase, { documentType: 'credit_note', paymentId: null, refundId: 'refund-1', originalDocumentId: null })
+      )
+    ).rejects.toThrow();
+    expect(rpcCalls).toHaveLength(0);
+  });
+
+  it('fails closed when migration 135 is absent, and latches for later calls', async () => {
+    getFeatureFlagMock.mockResolvedValue(true);
+    const { supabase, enqueueRpc, rpcCalls } = createFakeSupabase();
+    enqueueRpc({ data: null, error: { code: '42P01', message: 'missing' } });
+
+    const first = await issueDocumentIfEnabled(baseDocumentInput(supabase));
+    expect(first).toEqual({ issued: false, reason: 'unavailable' });
+
+    const second = await issueDocumentIfEnabled(baseDocumentInput(supabase));
+    expect(second).toEqual({ issued: false, reason: 'unavailable' });
+    expect(rpcCalls).toHaveLength(1); // the latch stops a second RPC call entirely
   });
 });

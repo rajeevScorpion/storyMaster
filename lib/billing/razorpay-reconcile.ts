@@ -3,13 +3,18 @@ import 'server-only';
 import type { PostgrestError } from '@supabase/supabase-js';
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { fetchRazorpaySubscription, getRazorpayMode, RazorpayConfigError, type RazorpayMode } from '@/lib/billing/razorpay';
+import { fetchRazorpayRefund, fetchRazorpaySubscription, getRazorpayMode, RazorpayConfigError, type RazorpayMode } from '@/lib/billing/razorpay';
 import {
   nextSubscriptionCheckoutOrderStatus,
   settleTopupOrder,
   syncSubscriptionFromProvider,
 } from '@/lib/billing/razorpay-sync';
-import { processRazorpayWebhookEvent, type RazorpayWebhookPayload } from '@/lib/billing/razorpay-webhook';
+import {
+  applyRefundOutcome,
+  processRazorpayWebhookEvent,
+  resolveRefundStatus,
+  type RazorpayWebhookPayload,
+} from '@/lib/billing/razorpay-webhook';
 import {
   MIN_AGE_MS,
   CHECKOUT_MAX_AGE_MS,
@@ -22,7 +27,7 @@ import {
   webhookIncidentOrFilter,
   subscriptionBoundaryOrFilter,
 } from '@/lib/billing/billing-incidents.shared';
-import type { DbBillingOrder, DbBillingSubscription, DbBillingWebhookEvent, DbPricingPlanVersion } from '@/lib/types/database';
+import type { DbBillingOrder, DbBillingPayment, DbBillingRefund, DbBillingSubscription, DbBillingWebhookEvent, DbPricingPlanVersion } from '@/lib/types/database';
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
@@ -88,6 +93,94 @@ export async function reconcileRazorpayBilling(): Promise<ReconcileRazorpayBilli
     : 0;
 
   return { checkouts, subscriptions, topups, webhooks };
+}
+
+const PENDING_REFUND_MIN_AGE_MS = 60 * 60 * 1000; // 1 hour (phase-6-plan.md §4 Unit A2)
+const PENDING_REFUND_BATCH_LIMIT = 50;
+
+/**
+ * Payments Phase 6 (docs/payments/phase-6-plan.md §4 Unit A2): the pending-refund backstop. A refund
+ * the webhook never confirmed -- dropped delivery, or Razorpay settling it slower than an hour -- sits
+ * `pending` in billing_refunds; this re-fetches it directly by id and pushes it through
+ * applyRefundOutcome, the exact same tail a redelivered webhook would run (resolveRefundStatus fed
+ * Razorpay's own three-valued entity.status, with no event name of its own to consult). Gated behind
+ * the same `billing_reconcile_enabled` flag as reconcileRazorpayBilling -- this is the same kind of
+ * Razorpay money backstop, just scoped to refunds -- and called separately from the batch reconcile
+ * route (app/api/batch/reconcile/route.ts), not from inside reconcileRazorpayBilling above.
+ */
+export async function reconcilePendingRefunds(): Promise<number> {
+  if (!(await getFeatureFlag('billing_reconcile_enabled', false))) {
+    return 0;
+  }
+
+  let mode: RazorpayMode;
+  try {
+    mode = getRazorpayMode();
+  } catch (err) {
+    if (err instanceof RazorpayConfigError) {
+      console.error('[razorpay.reconcile] refunds config_error', { reason: err.reason });
+      return 0;
+    }
+    throw err;
+  }
+
+  const supabase = createAdminClient();
+  const cutoff = new Date(Date.now() - PENDING_REFUND_MIN_AGE_MS).toISOString();
+
+  const result = await supabase
+    .from('billing_refunds')
+    .select('*')
+    .eq('provider', 'razorpay')
+    .eq('provider_mode', mode)
+    .eq('status', 'pending')
+    .lt('created_at', cutoff)
+    .order('created_at', { ascending: true })
+    .limit(PENDING_REFUND_BATCH_LIMIT);
+
+  throwIfQueryFailed(result.error, 'Failed to load pending refunds to reconcile');
+
+  const refunds = (result.data ?? []) as DbBillingRefund[];
+  let processed = 0;
+
+  for (const refund of refunds) {
+    // A refund not yet matched to a local payment (an unmatched renewal refund -- see
+    // razorpay-webhook.ts's loadLedgerPaymentByProviderPaymentId) has nothing here for
+    // applyRefundOutcome to update the payment/subscription state of; leave it for a future match.
+    if (!refund.payment_id || !refund.provider_payment_id) continue;
+
+    try {
+      const payment = await loadPaymentById(supabase, refund.payment_id);
+      if (!payment) continue;
+
+      const refundEntity = await fetchRazorpayRefund(refund.provider_payment_id, refund.provider_refund_id);
+      const status = resolveRefundStatus(null, refundEntity.status ?? null);
+      if (status === 'pending') continue; // still not settled at Razorpay -- leave it for the next sweep
+
+      await applyRefundOutcome({
+        supabase,
+        payment,
+        status,
+        refundEntity: { id: refundEntity.id, amount: refundEntity.amount, status: refundEntity.status ?? null },
+        refundedTotalMinor: null,
+        source: 'reconcile',
+      });
+
+      processed += 1;
+    } catch (err) {
+      console.error('[razorpay.reconcile] pending refund item failed', {
+        refundId: refund.id,
+        message: errorMessage(err),
+      });
+    }
+  }
+
+  return processed;
+}
+
+async function loadPaymentById(supabase: AdminClient, paymentId: string): Promise<DbBillingPayment | null> {
+  const result = await supabase.from('billing_payments').select('*').eq('id', paymentId).maybeSingle();
+  throwIfQueryFailed(result.error, 'Failed to load payment for pending refund reconcile');
+  return (result.data ?? null) as DbBillingPayment | null;
 }
 
 async function reconcileSubscriptionCheckouts(

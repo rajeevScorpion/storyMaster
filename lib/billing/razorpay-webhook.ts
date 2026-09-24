@@ -43,6 +43,10 @@ export interface ProcessRazorpayWebhookEventResult {
   outcome: string;
   relatedUserId: string | null;
   relatedSubscriptionId: string | null;
+  /** Payments Phase 6 (docs/payments/phase-6-plan.md §4 Unit A2): the billing_refunds row this event
+   * just wrote or updated, when it wrote one -- Unit C2 enqueues `refund_processed` off of it. Absent
+   * (not just null) for every event that isn't a refund, or a refund that couldn't be matched. */
+  relatedRefundId?: string | null;
 }
 
 /**
@@ -246,78 +250,29 @@ async function processRefundEvent(
   }
 
   let outcome = 'refund_recorded';
+  let refundRowId: string | null = null;
   const refundProviderId = payload.payload?.refund?.entity?.id ?? null;
   const refundAmountMinor = payload.payload?.refund?.entity?.amount ?? refundedTotalMinor ?? 0;
 
   if (payment && refundProviderId && refundAmountMinor > 0) {
-    const split = splitRefundProportionally(refundAmountMinor, payment.net_minor, payment.gross_minor);
-    const status: BillingRefundStatus = payload.event === 'refund.failed' ? 'failed' : 'processed';
+    // Payments Phase 6 (docs/payments/phase-6-plan.md §1, §4 Unit A2): the fixed status mapping.
+    // Previously every event but `refund.failed` was recorded 'processed' outright -- so a mere
+    // `refund.created` stamped processed_at and flipped the payment to refunded before Razorpay had
+    // actually returned the money.
+    const rawEntityStatus = payload.payload?.refund?.entity?.status ?? null;
+    const status = resolveRefundStatus(payload.event, rawEntityStatus);
 
-    const recordResult = await recordRefund({
+    const applied = await applyRefundOutcome({
       supabase,
-      subjectRef: payment.subject_ref,
-      paymentId: payment.id,
-      providerMode: payment.provider_mode,
-      providerRefundId: refundProviderId,
-      providerPaymentId,
-      amountMinor: refundAmountMinor,
-      netMinor: split.netMinor,
-      taxMinor: split.taxMinor,
-      currencyCode: payment.currency_code,
+      payment,
       status,
-      initiatedBy: 'provider',
-      rawPayload: payload as unknown as Record<string, unknown>,
-      processedAt: status === 'processed' ? new Date().toISOString() : null,
+      refundEntity: { id: refundProviderId, amount: refundAmountMinor, status: rawEntityStatus },
+      refundedTotalMinor,
+      source: 'webhook',
     });
 
-    if (recordResult.state === 'unavailable') {
-      outcome = 'refund_recorded_ledger_unavailable';
-    } else if (status === 'processed') {
-      // Against the payment's refunded-to-date, not this one event's amount: two half refunds add up
-      // to a fully refunded payment, and comparing each event alone would leave the ledger saying
-      // 'partially_refunded' while billing_orders (which uses the same cumulative figure) says
-      // 'refunded'. refundedTotalMinor is Razorpay's own amount_refunded, fetched just above.
-      const refundedToDateMinor = Math.max(refundedTotalMinor ?? 0, refundAmountMinor);
-      const nextPaymentStatus: BillingPaymentStatus = refundedToDateMinor >= payment.gross_minor ? 'refunded' : 'partially_refunded';
-      await markLedgerPaymentStatus(supabase, payment.id, nextPaymentStatus);
-
-      // Decision 15 (docs/payments/audit-progress.md, 2026-09-23): a refund arriving straight from
-      // the Razorpay dashboard (not through the admin action) must end a current-cycle subscription's
-      // full refund too. Gated on kind before calling, purely to skip the helper's own query for
-      // every top-up refund -- the helper's own decision logic (subscription-refund-end.shared.ts)
-      // would return false for those anyway. Deliberately NOT gated by billing_admin_actions_enabled
-      // -- that switch gates admin-INITIATED actions; this refund already happened at Razorpay. Must
-      // fail closed: any error here is logged and folded into this event's own outcome, never thrown
-      // in a way that would mark the refund itself unrecorded (endSubscriptionAfterFullRefund never
-      // throws -- see its own contract).
-      // Only on Razorpay's own 'processed': the ledger status above treats anything but refund.failed
-      // as processed, and a still-pending refund.created must not end a plan whose money may never
-      // go back.
-      const refundEntityStatus = payload.payload?.refund?.entity?.status ?? null;
-      if (
-        refundEntityStatus === 'processed' &&
-        (payment.kind === 'subscription_first' || payment.kind === 'subscription_renewal')
-      ) {
-        const subscriptionEndResult = await endSubscriptionAfterFullRefund({
-          supabase,
-          kind: payment.kind,
-          providerSubscriptionId: payment.provider_subscription_id,
-          refundAmountMinor,
-          paymentGrossMinor: payment.gross_minor,
-          cycleEnd: payment.cycle_end,
-        });
-        if (subscriptionEndResult.error) {
-          console.error('[razorpay-webhook] failed to end subscription after a full refund', {
-            paymentId: payment.id,
-            providerSubscriptionId: payment.provider_subscription_id,
-            message: subscriptionEndResult.error,
-          });
-          outcome = 'refund_recorded_subscription_end_failed';
-        } else if (subscriptionEndResult.ended) {
-          outcome = 'refund_recorded_subscription_ended';
-        }
-      }
-    }
+    outcome = applied.outcome;
+    refundRowId = applied.refundId;
   }
 
   return {
@@ -325,7 +280,133 @@ async function processRefundEvent(
     outcome,
     relatedUserId: order?.user_id ?? payment?.user_id ?? null,
     relatedSubscriptionId: null,
+    relatedRefundId: refundRowId,
   };
+}
+
+/** A2's corrected refund-status mapping (phase-6-plan.md §1, §4 Unit A2): `refund.failed` is
+ * authoritative regardless of the entity; `refund.processed`, or the entity's own `status ===
+ * 'processed'`, both mean processed; anything else -- including a bare `refund.created` -- is still
+ * pending. `eventName` is null for the reconcile sweep (razorpay-reconcile.ts's
+ * reconcilePendingRefunds), which has no webhook event, only a freshly-fetched refund entity whose
+ * `status` is already one of Razorpay's three real values -- which is why `entityStatus === 'failed'`
+ * is also checked here, one step beyond the plan's literal "refund.failed -> failed" wording: the two
+ * only disagree on a malformed webhook payload, and 'failed' is the safer read of one. */
+export function resolveRefundStatus(eventName: string | null, entityStatus: string | null): BillingRefundStatus {
+  if (eventName === 'refund.failed' || entityStatus === 'failed') return 'failed';
+  if (eventName === 'refund.processed' || entityStatus === 'processed') return 'processed';
+  return 'pending';
+}
+
+export type RefundEventSource = 'webhook' | 'reconcile';
+
+/** The refund fields applyRefundOutcome needs off a Razorpay refund entity -- shared shape between
+ * the webhook's payload and razorpay.ts's fetchRazorpayRefund response (RazorpayRefund). */
+export interface RefundOutcomeEntity {
+  id: string;
+  amount: number;
+  status: string | null;
+}
+
+export interface ApplyRefundOutcomeInput {
+  supabase: AdminClient;
+  payment: DbBillingPayment;
+  /** The already-resolved ledger status (resolveRefundStatus). Kept separate from
+   * `refundEntity.status` below -- see decision 15's comment inside this function for why. */
+  status: BillingRefundStatus;
+  refundEntity: RefundOutcomeEntity;
+  /** The payment's cumulative amount_refunded at Razorpay, when freshly known (the webhook always
+   * fetches it before calling this -- see processRefundEvent above). The reconcile sweep doesn't
+   * re-fetch the whole payment, so it passes null and this falls back to just this refund's own
+   * amount: correct for the common full-refund case (decision 11), and only an underestimate for a
+   * rare dashboard-initiated partial refund that the sweep, rather than the webhook, ends up settling. */
+  refundedTotalMinor?: number | null;
+  source: RefundEventSource;
+}
+
+export interface ApplyRefundOutcomeResult {
+  outcome: string;
+  refundId: string | null;
+}
+
+/**
+ * Payments Phase 6 (docs/payments/phase-6-plan.md §4 Unit A2): the shared tail of processRefundEvent,
+ * extracted so the pending-refund reconcile sweep (razorpay-reconcile.ts's reconcilePendingRefunds)
+ * runs exactly the same recordRefund + payment-status + decision-15 logic a redelivered webhook would
+ * -- "both paths run identical code" per the plan.
+ */
+export async function applyRefundOutcome(input: ApplyRefundOutcomeInput): Promise<ApplyRefundOutcomeResult> {
+  const { supabase, payment, status, refundEntity, source } = input;
+
+  const split = splitRefundProportionally(refundEntity.amount, payment.net_minor, payment.gross_minor);
+
+  const recordResult = await recordRefund({
+    supabase,
+    subjectRef: payment.subject_ref,
+    paymentId: payment.id,
+    providerMode: payment.provider_mode,
+    providerRefundId: refundEntity.id,
+    providerPaymentId: payment.provider_payment_id,
+    amountMinor: refundEntity.amount,
+    netMinor: split.netMinor,
+    taxMinor: split.taxMinor,
+    currencyCode: payment.currency_code,
+    status,
+    initiatedBy: 'provider',
+    rawPayload: { source, refund: refundEntity },
+    processedAt: status === 'processed' ? new Date().toISOString() : null,
+  });
+
+  if (recordResult.state === 'unavailable') {
+    return { outcome: 'refund_recorded_ledger_unavailable', refundId: null };
+  }
+
+  let outcome = 'refund_recorded';
+
+  if (status === 'processed') {
+    // Against the payment's refunded-to-date, not this one event's amount -- see refundedTotalMinor's
+    // own comment above.
+    const refundedToDateMinor = Math.max(input.refundedTotalMinor ?? 0, refundEntity.amount);
+    const nextPaymentStatus: BillingPaymentStatus = refundedToDateMinor >= payment.gross_minor ? 'refunded' : 'partially_refunded';
+    await markLedgerPaymentStatus(supabase, payment.id, nextPaymentStatus);
+
+    // Decision 15 (docs/payments/audit-progress.md, 2026-09-23): a refund arriving straight from the
+    // Razorpay dashboard (not through the admin action) must end a current-cycle subscription's full
+    // refund too. Gated on kind before calling, purely to skip the helper's own query for every
+    // top-up refund. Deliberately NOT gated by billing_admin_actions_enabled -- that switch gates
+    // admin-INITIATED actions; this refund already happened at Razorpay. Must fail closed: any error
+    // here is logged and folded into this event's own outcome, never thrown in a way that would mark
+    // the refund itself unrecorded (endSubscriptionAfterFullRefund never throws -- see its contract).
+    // This gate is kept exactly as it was before this extraction: it reads Razorpay's own literal
+    // entity status, never the ledger `status` resolved above -- which can also become 'processed'
+    // purely from the event name (`refund.processed`) on a payload whose entity carries something
+    // else, and a still-pending refund.created must never end a plan whose money may never go back.
+    if (
+      refundEntity.status === 'processed' &&
+      (payment.kind === 'subscription_first' || payment.kind === 'subscription_renewal')
+    ) {
+      const subscriptionEndResult = await endSubscriptionAfterFullRefund({
+        supabase,
+        kind: payment.kind,
+        providerSubscriptionId: payment.provider_subscription_id,
+        refundAmountMinor: refundEntity.amount,
+        paymentGrossMinor: payment.gross_minor,
+        cycleEnd: payment.cycle_end,
+      });
+      if (subscriptionEndResult.error) {
+        console.error(`[${source === 'webhook' ? 'razorpay-webhook' : 'razorpay.reconcile'}] failed to end subscription after a full refund`, {
+          paymentId: payment.id,
+          providerSubscriptionId: payment.provider_subscription_id,
+          message: subscriptionEndResult.error,
+        });
+        outcome = 'refund_recorded_subscription_end_failed';
+      } else if (subscriptionEndResult.ended) {
+        outcome = 'refund_recorded_subscription_ended';
+      }
+    }
+  }
+
+  return { outcome, refundId: recordResult.id };
 }
 
 /**

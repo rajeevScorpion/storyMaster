@@ -5,8 +5,8 @@ import { redactRazorpayPayload } from '@/lib/billing/razorpay-redact.shared';
 import { isMissingBillingSchemaError } from '@/lib/billing/schema-availability.shared';
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import type { TaxBreakdown } from '@/lib/billing/tax.shared';
+import type { BillingDocumentLineItem, IssuedDocumentType } from '@/lib/billing/documents/types.shared';
 import type {
-  BillingDocumentType,
   BillingMethodCategory,
   BillingPaymentKind,
   BillingPaymentStatus,
@@ -418,9 +418,11 @@ export async function recordDispute(input: Omit<RecordRefundInput, 'initiatedBy'
 export interface IssueDocumentInput {
   supabase: AdminClient;
   subjectRef: string;
-  documentType: BillingDocumentType;
-  /** e.g. '2026-27' -- the caller computes this; the ledger only stores and numbers within it. */
-  financialYear: string;
+  documentType: IssuedDocumentType;
+  providerMode: 'test' | 'live';
+  /** Required for a credit_note (Rule 53: it must reference the invoice it reverses); the RPC itself
+   * rejects a credit_note with none. Ignored for a tax_invoice. */
+  originalDocumentId?: string | null;
   /** Exactly one of paymentId/refundId, matching billing_documents_one_subject. */
   paymentId?: string | null;
   refundId?: string | null;
@@ -429,19 +431,29 @@ export interface IssueDocumentInput {
   taxMinor: number;
   grossMinor: number;
   taxBreakdown?: TaxBreakdown | null;
+  lineItems: BillingDocumentLineItem[];
   customerSnapshot: Record<string, unknown>;
   businessSnapshot: Record<string, unknown>;
 }
 
 export type IssueDocumentResult =
-  | { issued: false; reason: 'issuing_disabled' | 'unavailable' | 'already_issued' }
-  | { issued: true; documentId: string; documentNumber: string };
+  | { issued: false; reason: 'issuing_disabled' | 'unavailable' }
+  | { issued: true; documentId: string; documentNumber: string; alreadyIssued: boolean };
+
+interface BillingIssueDocumentRow {
+  o_document_id: string;
+  o_document_number: string;
+  o_already_issued: boolean;
+}
 
 /**
- * Issues a receipt/tax invoice/credit note, gated entirely behind the `billing_document_issuing_enabled`
- * feature flag (default off, per plan decision 8 -- Phase 6 turns it on). Numbering comes from
- * `billing_next_document_number`, which takes its own advisory lock in Postgres, so this function
- * never invents a number itself.
+ * Payments Phase 6 (docs/payments/phase-6-plan.md §3/§4 Unit A1): issues a tax invoice/credit note
+ * through the single `billing_issue_document` RPC (migration 135), which allocates the number and
+ * inserts the row in one Postgres transaction under its own advisory locks -- replacing the Phase 2
+ * check-then-insert (`billing_next_document_number` then a separate insert), where a failed insert
+ * burned a number and two concurrent callers could double-issue. Still gated entirely behind the
+ * `billing_document_issuing_enabled` feature flag (default off), and still fails closed with the same
+ * latch when 135 hasn't been applied.
  */
 export async function issueDocumentIfEnabled(input: IssueDocumentInput): Promise<IssueDocumentResult> {
   const enabled = await getFeatureFlag(DOCUMENT_ISSUING_FLAG_KEY, false);
@@ -450,67 +462,51 @@ export async function issueDocumentIfEnabled(input: IssueDocumentInput): Promise
   if ((input.paymentId != null) === (input.refundId != null)) {
     throw new Error('issueDocumentIfEnabled: exactly one of paymentId or refundId is required');
   }
+  if (input.documentType === 'credit_note' && !input.originalDocumentId) {
+    throw new Error('issueDocumentIfEnabled: a credit note needs its original invoice id');
+  }
 
   if (ledgerSchemaUnavailable) return { issued: false, reason: 'unavailable' };
 
-  const existing = await input.supabase
-    .from('billing_documents')
-    .select('id, document_number')
-    .eq('document_type', input.documentType)
-    .eq('status', 'issued')
-    .eq(input.paymentId ? 'payment_id' : 'refund_id', input.paymentId ?? input.refundId)
-    .maybeSingle();
-
-  if (existing.error) {
-    if (isMissingLedgerSchemaError(existing.error)) {
-      ledgerSchemaUnavailable = true;
-      return { issued: false, reason: 'unavailable' };
-    }
-    throw new Error(`Failed to check for an already-issued document: ${existing.error.message}`);
-  }
-
-  if (existing.data) {
-    return { issued: false, reason: 'already_issued' };
-  }
-
-  const numberResult = await input.supabase.rpc('billing_next_document_number', {
-    p_financial_year: input.financialYear,
+  const rpcResult = await input.supabase.rpc('billing_issue_document', {
     p_document_type: input.documentType,
+    p_provider_mode: input.providerMode,
+    p_subject_ref: input.subjectRef,
+    p_payment_id: input.paymentId ?? null,
+    p_refund_id: input.refundId ?? null,
+    p_original_document_id: input.originalDocumentId ?? null,
+    p_currency_code: input.currencyCode,
+    p_net_minor: input.netMinor,
+    p_tax_minor: input.taxMinor,
+    p_gross_minor: input.grossMinor,
+    p_tax_breakdown: input.taxBreakdown ?? {},
+    p_line_items: input.lineItems ?? [],
+    p_customer_snapshot: input.customerSnapshot,
+    p_business_snapshot: input.businessSnapshot,
   });
 
-  if (numberResult.error) {
-    if (isMissingLedgerSchemaError(numberResult.error)) {
+  if (rpcResult.error) {
+    if (isMissingLedgerSchemaError(rpcResult.error)) {
       ledgerSchemaUnavailable = true;
       return { issued: false, reason: 'unavailable' };
     }
-    throw new Error(`Failed to allocate a document number: ${numberResult.error.message}`);
+    throw new Error(`Failed to issue document: ${rpcResult.error.message}`);
   }
 
-  const documentNumber = numberResult.data as string;
+  // A RETURNS TABLE function comes back as an array of rows from supabase-js; tolerate a bare object
+  // too so a hand-rolled test stub doesn't need to know that.
+  const row = (Array.isArray(rpcResult.data) ? rpcResult.data[0] : rpcResult.data) as
+    | BillingIssueDocumentRow
+    | undefined;
 
-  const insertResult = await input.supabase
-    .from('billing_documents')
-    .insert({
-      subject_ref: input.subjectRef,
-      document_type: input.documentType,
-      document_number: documentNumber,
-      financial_year: input.financialYear,
-      payment_id: input.paymentId ?? null,
-      refund_id: input.refundId ?? null,
-      currency_code: input.currencyCode,
-      net_minor: input.netMinor,
-      tax_minor: input.taxMinor,
-      gross_minor: input.grossMinor,
-      tax_breakdown_json: input.taxBreakdown ?? {},
-      customer_snapshot_json: input.customerSnapshot,
-      business_snapshot_json: input.businessSnapshot,
-    })
-    .select('id')
-    .single();
-
-  if (insertResult.error) {
-    throw new Error(`Failed to issue document ${documentNumber}: ${insertResult.error.message}`);
+  if (!row) {
+    throw new Error('billing_issue_document returned no row');
   }
 
-  return { issued: true, documentId: (insertResult.data as { id: string }).id, documentNumber };
+  return {
+    issued: true,
+    documentId: row.o_document_id,
+    documentNumber: row.o_document_number,
+    alreadyIssued: row.o_already_issued,
+  };
 }

@@ -265,6 +265,17 @@ export async function refundRazorpayPayment(input: {
   });
 }
 
+/**
+ * Payments Phase 6 (docs/payments/phase-6-plan.md §4 Unit A2): fetches one refund directly by id --
+ * used by the pending-refund reconcile sweep (razorpay-reconcile.ts) to re-check a refund the webhook
+ * never confirmed, without re-fetching the whole payment.
+ */
+export async function fetchRazorpayRefund(paymentId: string, refundId: string): Promise<RazorpayRefund> {
+  return razorpayRequest<RazorpayRefund>(`/payments/${paymentId}/refunds/${refundId}`, {
+    method: 'GET',
+  });
+}
+
 export async function fetchRazorpayOrderPayments(orderId: string): Promise<{ items: RazorpayPayment[] }> {
   return razorpayRequest<{ items: RazorpayPayment[] }>(`/orders/${orderId}/payments`, {
     method: 'GET',
