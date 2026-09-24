@@ -1,6 +1,7 @@
 import { COINS_PER_BEAT, type PlanKey } from '@/lib/types/pricing';
 import { normalizeEntitlementPlanKey } from '@/lib/pricing/entitlement-tier.shared';
 import type { AdminWatchQuotaView } from '@/lib/pricing/watch-quota-admin.shared';
+import type { EmailStatus, JobKind, JobStatus } from '@/lib/billing/notifications/types.shared';
 
 export const ADMIN_USER_PAGE_SIZES = [25, 50, 100] as const;
 export const DEFAULT_ADMIN_USER_PAGE_SIZE = ADMIN_USER_PAGE_SIZES[0];
@@ -246,6 +247,23 @@ export interface AdminBillingDocument {
   createdAt: string;
 }
 
+/**
+ * Payments Phase 6, Unit D (docs/payments/phase-6-plan.md §10 "D -- admin support"): the newest 20
+ * `billing_notification_jobs` rows for this account, for the "Billing emails" panel. Deliberately
+ * narrow -- an admin support list, not the full job row (no dedupe_key, no payload_json, no provider
+ * message id): those stay internal to the worker (lib/billing/notifications).
+ */
+export interface AdminBillingNotificationJob {
+  id: string;
+  kind: JobKind;
+  status: JobStatus;
+  attemptCount: number;
+  emailStatus: EmailStatus | null;
+  documentOutcome: string | null;
+  lastError: string | null;
+  createdAt: string;
+}
+
 export interface AdminBillingProfile {
   id: string;
   legalName: string | null;
@@ -301,6 +319,8 @@ export interface AdminUserBillingData {
   documents: AdminBillingSectionResult<AdminBillingDocument>;
   profile: { status: AdminBillingSectionStatus; profile: AdminBillingProfile | null };
   webhookEvents: AdminBillingSectionResult<AdminBillingWebhookEvent>;
+  /** Payments Phase 6, Unit D: 'unavailable' when migration 135 hasn't run here yet. */
+  notificationJobs: AdminBillingSectionResult<AdminBillingNotificationJob>;
   planKeyCheck: AdminBillingPlanKeyCheck;
 }
 
@@ -794,6 +814,30 @@ export function mapAdminBillingDocument(row: RawBillingDocumentRow): AdminBillin
   };
 }
 
+export interface RawBillingNotificationJobRow {
+  id: string;
+  kind: JobKind;
+  status: JobStatus;
+  attempt_count: number | string;
+  email_status: EmailStatus | null;
+  document_outcome: string | null;
+  last_error: string | null;
+  created_at: string;
+}
+
+export function mapAdminBillingNotificationJob(row: RawBillingNotificationJobRow): AdminBillingNotificationJob {
+  return {
+    id: row.id,
+    kind: row.kind,
+    status: row.status,
+    attemptCount: billingIntegerValue(row.attempt_count),
+    emailStatus: row.email_status,
+    documentOutcome: row.document_outcome,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+  };
+}
+
 export interface RawBillingProfileRow {
   id: string;
   legal_name: string | null;
@@ -956,7 +1000,8 @@ export type AdminBillingSectionKey =
   | 'refunds'
   | 'documents'
   | 'profile'
-  | 'webhookEvents';
+  | 'webhookEvents'
+  | 'notificationJobs';
 
 export interface AdminBillingSectionDisplayState {
   kind: 'unavailable' | 'empty' | 'has_data';
@@ -978,7 +1023,43 @@ const BILLING_SECTION_EMPTY_MESSAGES: Record<AdminBillingSectionKey, string> = {
   documents: 'No receipts or invoices yet -- document issuing ships in a later phase.',
   profile: 'No billing profile on file for this account.',
   webhookEvents: 'No billing webhook events recorded for this account.',
+  notificationJobs: 'No billing emails for this account yet.',
 };
+
+// --- Billing panel: notification-job display labels (Payments Phase 6, Unit D) -----------------
+//
+// billing_notification_jobs.kind and .email_status are snake_case values meant for code, not an
+// admin's eyes (docs/payments/phase-6-plan.md §10 "D -- admin support" calls for "a readable
+// label"). Both maps are total over their respective unions (JobKind / EmailStatus, from
+// lib/billing/notifications/types.shared.ts) so a value added there without a matching label here
+// is a TypeScript error, not a silent snake_case leak into the admin UI.
+
+const BILLING_JOB_KIND_LABELS: Record<JobKind, string> = {
+  payment_receipt: 'Payment receipt',
+  refund_processed: 'Refund processed',
+  subscription_payment_failed: 'Subscription payment failed',
+  cancel_scheduled: 'Cancellation scheduled',
+  subscription_ended: 'Subscription ended',
+  renewal_reminder: 'Renewal reminder',
+  document_resend: 'Document resend',
+};
+
+export function describeBillingJobKind(kind: JobKind): string {
+  return BILLING_JOB_KIND_LABELS[kind] ?? kind;
+}
+
+const BILLING_EMAIL_STATUS_LABELS: Record<EmailStatus, string> = {
+  sent: 'Sent',
+  skipped_disabled: 'Skipped — emails off',
+  skipped_no_address: 'Skipped — no email on file',
+  skipped_stale: 'Skipped — too old to send',
+  skipped_deleted: 'Skipped — account deleted',
+};
+
+export function describeBillingEmailStatus(emailStatus: EmailStatus | null): string {
+  if (!emailStatus) return 'Not sent yet';
+  return BILLING_EMAIL_STATUS_LABELS[emailStatus] ?? emailStatus;
+}
 
 export function describeBillingSectionState(
   key: AdminBillingSectionKey,

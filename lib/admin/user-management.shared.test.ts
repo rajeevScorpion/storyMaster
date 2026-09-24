@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   beatsToCoins,
   deriveBillingPlanKeyCheck,
+  describeBillingEmailStatus,
+  describeBillingJobKind,
   describeBillingSectionState,
   mapAdminBillingDocument,
+  mapAdminBillingNotificationJob,
   mapAdminBillingOrder,
   mapAdminBillingPayment,
   mapAdminBillingProfile,
@@ -17,6 +20,7 @@ import {
   selectActiveBillingSubscriptionForPlanKey,
   type AdminBillingSubscription,
 } from './user-management.shared';
+import { BILLING_EMAIL_STATUSES, BILLING_JOB_KINDS } from '@/lib/billing/notifications/types.shared';
 
 function buildSubscription(overrides: Partial<AdminBillingSubscription> = {}): AdminBillingSubscription {
   return {
@@ -314,6 +318,59 @@ describe('admin billing panel: raw row mappers', () => {
     });
     expect(webhookEvent.attemptCount).toBe(3);
   });
+
+  it('maps a notification job row, coercing attempt_count to a number', () => {
+    const job = mapAdminBillingNotificationJob({
+      id: 'job_1',
+      kind: 'payment_receipt',
+      status: 'failed',
+      attempt_count: '5',
+      email_status: 'skipped_disabled',
+      document_outcome: 'issued',
+      last_error: 'Resend down',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    expect(job).toEqual({
+      id: 'job_1',
+      kind: 'payment_receipt',
+      status: 'failed',
+      attemptCount: 5,
+      emailStatus: 'skipped_disabled',
+      documentOutcome: 'issued',
+      lastError: 'Resend down',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
+  });
+});
+
+describe('billing notification job display labels', () => {
+  it('gives every job kind a plain-words label, not its raw snake_case value', () => {
+    for (const kind of BILLING_JOB_KINDS) {
+      const label = describeBillingJobKind(kind);
+      expect(label).not.toBe(kind);
+      expect(label).not.toContain('_');
+    }
+  });
+
+  it('falls back to the raw value for a kind with no known label', () => {
+    expect(describeBillingJobKind('made_up_kind' as (typeof BILLING_JOB_KINDS)[number])).toBe('made_up_kind');
+  });
+
+  it('gives every email status a plain-words label, not its raw snake_case value', () => {
+    for (const status of BILLING_EMAIL_STATUSES) {
+      const label = describeBillingEmailStatus(status);
+      expect(label).not.toBe(status);
+      expect(label).not.toContain('_');
+    }
+  });
+
+  it('reads null as "not sent yet" rather than a blank cell', () => {
+    expect(describeBillingEmailStatus(null)).toBe('Not sent yet');
+  });
+
+  it('falls back to the raw value for an email status with no known label', () => {
+    expect(describeBillingEmailStatus('made_up_status' as (typeof BILLING_EMAIL_STATUSES)[number])).toBe('made_up_status');
+  });
 });
 
 describe('selectActiveBillingSubscriptionForPlanKey', () => {
@@ -464,5 +521,13 @@ describe('describeBillingSectionState', () => {
 
   it('reports has_data with no message once there is at least one row', () => {
     expect(describeBillingSectionState('orders', 'ok', 17)).toEqual({ kind: 'has_data', message: null });
+  });
+
+  it('gives the notification-jobs section its own empty message', () => {
+    expect(describeBillingSectionState('notificationJobs', 'ok', 0)).toMatchObject({
+      kind: 'empty',
+      message: expect.stringContaining('billing emails'),
+    });
+    expect(describeBillingSectionState('notificationJobs', 'unavailable', 0)).toMatchObject({ kind: 'unavailable' });
   });
 });
