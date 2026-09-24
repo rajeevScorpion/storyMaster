@@ -711,6 +711,133 @@ Signed-in behaviour is unit tests plus the owner's walk steps 12-14. **Review fo
 4. `WalletPage`'s plan and pack buttons open the sheet instead of calling prepare directly. The old banners
    (677-700) are removed once the sheet owns the messaging.
 
+#### E2 execution spec — anchored at `a692fb7` (2026-09-24), supersedes the line numbers above
+
+**Current-state facts (checked at `a692fb7`):**
+- `app/actions/pricing-checkout.ts` is **`server-only`, not `'use server'`** (fixed in E1 review, `a9b8c06`).
+  Exporting more from it is safe. It must never become `'use server'` again. Private today:
+  - `resolveCheckoutTax` and its `CheckoutTaxContext`. It throws `CheckoutRefusalError` with code
+    `billing_details_incomplete` when the profile is incomplete.
+  - `getAuthenticatedUser`, `loadPlanVersionForCheckout`, `loadPlanById`, `loadTopupPackForCheckout`,
+    `assertBetaMarketAllowed` and `labelInterval`.
+- `app/actions/billing-account.ts` (`'use server'`) has `getMyCheckoutStatus`.
+- The rows carry beats, not coins: `DbPricingPlanVersion.monthly_included_beats`, `DbPricingTopupPack.beat_amount`.
+  Convert with `COINS_PER_BEAT`.
+- `TaxBreakdown` (`lib/billing/tax.shared.ts`) has `supplyType` (`intra_state` / `inter_state` / `none`),
+  `cgstMinor`, `sgstMinor`, `igstMinor` and `ratePercent`.
+- `components/pricing/checkout/useRazorpayCheckout.ts` exports `startRazorpayCheckout`, `CheckoutOutcome`,
+  `useRazorpayCheckout` and `RazorpayScript`. After a successful verify it resolves `success` with the verify
+  message, **even when verify says the payment is still pending**. It has no progress callback.
+- `verify/route.ts` returns `{ ok, grantedCoins, message }`, with no pending flag:
+  - subscription: pending when `!firstChargeConfirmed && grantedCoins === 0`;
+  - top-up: pending when `settleResult.state === 'pending'`.
+  Its test is `verify/route.test.ts`.
+- `WalletPage.tsx` holds E1's interim attestation row (`showAttestation`, `adultAttested`), the kids line
+  (`isKidsMode`), `applyCheckoutOutcome`, and the `checkoutError` / `checkoutStatus` banners.
+  - `handlePlanCheckout` / `handleTopupCheckout` open the billing dialog first when
+    `requiresBillingDetails`, and run the checkout through `pendingCheckoutAction` once it is saved.
+  - Buttons show `checkoutBusyKey` labels ("Opening checkout...").
+- `Modal` + `DialogGlow` is the look (`BillingDetailsDialog.tsx:192-193`, `showCloseButton={false}`, own
+  close button). `useDialogBehavior` traps Tab only through the panel's own `onKeyDown`, so it cannot pull
+  focus out of Razorpay's iframe. The sheet can stay mounted under the Razorpay window.
+- Server actions must **return** errors as values, not throw. Next strips thrown messages in production.
+- The vitest environment is `node` with no DOM library. Anything worth testing goes in `*.shared.ts`.
+
+**Edits:**
+1. **`pricing-checkout.ts`:** export `resolveCheckoutTax`, `CheckoutTaxContext`, `getAuthenticatedUser`, the
+   three loaders, `assertBetaMarketAllowed` and `labelInterval`. Change nothing else; prepare's behaviour
+   and tests stay identical.
+2. **`lib/billing/checkout-quote.shared.ts`** (new, pure):
+   - `CheckoutQuote`: `{ kind, title, currencyCode, netMinor, taxMinor, grossMinor, ratePercent | null,
+     taxLines: { label: 'IGST' | 'CGST' | 'SGST'; amountMinor }[], coins, interval: 'monthly' | 'annual' |
+     null, nextChargeDate: string | null }`. `nextChargeDate` is an ISO date, subscriptions only.
+   - `taxLinesFromBreakdown(breakdown | null)`: `inter_state` gives IGST. `intra_state` gives CGST + SGST.
+     `none` or null gives `[]`.
+   - `addBillingInterval(date, interval)`: one month or one year later, clamped to the month's end, so
+     31 Jan + 1 month is 28/29 Feb.
+   - `formatRenewalLine(interval, nextChargeDate)`, for example "Renews monthly on the 24th." Annual shows
+     the date.
+3. **`quoteCheckout(input, pricingMarketKey)`** in `billing-account.ts`:
+   - It is read-only: it runs the same flag check, auth, loaders, beta-market check and
+     `resolveCheckoutTax` as prepare, **and creates nothing**.
+   - It returns `{ ok: true, quote } | { ok: false, needsBillingDetails: true } | { ok: false, error }`.
+   - `CheckoutRefusalError` with code `billing_details_incomplete` becomes `needsBillingDetails`. Any other
+     `CheckoutRefusalError` becomes its message. Anything else gets "We couldn't load the price. Please
+     try again in a moment.", and the full error goes to `console.error('[checkout.quote]', …)`.
+   - Kids mode also returns the refusal (`assertCheckoutAllowed` with `adultAttested: true`), so a crafted
+     call learns nothing new.
+   - The annual refusal stays as prepare's. Build the annual copy anyway, gated on `quote.interval ===
+     'annual'`.
+4. **`verify/route.ts`:** add `pending: boolean` to both ok responses (the conditions above). Extend its test.
+5. **`useRazorpayCheckout.ts`:**
+   - `startRazorpayCheckout` gains an optional `onProgress(phase)`, where phase is one of:
+     - `'preparing'`: before the prepare fetch;
+     - `'window'`: right before `instance.open()`;
+     - `'verifying'`: first line of `handler`;
+     - `'checking'`: first line of `ondismiss`.
+   - The handler resolves `{ kind: 'confirming', internalOrderId }` when verify says `pending`, and
+     `success` otherwise. `confirming` always carries `internalOrderId`, including from the dismiss poll.
+   - New `pollUntilPaid(internalOrderId, { intervalMs = 3000, timeoutMs = 90000 })` returns
+     `'paid' | 'still_confirming'`. **It never returns failed.** Once verify or the poll has said
+     confirming, the only endings are paid or still confirming. The rule lives in a pure function in
+     `checkout-status.shared.ts`, with a test.
+6. **`lib/billing/checkout-sheet.shared.ts`** (new, pure): a reducer for the sheet, with a test.
+   - States: `quoting` → `summary` | `needs_details` | `quote_error` → `opening` → `window` → `verifying` |
+     `checking` → `success` | `confirming` | `still_confirming` | `failed`.
+   - `dismissed` returns to `summary`, with the checkbox still ticked.
+   - `failed` → "Try again" → `summary`.
+   - A prepare rejection goes to `summary`, with its message shown inline.
+   - `canClose(state)` is false only in `opening`, `verifying` and `checking`.
+   - Test: no transition reaches `failed` from `confirming` / `still_confirming`.
+7. **`components/pricing/checkout/CheckoutSummarySheet.tsx`** (+ `CheckoutProgress.tsx` if it helps):
+   - The shell is `Modal` + `DialogGlow`, with its own close button hidden when `!canClose`. On a phone it
+     must fit a 360px-wide screen with no horizontal scroll.
+   - **Summary:**
+     - title, then "net + GST = **total**" (use `taxLines`);
+     - for a plan: `formatRenewalLine` and "Cancel anytime; you keep access until the period ends."
+       Then "{coins} coins each month. They reset every cycle and don't roll over." and "Unlimited
+       watching" when the offer has it;
+     - for a top-up: "{coins} coins. Top-up coins never expire.";
+     - annual (latent): the annual total plus "≈ {monthly} / month";
+     - the P6 checkbox, "I'm 18 or older and I'm the one paying for this purchase.", with Terms (`/terms`)
+       and Refund Policy (`/refund-policy`) links opening in a new tab;
+     - the primary button "Continue to secure payment", disabled until the box is ticked and Razorpay is
+       ready.
+   - **Progress:**
+     - opening: "Opening secure checkout…" (branded pulse; static when `useReducedMotion()`);
+     - window: "Complete the payment in the secure window.";
+     - verifying: "Confirming your payment…";
+     - checking: "Checking your payment…".
+     - After verifying or checking says confirming, run `pollUntilPaid` and show "Confirming your payment…".
+   - **Results:**
+     - success: plan or coins in plain terms, from the quote, for example "Your Plus plan is active.
+       500 coins were added." Or use verify's own message when there is one.
+     - still_confirming: "This can take a few minutes with UPI. It will be applied automatically, and
+       you can leave this page."
+     - failed: E1's mapped copy, plus "Try again".
+     - After success or confirming, the sheet calls `onSettled()` so the wallet refreshes.
+   - **`needs_details`:** call `onNeedsBillingDetails()`. WalletPage closes the sheet, opens the billing
+     dialog, and re-opens the sheet on save.
+8. **`WalletPage.tsx`:**
+   - The plan, pack and headline buttons open the sheet with a target, keeping the existing
+     billing-dialog-first gate.
+   - Delete the interim attestation row, `adultAttested`, `applyCheckoutOutcome`, `checkoutStatus`,
+     `checkoutBusyKey` and its busy labels. Keep `checkoutError` for the script-load failure only.
+   - Keep the kids line and the hidden buttons as they are.
+   - Buttons no longer depend on attestation.
+
+**Tests:** `checkout-quote.shared.test.ts`, `checkout-sheet.shared.test.ts`, the new
+`checkout-status.shared.ts` rule, and the verify `pending` flag.
+**Verify:** tsc, lint, `npm test`, `build:verify`, `e2e/smoke.spec.ts`. Then Opus drives the signed-in sheet
+itself in Playwright on the local dev server, using a dev test account (owner rule 2026-09-24: run checks
+yourself; ask for credentials).
+**Review focus for Opus:**
+- quote creates nothing and throws nothing to the client;
+- no path shows `failed` after `confirming`;
+- the sheet can't be closed mid-prepare or mid-verify;
+- the billing-dialog-first gate still works;
+- `pricing-checkout.ts` is still `server-only`.
+
 ### Unit F — Settings → Billing, `/account/billing` (Sonnet; Opus reviews the cancel path line by line)
 
 - `app/account/billing/page.tsx`: a server shell. Sign-in is required, and signed-out visitors are redirected
