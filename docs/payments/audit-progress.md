@@ -3,7 +3,7 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-24 — E1, E2 and F done, G next)
+## Next session starts here (updated 2026-09-24 — Phase 5 units A-G built; owner walks and prod gate left)
 
 **Phase 5 is planned: `phase-5-plan.md`.** Ten units (0, A-G, M), migration 134 written out in full inside the
 plan (not yet as files). **Seven owner decisions, P1-P7 (plan §3), gate D, E1, F and G.** B, C and the Razorpay
@@ -139,10 +139,33 @@ texts the owner's real phone (see the E2 notes). Owner's call: a dummy phone on 
 be present for the OTP. After that: subscribe, cancel from `/account/billing`, check "Cancels on <date>"
 survives a reconcile (money-walk step 11).
 
+**G done, 2026-09-24.** The G execution spec (plan §5) is at `9376b11`. Sonnet built it in `82bc2dd`, and Opus
+fixed the "Current" badge showing to signed-out visitors.
+- **It also fixes F:** "Restart your plan" opened Razorpay on `/account/billing`, where cross-origin
+  isolation blocks its frame. It now does a full load of `/wallet?checkout=<id>`.
+- `?checkout=` goes through the billing-dialog-first gate, fires once, and strips itself. The Free card's
+  "₹0 total" line is gone.
+**Gates:** tsc and lint clean, 2,213 tests / 180 files, `build:verify`, e2e smoke + plans 13/13.
+**Opus walked it:**
+- `/plans` signed out: the table renders.
+- `/plans` signed in: Choose Audience → `/wallet` opens the sheet for Audience, the URL is cleaned, and a
+  reload doesn't reopen it.
+- Phone cards render, with no page errors.
+**Owner, catalogue data (not code):** `/plans` shows Downloads ✓ on Free but — on Audience, while
+Audience's bullets say "Everything in Free". Either Audience should get downloads, or its copy shouldn't
+inherit Free. Video export reads "720p vertical video" on every tier. Check that's intended.
+
+**Phase 5 status:** every unit is built. Left:
+- the Unit 0 probe (owner);
+- the deferred subscribe → cancel → reconcile walk (needs OTP headroom);
+- the Razorpay logo and the sheet on the Preview;
+- the Refund Policy copy made final;
+- applying 134 on prod at release.
+
 **Next session starts with:**
 1. The phase brief.
-2. **G** (`/plans`, plan §9). Re-anchor its spec to the current tree first, execute on Sonnet, and have Opus
-   review the diff and walk it.
+2. Whatever the owner picks from the "left" list above, and the subscribe/cancel walk if the OTP limit has
+   reset. Then the Phase 5 → prod release checklist (plan §8: the refund copy, 134 on prod, flags).
 3. If the owner has run **Unit 0** by then, read the new subscription's `subscription.*` webhook rows in
    `billing_webhook_events`, then write `research/11-cycle-end-cancel-probe.md`. They keep the full entity:
    look at `charge_at`, `ended_at`, `has_scheduled_changes` and `change_scheduled_at` after a cycle-end
