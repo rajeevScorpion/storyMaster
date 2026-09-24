@@ -3,7 +3,7 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-24 — E1 and E2 done, F next)
+## Next session starts here (updated 2026-09-24 — E1, E2 and F done, G next)
 
 **Phase 5 is planned: `phase-5-plan.md`.** Ten units (0, A-G, M), migration 134 written out in full inside the
 plan (not yet as files). **Seven owner decisions, P1-P7 (plan §3), gate D, E1, F and G.** B, C and the Razorpay
@@ -102,10 +102,37 @@ These all worked:
 - A real UPI approval after closing the window. It needs a phone.
 - The Refund Policy copy must be final before Phase 5 ships to prod (plan §8). The sheet links to it.
 
+**F done, 2026-09-24.** The F execution spec (plan §5) is at `cef290f`, Sonnet built it in `360b28b`, and
+Opus fixed two things in `c8ff6e5`:
+- An immediately ended plan said "Ended on" a future date and still showed its price and benefits. It now
+  reads as the free plan.
+- The plan price came from today's catalogue. It now comes from the subscription's own version.
+The cancel path was reviewed line by line and accepted:
+- every query is scoped to the user;
+- `atCycleEnd` is a literal;
+- only fixed sentences reach the client;
+- the 134 marker write mirrors the admin action;
+- the sync never clears a scheduled cancel (`cancelAtPeriodEndPatch`);
+- restart awaits the sync.
+The spec itself had two corrections:
+- `reconcilePricingSubscription` is admin-gated, so F uses `syncSubscriptionFromProvider`.
+- `billing_documents` has no `provider_mode`.
+**Gates:** tsc and lint clean, 2,197 tests / 179 files, `build:verify` and smoke 8/8 (agent run).
+**Opus walked `/account/billing` signed in as `testuser`:**
+- signed out, it shows the sign-in card;
+- plan, coins, 4 payments with IGST lines and 2 refunds, the empty invoices state and billing details all
+  render;
+- at 360px there is no horizontal scroll;
+- the account menu has "Billing" and the wallet has "Manage billing".
+**The cancel and restart clicks are not walked:** `testuser` has no live test subscription. Creating one
+texts the owner's real phone (see the E2 notes). Owner's call: a dummy phone on `testuser`'s profile, or
+be present for the OTP. After that: subscribe, cancel from `/account/billing`, check "Cancels on <date>"
+survives a reconcile (money-walk step 11).
+
 **Next session starts with:**
 1. The phase brief.
-2. **F**, then **G** (plan §9). Re-anchor F's spec to the current tree first (as for E1 and E2), execute on
-   Sonnet, and have Opus review the diff and walk it signed in.
+2. **G** (`/plans`, plan §9). Re-anchor its spec to the current tree first, execute on Sonnet, and have Opus
+   review the diff and walk it.
 3. If the owner has run **Unit 0** by then, read the new subscription's `subscription.*` webhook rows in
    `billing_webhook_events`, then write `research/11-cycle-end-cancel-probe.md`. They keep the full entity:
    look at `charge_at`, `ended_at`, `has_scheduled_changes` and `change_scheduled_at` after a cycle-end
