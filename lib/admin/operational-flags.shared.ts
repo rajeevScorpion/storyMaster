@@ -86,6 +86,19 @@ export const OPERATIONAL_FLAG_DEFINITIONS: readonly OperationalFlagDefinition[] 
     defaultEnabled: false,
     group: 'billing',
   },
+  {
+    key: 'billing_emails_enabled',
+    label: 'Send billing emails',
+    description: 'Sends the receipt, renewal, refund and subscription emails through Resend.',
+    enabledHelp:
+      'Every billing job that reaches the worker sends its email (receipt, renewal, failed renewal, cancellation, refund, and the annual renewal reminder). A job older than 72 hours skips its email instead of sending something stale, but still issues its document if that switch is on.',
+    disabledHelp:
+      'No billing email is sent. Jobs still run and are recorded as skipped_disabled, and documents still issue when that switch is on — this only silences the email side.',
+    beforeEnabling:
+      'Set RESEND_API_KEY and BILLING_EMAIL_FROM first, and add + verify the sending domain in Resend. Until the domain verifies, Resend only delivers to the account owner’s own inbox — fine for a walk, not for real customers.',
+    defaultEnabled: false,
+    group: 'billing',
+  },
 ];
 
 export const OPERATIONAL_FLAG_GROUP_LABELS: Record<OperationalFlagDefinition['group'], string> = {

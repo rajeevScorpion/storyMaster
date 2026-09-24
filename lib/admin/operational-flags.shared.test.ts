@@ -77,6 +77,7 @@ describe('operational flag registry', () => {
       'account_deletion_enabled',
       'billing_admin_actions_enabled',
       'billing_document_issuing_enabled',
+      'billing_emails_enabled',
       'billing_reconcile_enabled',
     ]);
   });
