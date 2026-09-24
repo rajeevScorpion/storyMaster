@@ -3,7 +3,31 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-24 — Phase 5 units A-G built; owner walks and prod gate left)
+## Next session starts here (updated 2026-09-24 late — Phase 6 A, B, C1 done; C2 and D were running; Phase 7 planned)
+
+**Read this block first, then "Phase 6 execution" further down.**
+- **Phase 6** (`phase-6-plan.md`):
+  - **Done and reviewed:** M (135 applied on dev), A, B and C1.
+  - **C2** (processors and hooks) and **D** (admin billing-emails list, Retry, Resend) were launched as
+    Sonnet agents at the end of the session, on the spec in **plan §10**.
+  - **First thing:** `git log --oneline -15` to see whether their commits landed (prefixes
+    `feat(payments): Phase 6 Unit C2 --` and `Unit D --`).
+  - Check `git status` for uncommitted leftovers from a cut-off agent. Review what landed by **reading the
+    diff against plan §10**, then finish whatever is missing.
+- **Then the walk** (plan §5): turn `billing_document_issuing_enabled` and `billing_emails_enabled` on
+  **on dev** (test payments number `TEST-KG…`), top up as `testuser`, and check the invoice, the email, the
+  download, and a refund with its credit note.
+- **Phase 7 is planned:** `phase-7-plan.md`.
+  - Owner decisions R1-R3, all as recommended: a 7-day refund warning with an override; the Terms updated
+    as a *minor* change; named-account rollout first.
+  - Units: **P7-A** (Opus writes the policy text), **P7-B** (Sonnet: the disclosure fix, the 7-day window,
+    the allowlist flag plus migration 136, the health cards), **P7-C** (Opus: `go-live-runbook.md`).
+  - None started.
+- **Phase 8** (international readiness): a short review doc only. Not started.
+- **Usage was 82% at the end of this session.** The owner said to let the running agents land and start
+  nothing new.
+
+## Previous entry (2026-09-24 — Phase 5 units A-G built; owner walks and prod gate left)
 
 **Phase 5 is planned: `phase-5-plan.md`.** Ten units (0, A-G, M), migration 134 written out in full inside the
 plan (not yet as files). **Seven owner decisions, P1-P7 (plan §3), gate D, E1, F and G.** B, C and the Razorpay
