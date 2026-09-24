@@ -243,10 +243,10 @@ const PAYMENT_HISTORY_PAGE_SIZE = 20;
 async function resolvePlanIdentity(
   supabase: AdminClient,
   planVersionId: string
-): Promise<{ planKey: string; planName: string } | null> {
+): Promise<{ planKey: string; planName: string; priceMinor: number; currencyCode: string } | null> {
   const versionResult = await supabase
     .from('pricing_plan_versions')
-    .select('plan_id')
+    .select('plan_id, price_minor, currency_code')
     .eq('id', planVersionId)
     .maybeSingle();
   if (versionResult.error || !versionResult.data) return null;
@@ -259,7 +259,8 @@ async function resolvePlanIdentity(
   if (planResult.error || !planResult.data) return null;
 
   const plan = planResult.data as { plan_key: string; name: string };
-  return { planKey: plan.plan_key, planName: plan.name };
+  const version = versionResult.data as { price_minor: number; currency_code: string };
+  return { planKey: plan.plan_key, planName: plan.name, priceMinor: version.price_minor, currencyCode: version.currency_code };
 }
 
 async function resolvePlanNamesByVersionId(
@@ -362,6 +363,8 @@ async function loadSubscriptionOverview(
     subscription: {
       planKey: identity?.planKey ?? null,
       planName: identity?.planName ?? 'Plan',
+      priceMinor: identity?.priceMinor ?? null,
+      currencyCode: identity?.currencyCode ?? null,
       interval: picked.billing_interval,
       status: picked.status,
       currentPeriodEnd: picked.current_period_end,

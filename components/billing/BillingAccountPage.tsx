@@ -210,11 +210,7 @@ export default function BillingAccountPage() {
   const offers = walletData?.planOffers ?? [];
   const subscription = overview?.subscription ?? null;
   const matchingOffer = subscription ? offers.find((offer) => offer.planKey === subscription.planKey) ?? null : null;
-  const priceMinor = matchingOffer
-    ? subscription!.interval === 'annual'
-      ? matchingOffer.annualPriceMinor
-      : matchingOffer.monthlyPriceMinor
-    : null;
+  const priceMinor = subscription?.priceMinor ?? null;
   const banner = subscription && overview!.sections.subscription === 'ok' ? subscriptionBanner(subscription, new Date()) : null;
   const benefits = matchingOffer ? buildPlanFeatures(matchingOffer, walletData, offers) : [];
   const canCancel = Boolean(subscription && ['authenticated', 'active', 'pending'].includes(subscription.status) && !subscription.cancelAtPeriodEnd);
@@ -332,9 +328,14 @@ export default function BillingAccountPage() {
               <p className="text-xs uppercase tracking-[0.18em] text-emerald-300/80">Your plan</p>
               {overview!.sections.subscription === 'unavailable' ? (
                 <p className="mt-3 text-sm text-neutral-400">{UNAVAILABLE_TEXT}</p>
-              ) : !subscription ? (
+              ) : !subscription || banner?.tone === 'ended' ? (
                 <>
                   <h2 className="mt-2 text-2xl font-serif text-neutral-100">You&apos;re on the free plan.</h2>
+                  {subscription && banner && (
+                    <p className="mt-2 text-sm text-neutral-400">
+                      {subscription.planName}: {banner.text}
+                    </p>
+                  )}
                   <Link href="/wallet" className="mt-3 inline-block text-sm text-emerald-300 underline-offset-2 hover:underline">
                     Choose a plan on your wallet
                   </Link>
@@ -343,9 +344,10 @@ export default function BillingAccountPage() {
                 <>
                   <h2 className="mt-2 text-2xl font-serif text-neutral-100">
                     {matchingOffer?.name ?? subscription.planName}
-                    {priceMinor != null && (
+                    {priceMinor != null && subscription.currencyCode && (
                       <span className="ml-2 text-base font-sans text-neutral-400">
-                        {formatCurrencyMinor(matchingOffer!.currencyCode, priceMinor)} / {subscription.interval === 'annual' ? 'year' : 'month'}
+                        {formatCurrencyMinor(subscription.currencyCode, priceMinor)} / {subscription.interval === 'annual' ? 'year' : 'month'}
+                        {walletData?.taxPreview ? ' + GST' : ''}
                       </span>
                     )}
                   </h2>
@@ -354,7 +356,7 @@ export default function BillingAccountPage() {
                       className={`mt-2 text-sm ${
                         banner.tone === 'pending' || banner.tone === 'halted'
                           ? 'text-amber-300'
-                          : banner.tone === 'cancelling' || banner.tone === 'ended'
+                          : banner.tone === 'cancelling'
                           ? 'text-neutral-400'
                           : 'text-emerald-300'
                       }`}

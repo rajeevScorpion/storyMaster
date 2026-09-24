@@ -104,6 +104,14 @@ describe('subscriptionBanner', () => {
     }
   });
 
+  it('an immediate end (period end still in the future) gives no date', () => {
+    const banner = subscriptionBanner(
+      { status: 'cancelled', cancelAtPeriodEnd: false, currentPeriodEnd: '2099-01-01T00:00:00.000Z' },
+      NOW
+    );
+    expect(banner).toEqual({ tone: 'ended', text: 'This plan has ended.' });
+  });
+
   it('a scheduled cancel whose date has already passed reads as ended, not a stale "Cancels on"', () => {
     const banner = subscriptionBanner(
       { status: 'active', cancelAtPeriodEnd: true, currentPeriodEnd: '2026-01-01T00:00:00.000Z' },

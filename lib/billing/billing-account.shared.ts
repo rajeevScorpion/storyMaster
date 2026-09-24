@@ -12,6 +12,9 @@ import type { CheckoutQuoteTaxLine } from '@/lib/billing/checkout-quote.shared';
 export interface BillingSubscriptionOverview {
   planKey: string | null;
   planName: string;
+  /** The subscription's own version price (net), not today's catalogue price. */
+  priceMinor: number | null;
+  currencyCode: string | null;
   interval: BillingInterval;
   status: string;
   currentPeriodEnd: string | null;
@@ -116,7 +119,10 @@ export function subscriptionBanner(
   if (!periodEndPassed && (dto.status === 'active' || dto.status === 'authenticated')) {
     return { tone: 'renewing', text: `Renews on ${formatBannerDate(dto.currentPeriodEnd)}.` };
   }
-  return { tone: 'ended', text: `Ended on ${formatBannerDate(dto.currentPeriodEnd)}.` };
+  // An immediate end (a refund, decision 15) leaves current_period_end in the future; don't print it.
+  return periodEndPassed
+    ? { tone: 'ended', text: `Ended on ${formatBannerDate(dto.currentPeriodEnd)}.` }
+    : { tone: 'ended', text: 'This plan has ended.' };
 }
 
 const METHOD_LABELS: Record<BillingMethodCategory, string> = {
