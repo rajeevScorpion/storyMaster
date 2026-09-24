@@ -7,10 +7,11 @@ import {
   buildBusinessSnapshot,
   buildCreditNoteLineItems,
   buildInvoiceLineItems,
+  refundTaxBreakdown,
   resolveCustomerSnapshot,
 } from '@/lib/billing/documents/document-content.shared';
 import type { BillingDocumentLineItem, DocumentCustomerSnapshot } from '@/lib/billing/documents/types.shared';
-import type { TaxBreakdown } from '@/lib/billing/tax.shared';
+import { splitRefundProportionally, type TaxBreakdown } from '@/lib/billing/tax.shared';
 import type { DbBillingPayment, DbBillingRefund } from '@/lib/types/database';
 import type { BillingInterval, BillingPaymentStatus } from '@/lib/types/pricing';
 
@@ -32,6 +33,7 @@ export type DocumentIssueOutcome =
   | 'unavailable'
   | 'skipped_no_original'
   | 'skipped_not_captured'
+  | 'skipped_not_processed'
   | 'not_found';
 
 export interface DocumentIssueResult {
@@ -212,13 +214,19 @@ export async function issueCreditNoteForRefund(refundId: string): Promise<Docume
   const refund = refundResult.data as DbBillingRefund | null;
   if (!refund) return { outcome: 'not_found', documentId: null, documentNumber: null };
 
+  // Only money that has actually gone back gets a credit note. The job is enqueued on 'processed', but
+  // an admin retry or a later caller must not be able to issue one for a pending or failed refund.
+  if (refund.status !== 'processed') {
+    return { outcome: 'skipped_not_processed', documentId: null, documentNumber: null };
+  }
+
   if (!refund.payment_id) {
     return { outcome: 'skipped_no_original', documentId: null, documentNumber: null };
   }
 
   const originalResult = await supabase
     .from('billing_documents')
-    .select('id, document_number, line_items_json')
+    .select('id, subject_ref, document_number, line_items_json, customer_snapshot_json')
     .eq('document_type', 'tax_invoice')
     .eq('status', 'issued')
     .eq('payment_id', refund.payment_id)
@@ -229,7 +237,13 @@ export async function issueCreditNoteForRefund(refundId: string): Promise<Docume
     throw new Error(`Failed to look up the original invoice for a credit note: ${originalResult.error.message}`);
   }
 
-  const original = originalResult.data as { id: string; document_number: string; line_items_json: BillingDocumentLineItem[] | null } | null;
+  const original = originalResult.data as {
+    id: string;
+    subject_ref: string;
+    document_number: string;
+    line_items_json: BillingDocumentLineItem[] | null;
+    customer_snapshot_json: DocumentCustomerSnapshot | null;
+  } | null;
   if (!original) {
     return { outcome: 'skipped_no_original', documentId: null, documentNumber: null };
   }
@@ -240,31 +254,38 @@ export async function issueCreditNoteForRefund(refundId: string): Promise<Docume
     throw new Error(`Failed to load the original payment for a credit note: ${paymentResult.error.message}`);
   }
   const payment = paymentResult.data as DbBillingPayment | null;
+  if (!payment) return { outcome: 'not_found', documentId: null, documentNumber: null };
 
-  const netMinor = refund.net_minor ?? refund.amount_minor;
-  const taxMinor = refund.tax_minor ?? 0;
+  // The refund's own net/tax split when it recorded one, else the same proportional split every refund
+  // path uses (tax.shared.ts), so net + tax always equals the amount refunded.
+  const split =
+    refund.net_minor != null && refund.tax_minor != null
+      ? { netMinor: refund.net_minor, taxMinor: refund.tax_minor }
+      : splitRefundProportionally(refund.amount_minor, payment.net_minor, payment.gross_minor);
+
   const lineItems = buildCreditNoteLineItems(
     { documentNumber: original.document_number, lineItems: original.line_items_json ?? [] },
-    { netMinor }
+    { netMinor: split.netMinor }
   );
 
-  const customerSnapshot = payment
-    ? await resolveInvoiceCustomerSnapshot(supabase, payment)
-    : resolveCustomerSnapshot(null, null, null);
+  // The buyer printed on the invoice, not a re-derived one: a credit note must name the same party
+  // as the invoice it reverses.
+  const customerSnapshot = original.customer_snapshot_json
+    ?? resolveCustomerSnapshot(null, null, payment.tax_breakdown_json as Partial<TaxBreakdown>);
 
   const result = await issueDocumentIfEnabled({
     supabase,
-    subjectRef: refund.subject_ref ?? payment?.subject_ref ?? refund.id,
+    subjectRef: original.subject_ref,
     documentType: 'credit_note',
     providerMode: refund.provider_mode,
     paymentId: null,
     refundId: refund.id,
     originalDocumentId: original.id,
     currencyCode: refund.currency_code,
-    netMinor,
-    taxMinor,
+    netMinor: split.netMinor,
+    taxMinor: split.taxMinor,
     grossMinor: refund.amount_minor,
-    taxBreakdown: (payment?.tax_breakdown_json ?? null) as unknown as TaxBreakdown | null,
+    taxBreakdown: refundTaxBreakdown(payment.tax_breakdown_json as Partial<TaxBreakdown>, split.taxMinor) as TaxBreakdown | null,
     lineItems,
     customerSnapshot: customerSnapshot as unknown as Record<string, unknown>,
     businessSnapshot: buildBusinessSnapshot(resolveSupportEmail()) as unknown as Record<string, unknown>,

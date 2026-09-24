@@ -269,6 +269,7 @@ async function processRefundEvent(
       refundEntity: { id: refundProviderId, amount: refundAmountMinor, status: rawEntityStatus },
       refundedTotalMinor,
       source: 'webhook',
+      rawPayload: payload as unknown as Record<string, unknown>,
     });
 
     outcome = applied.outcome;
@@ -322,6 +323,9 @@ export interface ApplyRefundOutcomeInput {
    * rare dashboard-initiated partial refund that the sweep, rather than the webhook, ends up settling. */
   refundedTotalMinor?: number | null;
   source: RefundEventSource;
+  /** What billing_refunds.raw_payload_json keeps for audit: the whole webhook payload, or the
+   * refund entity the reconcile fetched. Redacted by recordRefund. */
+  rawPayload?: Record<string, unknown>;
 }
 
 export interface ApplyRefundOutcomeResult {
@@ -353,7 +357,7 @@ export async function applyRefundOutcome(input: ApplyRefundOutcomeInput): Promis
     currencyCode: payment.currency_code,
     status,
     initiatedBy: 'provider',
-    rawPayload: { source, refund: refundEntity },
+    rawPayload: input.rawPayload ?? { source, refund: refundEntity },
     processedAt: status === 'processed' ? new Date().toISOString() : null,
   });
 

@@ -215,7 +215,7 @@ export function splitRefundProportionally(
   return { netMinor, taxMinor };
 }
 
-function splitGstComponents(
+export function splitGstComponents(
   taxMinor: number,
   supplyType: GstSupplyType
 ): { cgstMinor: number; sgstMinor: number; igstMinor: number } {

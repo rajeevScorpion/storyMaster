@@ -18,7 +18,7 @@ import {
   LEGAL_POSTAL_CODE,
   LEGAL_STATE,
 } from '@/lib/legal/business-config';
-import type { TaxBreakdown } from '@/lib/billing/tax.shared';
+import { splitGstComponents, type TaxBreakdown } from '@/lib/billing/tax.shared';
 import type {
   BillingDocumentLineItem,
   DocumentBusinessSnapshot,
@@ -209,4 +209,18 @@ export function resolveCustomerSnapshot(
     return liveProfileSnapshot as DocumentCustomerSnapshot;
   }
   return { stateCode: taxBreakdown?.placeOfSupplyStateCode ?? '', profileType: 'personal' };
+}
+
+/**
+ * A credit note's own tax breakdown: the original payment's rule, rate and place of supply, with the
+ * CGST/SGST/IGST amounts recomputed from the refund's tax. Copying the payment's breakdown as-is would
+ * print the whole invoice's tax on a credit note for a partial refund made from the Razorpay dashboard.
+ */
+export function refundTaxBreakdown(
+  paymentBreakdown: Partial<TaxBreakdown> | null | undefined,
+  refundTaxMinor: number
+): Partial<TaxBreakdown> | null {
+  if (!paymentBreakdown || Object.keys(paymentBreakdown).length === 0) return null;
+  const supplyType = paymentBreakdown.supplyType ?? 'none';
+  return { ...paymentBreakdown, ...splitGstComponents(refundTaxMinor, supplyType) };
 }

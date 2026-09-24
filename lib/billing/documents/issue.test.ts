@@ -316,8 +316,10 @@ describe('issueCreditNoteForRefund', () => {
     enqueue('billing_documents', {
       data: {
         id: 'doc-1',
+        subject_ref: 'user-1',
         document_number: 'TEST-KG/26-27/000001',
         line_items_json: [{ description: '120 Coins — Kissago coins top-up', sac: '998439', quantity: 1, unit: 'NOS', netMinor: 1000 }],
+        customer_snapshot_json: { legalName: 'Jane Doe (as invoiced)', stateCode: '24' },
       },
       error: null,
     });
@@ -334,13 +336,68 @@ describe('issueCreditNoteForRefund', () => {
     expect(call.originalDocumentId).toBe('doc-1');
     expect(call.netMinor).toBe(1000);
     expect(call.lineItems[0].description).toContain('Refund against invoice TEST-KG/26-27/000001');
+    expect(call.subjectRef).toBe('user-1');
+    expect(call.customerSnapshot).toEqual({ legalName: 'Jane Doe (as invoiced)', stateCode: '24' });
+  });
+
+  it('skips a refund that is not processed yet, without looking for an original invoice', async () => {
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('billing_refunds', { data: fakeRefund({ status: 'pending' }), error: null });
+
+    const result = await issueCreditNoteForRefund('refund-1');
+
+    expect(result).toEqual({ outcome: 'skipped_not_processed', documentId: null, documentNumber: null });
+    expect(calls).not.toContain('billing_documents');
+    expect(issueDocumentIfEnabledMock).not.toHaveBeenCalled();
+  });
+
+  it('prints the refund\'s own tax on a partial refund, not the whole invoice\'s', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('billing_refunds', { data: fakeRefund({ amount_minor: 590, net_minor: 500, tax_minor: 90 }), error: null });
+    enqueue('billing_documents', {
+      data: { id: 'doc-1', subject_ref: 'user-1', document_number: 'TEST-KG/26-27/000001', line_items_json: [], customer_snapshot_json: null },
+      error: null,
+    });
+    enqueue('billing_payments', {
+      data: fakePayment({
+        tax_breakdown_json: { sacCode: '998439', ratePercent: 18, supplyType: 'intra_state', cgstMinor: 90, sgstMinor: 90, igstMinor: 0, placeOfSupplyStateCode: '24' },
+      }),
+      error: null,
+    });
+    issueDocumentIfEnabledMock.mockResolvedValueOnce({ issued: true, documentId: 'doc-2', documentNumber: 'TEST-KGC/26-27/000001', alreadyIssued: false });
+
+    await issueCreditNoteForRefund('refund-1');
+
+    const call = issueDocumentIfEnabledMock.mock.calls[0][0];
+    expect(call.taxMinor).toBe(90);
+    expect(call.taxBreakdown).toMatchObject({ cgstMinor: 45, sgstMinor: 45, igstMinor: 0, ratePercent: 18 });
+  });
+
+  it('splits a refund that recorded no net/tax the same proportional way every refund path does', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('billing_refunds', { data: fakeRefund({ net_minor: null, tax_minor: null }), error: null });
+    enqueue('billing_documents', {
+      data: { id: 'doc-1', subject_ref: 'user-1', document_number: 'TEST-KG/26-27/000001', line_items_json: [], customer_snapshot_json: null },
+      error: null,
+    });
+    enqueue('billing_payments', { data: fakePayment(), error: null });
+    issueDocumentIfEnabledMock.mockResolvedValueOnce({ issued: true, documentId: 'doc-2', documentNumber: 'TEST-KGC/26-27/000001', alreadyIssued: false });
+
+    await issueCreditNoteForRefund('refund-1');
+
+    const call = issueDocumentIfEnabledMock.mock.calls[0][0];
+    expect(call.netMinor + call.taxMinor).toBe(1180);
+    expect(call.netMinor).toBe(1000);
   });
 
   it('reports already_issued rather than issuing a second credit note', async () => {
     const { supabase, enqueue } = createFakeSupabase();
     createAdminClientMock.mockReturnValue(supabase);
     enqueue('billing_refunds', { data: fakeRefund(), error: null });
-    enqueue('billing_documents', { data: { id: 'doc-1', document_number: 'TEST-KG/26-27/000001', line_items_json: [] }, error: null });
+    enqueue('billing_documents', { data: { id: 'doc-1', subject_ref: 'user-1', document_number: 'TEST-KG/26-27/000001', line_items_json: [], customer_snapshot_json: null }, error: null });
     enqueue('billing_payments', { data: fakePayment(), error: null });
     issueDocumentIfEnabledMock.mockResolvedValueOnce({ issued: true, documentId: 'doc-2', documentNumber: 'TEST-KGC/26-27/000001', alreadyIssued: true });
 
