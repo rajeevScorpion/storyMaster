@@ -155,32 +155,10 @@ describe('buildDocumentView -- Rule 46 particulars', () => {
     expect(view.buyer.legalName).toBe('Acme Pvt Ltd');
   });
 
-  it('omits an unregistered buyer\'s name/address below the Rule 46(f) threshold', () => {
+  it('prints an unregistered buyer\'s own name and address at any value, not only from INR 50,000', () => {
     const view = buildDocumentView(
       baseRow({
-        gross_minor: 4999_00, // INR 4,999.00 -- below the 50,000 threshold
-        customer_snapshot_json: {
-          profileType: 'personal',
-          legalName: 'Jane Doe',
-          gstin: null,
-          stateCode: '27',
-          stateName: 'Maharashtra',
-          addressLine1: '1 MG Road',
-        },
-      })
-    );
-
-    expect(view.buyerIdentityShown).toBe(false);
-    expect(view.buyer.legalName).toBeNull();
-    expect(view.buyer.addressLines).toEqual([]);
-    // Place of supply is unconditional, independent of the identity threshold.
-    expect(view.placeOfSupply).toBe('Maharashtra (27)');
-  });
-
-  it('shows an unregistered buyer\'s name/address at or above the Rule 46(f) threshold', () => {
-    const view = buildDocumentView(
-      baseRow({
-        gross_minor: 50_000_00, // exactly INR 50,000.00
+        gross_minor: 531_00,
         customer_snapshot_json: {
           profileType: 'personal',
           legalName: 'Jane Doe',
@@ -189,6 +167,7 @@ describe('buildDocumentView -- Rule 46 particulars', () => {
           stateName: 'Maharashtra',
           addressLine1: '1 MG Road',
           city: 'Mumbai',
+          countryCode: 'IN',
         },
       })
     );
@@ -196,6 +175,18 @@ describe('buildDocumentView -- Rule 46 particulars', () => {
     expect(view.buyerIdentityShown).toBe(true);
     expect(view.buyer.legalName).toBe('Jane Doe');
     expect(view.buyer.addressLines).toEqual(['1 MG Road']);
+    expect(view.buyer.country).toBe('India');
+    expect(view.placeOfSupply).toBe('Maharashtra (27)');
+  });
+
+  it('shows no identity only for the minimal fallback snapshot, and keeps the place of supply', () => {
+    const view = buildDocumentView(
+      baseRow({ customer_snapshot_json: { stateCode: '27', profileType: 'personal' } })
+    );
+
+    expect(view.buyerIdentityShown).toBe(false);
+    expect(view.buyer.legalName).toBeNull();
+    expect(view.placeOfSupply).toBe('Maharashtra (27)');
   });
 });
 

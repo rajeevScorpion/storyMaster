@@ -62,7 +62,7 @@ async function loadOriginalReference(row: BillingDocumentRow): Promise<OriginalD
  * 2. Otherwise (or on a cache-read failure) render fresh from the row -- and the original invoice's
  *    reference too, for a credit note.
  * 3. Best-effort: if R2 is usable, write the render and set `storage_ref` (only `WHERE storage_ref IS
- *    NULL`, so a concurrent render can't clobber another's write) -- never awaited into the response.
+ *    NULL`, so a concurrent render can't clobber another's write). A failure is logged, never thrown.
  */
 export async function ensureDocumentPdf(documentId: string): Promise<EnsureDocumentPdfResult | null> {
   const row = await loadBillingDocumentRow(documentId);
@@ -85,13 +85,16 @@ export async function ensureDocumentPdf(documentId: string): Promise<EnsureDocum
   const originalDoc = await loadOriginalReference(row);
   const bytes = await renderDocumentPdf(row, originalDoc);
 
-  // Fire-and-forget: a failed cache write must never fail the download/email that's waiting on bytes.
-  void cacheRenderedPdf(row, bytes).catch((err) => {
+  // Awaited, not fire-and-forget: a serverless function can be frozen once its response is sent, so an
+  // unawaited write may never land. A failed write is still swallowed -- it never fails the caller.
+  try {
+    await cacheRenderedPdf(row, bytes);
+  } catch (err) {
     console.warn('[billing.documents.storage] failed to cache rendered PDF', {
       documentId,
       error: err instanceof Error ? err.message : err,
     });
-  });
+  }
 
   return { bytes, row };
 }

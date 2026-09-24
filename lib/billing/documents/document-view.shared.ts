@@ -3,14 +3,13 @@
  * tax invoice or credit note. `buildDocumentView` takes a frozen `billing_documents` row (and, for a
  * credit note, the original invoice's own number/date -- Rule 53) and returns everything the PDF
  * renderer (render-pdf.ts) prints, with no further decisions left for it to make. Isomorphic and pure
- * so the CGST/SGST-vs-IGST choice, the Rule 46 recipient-detail threshold and the amount-in-words
+ * so the CGST/SGST-vs-IGST choice, the buyer block and the amount-in-words
  * conversion are unit-testable without pdf-lib or a database.
  *
  * Rule 46 (CGST Rules, via ClearTax -- plan §1 "Law"): a registered recipient's GSTIN is always
- * printed when known; an unregistered recipient's name/address/state are only a legal requirement at
- * gross value >= INR 50,000 -- below that we simply may not have collected them, so the buyer block
- * omits name/address rather than printing blanks. Place of supply is a separate, always-mandatory
- * field, independent of that threshold.
+ * printed when known. An unregistered recipient's name and address are only *mandatory* from INR
+ * 50,000, but the rule is a floor, not a ceiling: whatever the buyer gave us is printed at any value,
+ * since a customer expects their own name on their invoice. Place of supply is printed regardless.
  */
 
 import type {
@@ -22,10 +21,6 @@ import type {
 } from '@/lib/billing/documents/types.shared';
 import type { TaxBreakdown } from '@/lib/billing/tax.shared';
 import { indiaStateName } from '@/lib/billing/india-states.shared';
-
-/** Rule 46(f): recipient identity (name/address/state) is only mandatory for an unregistered buyer
- * at or above this gross value. GSTIN, when the buyer is registered, is shown regardless of value. */
-const UNREGISTERED_BUYER_DETAIL_THRESHOLD_MINOR = 50_000 * 100;
 
 export interface DocumentViewLineItem {
   description: string;
@@ -66,8 +61,8 @@ export interface DocumentView {
   providerMode: 'test' | 'live';
   seller: DocumentViewParty;
   buyer: DocumentViewParty;
-  /** Whether the buyer's name/address are printed at all -- false only for an unregistered buyer
-   * below the Rule 46(f) threshold, where we omit rather than print blanks. */
+  /** Whether any buyer identity (name, GSTIN or address) is known -- false only for a document issued
+   * from the minimal fallback snapshot, which the renderer prints as "Unregistered recipient". */
   buyerIdentityShown: boolean;
   placeOfSupply: string;
   reference: { kind: 'payment' | 'refund'; id: string } | null;
@@ -178,32 +173,33 @@ function buildSellerParty(business: DocumentBusinessSnapshot | null): DocumentVi
   };
 }
 
+function countryName(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return code.toUpperCase() === 'IN' ? 'India' : code;
+}
+
 function buildBuyerParty(
   customer: DocumentCustomerSnapshot | null,
-  tax: Partial<TaxBreakdown> | null,
-  grossMinor: number
+  tax: Partial<TaxBreakdown> | null
 ): { party: DocumentViewParty; identityShown: boolean } {
   const stateCode = customer?.stateCode ?? tax?.placeOfSupplyStateCode ?? null;
   const state = customer?.stateName ?? (stateCode ? indiaStateName(stateCode) : null);
   const gstin = customer?.gstin ?? null;
 
-  // Rule 46(f): identity is shown whenever the buyer is registered (GSTIN present), and otherwise
-  // only once the value crosses the unregistered-recipient threshold.
-  const identityShown = Boolean(gstin) || grossMinor >= UNREGISTERED_BUYER_DETAIL_THRESHOLD_MINOR;
+  const legalName = customer?.companyName ?? customer?.legalName ?? null;
+  const addressLines = [customer?.addressLine1, customer?.addressLine2].filter((v): v is string => Boolean(v));
 
   return {
-    identityShown,
+    identityShown: Boolean(legalName || gstin || addressLines.length > 0),
     party: {
-      legalName: identityShown ? (customer?.companyName ?? customer?.legalName ?? null) : null,
+      legalName,
       gstin,
-      addressLines: identityShown
-        ? [customer?.addressLine1, customer?.addressLine2].filter((v): v is string => Boolean(v))
-        : [],
-      city: identityShown ? (customer?.city ?? null) : null,
-      postalCode: identityShown ? (customer?.postalCode ?? null) : null,
+      addressLines,
+      city: customer?.city ?? null,
+      postalCode: customer?.postalCode ?? null,
       state,
       stateCode,
-      country: identityShown ? (customer?.countryCode ?? null) : null,
+      country: countryName(customer?.countryCode),
     },
   };
 }
@@ -248,7 +244,7 @@ export function buildDocumentView(
   originalDoc?: OriginalDocumentReference | null
 ): DocumentView {
   const tax = row.tax_breakdown_json;
-  const buyer = buildBuyerParty(row.customer_snapshot_json, tax, row.gross_minor);
+  const buyer = buildBuyerParty(row.customer_snapshot_json, tax);
   const placeOfSupplyCode = tax?.placeOfSupplyStateCode ?? buyer.party.stateCode ?? null;
   const placeOfSupplyName = placeOfSupplyCode ? (indiaStateName(placeOfSupplyCode) ?? placeOfSupplyCode) : 'Unknown';
 

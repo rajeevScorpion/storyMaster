@@ -7,7 +7,6 @@ import fontkit from '@pdf-lib/fontkit';
 
 import { buildDocumentView, type DocumentView } from '@/lib/billing/documents/document-view.shared';
 import type { BillingDocumentRow, OriginalDocumentReference } from '@/lib/billing/documents/types.shared';
-import { formatCurrencyMinor } from '@/lib/billing/wallet-tax.shared';
 
 /**
  * Payments Phase 6 (docs/payments/phase-6-plan.md §4, Unit B3): draws one A4 page from
@@ -62,8 +61,14 @@ interface Fonts {
   bold: PDFFont;
 }
 
+/** Always two decimals on a tax document ("₹450.00"), unlike the wallet's "₹450". */
 function money(view: DocumentView, minor: number): string {
-  return formatCurrencyMinor(view.currencyCode, minor);
+  return new Intl.NumberFormat(view.currencyCode === 'INR' ? 'en-IN' : 'en-US', {
+    style: 'currency',
+    currency: view.currencyCode,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(minor / 100);
 }
 
 function text(
@@ -186,13 +191,11 @@ export async function renderDocumentPdf(
   text({ page, y: buyerY }, fonts, 'Bill to', { x: buyerX, size: 9, color: MUTED, dy: 14 });
   buyerY -= 14;
   const buyerLines: string[] = [];
-  if (view.buyerIdentityShown && view.buyer.legalName) buyerLines.push(view.buyer.legalName);
+  if (view.buyer.legalName) buyerLines.push(view.buyer.legalName);
   if (view.buyer.gstin) buyerLines.push(`GSTIN ${view.buyer.gstin}`);
-  if (view.buyerIdentityShown) {
-    buyerLines.push(...view.buyer.addressLines);
-    const cityLine = [view.buyer.city, view.buyer.postalCode].filter(Boolean).join(' ');
-    if (cityLine) buyerLines.push(cityLine);
-  }
+  buyerLines.push(...view.buyer.addressLines);
+  const cityLine = [view.buyer.city, view.buyer.state, view.buyer.postalCode].filter(Boolean).join(', ');
+  if (cityLine) buyerLines.push(cityLine);
   if (buyerLines.length === 0) buyerLines.push('Unregistered recipient');
   for (const [i, line] of buyerLines.entries()) {
     text({ page, y: buyerY }, fonts, line, { x: buyerX, size: 10, bold: i === 0, dy: 13 });
