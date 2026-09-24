@@ -886,6 +886,162 @@ yourself; ask for credentials).
   - `WalletPage.tsx:625-643`: the row becomes "Manage billing →".
   - The success state in `CheckoutProgress`: "View receipt and billing".
 
+#### F execution spec — anchored at `a4f2cc8` (2026-09-24), supersedes the plan text above where they differ
+
+**Current-state facts (checked at `a4f2cc8`):**
+- **`/account/delete` has no signed-out redirect** (it is flag-gated only). There is no server-side "sign in and
+  come back" pattern. The client one is `useAuth().openAuthDialog('sign_in', returnTo)`
+  (`components/auth/AuthProvider.tsx:112`).
+- **`reconcilePricingSubscription` (`app/actions/pricing-admin.ts:952`) calls `verifyAdmin()`**, so a
+  user-side call always throws. The ungated path is `syncSubscriptionFromProvider({ supabase, userId,
+  planVersion, providerSubscriptionId, source: 'reconcile', rawPayload })` (`lib/billing/razorpay-sync.ts:516`),
+  which the webhook, verify and reconcile already use.
+- The admin cycle-end cancel is `cancelBillingSubscriptionAtCycleEnd` (`app/actions/admin-billing-actions.ts:488`).
+  Its 134 marker write (`cancel_at_period_end`, `cancel_requested_at`, `cancel_requested_by`) fails closed.
+  It keys idempotency on `admin_user_audit_events.request_key`. That table's `action_type` is constrained
+  (131), so **a user cancel cannot reuse it without a migration. Don't.**
+- `cancelRazorpaySubscription({ subscriptionId, atCycleEnd })` is at `lib/billing/razorpay.ts:191`. The sync
+  no longer derives `cancel_at_period_end` (Unit A). Only a cancel action sets it.
+- Tables:
+  - `billing_subscriptions` has `user_id`, `plan_version_id`, `status`, `billing_interval`,
+    `current_period_end`, `cancel_at_period_end`, `grace_period_ends_at`, `provider_mode`,
+    `cancel_requested_at` / `_by` (134).
+  - `billing_payments` has `user_id`, `kind`, `status` (`captured | failed | refunded | partially_refunded |
+    disputed`), `net/tax/gross_minor`, `tax_breakdown_json`, `method_category` (`card | upi | netbanking |
+    wallet | emi | paylater | other | unknown`), `plan_version_id`, `topup_pack_id`, `cycle_start/_end`,
+    `purchase_snapshot_json` (`planName`, `interval` for a subscription; none on renewals), `provider_mode`,
+    `captured_at`.
+  - `billing_refunds` has **no `user_id`**. Join through `payment_id`. It has `amount_minor`, `status`,
+    `processed_at`.
+  - `billing_documents` has **no `user_id`**. Filter on `subject_ref = userId`. Every row carries
+    `provider_mode`.
+- The RPC blocks a new subscription checkout while one is `authenticated | active | pending | halted`
+  (migration 130). A cycle-end-cancelled subscription stays `active` until it ends.
+- The wallet already has the catalogue and balances: `getPricingWalletPageData()` (`planOffers`, `billingProfile`,
+  `taxPreview`, `audienceMode`) and `usePricingRuntime()` (balances, `nextResetAt`). `buildPlanFeatures` gives
+  a plan's benefits.
+- `taxLinesFromBreakdown` (`lib/billing/checkout-quote.shared.ts`) turns a stored breakdown into IGST or
+  CGST+SGST lines.
+- `isMissingBillingSchemaError` is in `lib/billing/schema-availability.shared.ts`.
+- `UserMenu.tsx:232-241` holds "Wallet & Billing" → `/wallet`. The billing-details row is at `WalletPage.tsx:558-573`.
+- Stale copy now that billing management exists:
+  - `WalletPage`: "Downgrade support coming soon";
+  - `pricing-checkout.ts`: the `subscription_exists` refusal, "Subscription changes will stay manual until
+    account management is live."
+
+**Edits:**
+1. **`lib/billing/billing-account.shared.ts`** (new, pure, tested):
+   - `pickCurrentSubscription(rows, mode)`: prefer `authenticated | active | pending | halted`, newest first,
+     else the newest ended one. Only rows whose `provider_mode` equals `mode`.
+   - `subscriptionBanner(dto, now)`: returns `{ tone, text, action? }`, with dates formatted `24 Oct 2026`:
+     - `active` / `authenticated` → "Renews on <current_period_end>";
+     - `cancel_at_period_end` → "Cancels on <date>. You keep everything until then. You can subscribe again
+       after that.";
+     - `pending` → "We couldn't take this month's payment. Razorpay will retry daily for 3 days.";
+     - `halted` → "Your last payment didn't go through, so your plan is paused." with action `restart`;
+     - `cancelled | expired | completed` → "Ended on <date>".
+   - `methodLabel(category)`: Card, UPI, Netbanking, Wallet, EMI, Pay later, Other; `unknown` gives "—".
+   - `paymentDescription(row, names)`: the plan name, plus "renewal" when it is a renewal, or the pack name.
+   - Tests for every banner state, including `cancel_at_period_end` taking priority over the renewal line.
+2. **`app/actions/billing-account.ts`** (`'use server'`; export only async functions; errors as values):
+   - **`getMyBillingOverview()`**:
+     - Authenticate. Use the admin client, **always `.eq('user_id', userId)`** (or `subject_ref` for
+       documents, or through the user's own payment ids for refunds), and filter every row on
+       `provider_mode = getRazorpayMode()`.
+     - Return DTOs only, never raw JSON: `{ subscription | null, payments: first 20 + hasMore, documents,
+       sections: { subscription, payments, documents } }`. Each section is `'ok' | 'unavailable'`.
+     - A missing-schema error (`isMissingBillingSchemaError`) marks that section `unavailable` and the page
+       still renders.
+     - Plan and pack names come from the snapshot, or failing that from `pricing_plan_versions` →
+       `pricing_plans` / `pricing_topup_packs` by id.
+     - List payments with status `captured | refunded | partially_refunded | disputed` only. A failed attempt
+       is not money.
+   - **`getMyPaymentHistory({ page })`**: the same query and DTO, 20 a page.
+   - **`cancelMySubscription()`**, which returns `{ ok: true, endsAt, alreadyApplied } | { ok: false, error }`:
+     1. Authenticate.
+     2. Load **this user's** subscription with status `authenticated | active | pending` and the current
+        mode. None: `{ ok: false, error: "There's no active plan to cancel." }`.
+     3. If `cancel_at_period_end` is already true, return `alreadyApplied` with no provider call.
+     4. `cancelRazorpaySubscription({ atCycleEnd: true })`. It is a literal, **never an input**
+        (decision 13).
+     5. If Razorpay throws, re-read the row. If it is now `cancel_at_period_end` (a double click raced),
+        return `alreadyApplied`. Otherwise log the full error and return "We couldn't cancel your plan
+        right now. Nothing has changed. Please try again." **Provider text never reaches the client.**
+     6. Write the 134 marker exactly as the admin action does, with `cancel_requested_by: 'user'`, including
+        its fail-closed retry without the 134 columns.
+     7. Best-effort `syncSubscriptionFromProvider(… source: 'reconcile')` in a try/catch. It never fails
+        the result: Razorpay has already accepted the cancel.
+     8. `revalidatePath('/account/billing')`.
+   - **`restartMyHaltedSubscription()`**, which returns `{ ok: true, planVersionId | null } | { ok: false,
+     error }`:
+     1. Load **this user's** `halted` subscription (current mode).
+     2. `cancelRazorpaySubscription({ atCycleEnd: false })`. Halted grants nothing, so ending it now takes
+        nothing away (P5).
+     3. **Await** `syncSubscriptionFromProvider`, so the row reads `cancelled` before the client opens a
+        checkout. Otherwise the RPC would refuse the new checkout.
+     4. Return the old `plan_version_id` if that version is still published and purchasable, else `null`.
+        The client then sends the customer to `/wallet` to pick a plan.
+3. **`app/account/billing/page.tsx`**: `export const dynamic = 'force-dynamic'`. A thin server shell that
+   renders `components/billing/BillingAccountPage.tsx`, with the same page chrome as `/wallet` (header, back
+   link). A signed-out visitor sees one card, "Sign in to see your billing", whose button calls
+   `openAuthDialog('sign_in', '/account/billing')`.
+4. **`components/billing/BillingAccountPage.tsx`** (+ small card components as needed). It uses the `/wallet`
+   look: `rounded-[28px] border-white/10 bg-white/5` sections and the serif headings.
+   1. **Your plan:** name, price per interval, and the banner. Benefits come from the matching `planOffers`
+      entry via `buildPlanFeatures`.
+      - **"Cancel plan"** shows while the plan is live and not already cancelling. It opens one `Modal`
+        confirm: "Cancel your <Plan> plan? You keep everything until <date>. After that you won't be
+        charged again." with the buttons "Keep plan" and "Cancel plan". **No retention screens and no
+        guilt copy. Two clicks in total.** The button disables while in flight.
+      - An error shows inline. On success, reload the overview.
+      - **"Restart your plan"** (halted) calls restart. With a `planVersionId`, it opens E2's
+        `CheckoutSummarySheet` for that version, which needs the Razorpay script: reuse
+        `RazorpayScript` / `useRazorpayCheckout`. With `null`, it shows "Choose a plan on your wallet." with
+        a link.
+      - No plan: "You're on the free plan." and a link to `/wallet`.
+   2. **Coins:** the subscription, top-up and bonus balances from `usePricingRuntime()`, plus "Subscription
+      coins reset on <nextResetAt>". Plans with no coins skip that line.
+   3. **Payment history:** date, description, method, gross, and the tax line (`taxLinesFromBreakdown`). A
+      refund is an indented row: "Refunded ₹X on <date>", or "Refund processing" while it isn't processed.
+      "Show more" pages through `getMyPaymentHistory`. Empty: "No payments yet."
+   4. **Invoices & receipts:** list any `billing_documents` (number, date, total). Empty: "Tax invoices will
+      appear here." **No download buttons.**
+   5. **Billing details:** a read-only summary (Personal/Business, name, state, GSTIN when Business) with
+      "Edit", which opens `BillingDetailsDialog` with `context="manage"`. A section marked `unavailable`
+      shows "This isn't available right now."
+   - The page must fit a 360px-wide screen.
+5. **Links:**
+   - `UserMenu.tsx`: add "Billing" → `/account/billing` right after "Wallet & Billing". Use the same markup,
+     a `Receipt` icon, and the same new-tab rule.
+   - `WalletPage.tsx`: add a "Manage billing →" link to `/account/billing` beside the billing-details row's
+     Edit button. Keep Edit, because the checkout-first flow uses it.
+   - `CheckoutSummarySheet.tsx` success state: a "View receipt and billing" link to `/account/billing` beside
+     "Done".
+6. **Copy now that management exists (P2(a)):**
+   - `pricing-checkout.ts`'s `subscription_exists` message: "You already have a plan. To switch, cancel it
+     in Billing. You can choose a new plan once it ends." Update the tests that assert the old text.
+   - `WalletPage`'s "Downgrade support coming soon": "Switch after your plan ends".
+
+**Tests:** `billing-account.shared.test.ts`. An action test for `cancelMySubscription`, mocking the same modules
+`pricing-checkout.test.ts` mocks, covering:
+- no live subscription gives the error;
+- `alreadyApplied` makes no provider call;
+- the provider is called with `atCycleEnd: true`;
+- a provider throw followed by a raced marker gives `alreadyApplied`;
+- a provider throw with no marker gives the generic sentence, with no provider text;
+- another user's subscription is never loaded (the query filters on `user_id`).
+
+**Verify:** tsc, lint, `npm test`, `build:verify`, `e2e/smoke.spec.ts`. Then Opus walks `/account/billing`
+signed in as `testuser` on dev. **Do not walk a subscribe:** Razorpay's card-save step texts the owner's real
+phone. The cancel click is walked only once there is a live test subscription, and with the owner's go-ahead.
+**Review focus for Opus (cancel path line by line):**
+- every query filters on the signed-in user;
+- `atCycleEnd` is a literal;
+- no provider or DB text reaches the client;
+- the marker write matches the admin action's fail-closed shape;
+- restart awaits the sync before returning;
+- nothing new is `'use server'`-exported that isn't an async function.
+
 ### Unit G — plan comparison, `/plans` (Sonnet)
 
 - `app/plans/page.tsx`, a server component that is public. It reads the published catalogue for the viewer's
