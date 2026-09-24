@@ -162,6 +162,30 @@ inherit Free. Video export reads "720p vertical video" on every tier. Check that
 - the Refund Policy copy made final;
 - applying 134 on prod at release.
 
+**Owner, 2026-09-24: all five items above are deferred.** The owner will do them later, before Phase 5 ships
+to prod. Work moves on to Phases 6-8 now. **None of the five may be dropped.** Each one still gates the prod
+release, and the Phase 7 go-live checklist must carry every one of them.
+
+**Phase 6 owner decisions (2026-09-24), all as recommended:**
+- **Q1 Email:** Resend. The owner adds the kissago.cc DNS records and the API key later.
+- **Q2 Documents:** every payment gets a GST tax invoice, with the buyer's GSTIN when one was given. Every
+  refund gets a credit note.
+- **Q3 Numbering:** `KG/26-27/000001` for invoices and `KGC/26-27/000001` for credit notes. The CA may still
+  change it before issuing goes live.
+- **Issuing stays off on prod until the CA confirms** the format and the credit-note rules. Dev may switch it
+  on for the walk, because test-mode payments number in a separate `TEST-` series (plan §2).
+- Usage at the start of Phase 6 planning: **2%**.
+
+**Phase 6 planned 2026-09-24: `phase-6-plan.md`.**
+- **Order:** M → A → (B ∥ C1) → C2 → D → walk.
+- **Migration 135 written** (unit M): an atomic issue-and-number function, a test/live series split, a
+  one-document-per-payment index, the `billing_notification_jobs` queue, and the `billing_emails_enabled` flag.
+  **Applied nowhere.**
+- **Unit A fixes the refund defect.** `refund.created` recorded `processed`, and nothing re-checked pending
+  refunds. It also adds a pending-refund sweep to the reconcile.
+- **Owner actions** are in plan §8: apply 135 on dev, set up Resend and its DNS, add `refund.processed` to
+  the Razorpay test webhook, confirm the Vercel plan's cron limit, and ask the CA the §7 questions.
+
 **Next session starts with:**
 1. The phase brief.
 2. Whatever the owner picks from the "left" list above, and the subscribe/cancel walk if the OTP limit has
