@@ -14,6 +14,13 @@
  * before it reaches the html field. Fixed copy (headings, button labels) is written directly; nothing
  * here ever needs to be escaped twice.
  *
+ * Payments Phase 6 (docs/payments/phase-6-plan.md §10, C2 "The template fix"): `subject` and `text`
+ * are plain text read outside a browser (a mail client's subject line, a text/plain body), so they
+ * carry the RAW name -- HTML-escaping there would corrupt them ("A&B" must arrive as "A&B", not
+ * "A&amp;B"). Only the `html` field's heading escapes. Every builder below therefore computes the
+ * heading twice where a kind's heading carries untrusted data: once raw (subject/text) and once
+ * escaped (the html heading) -- see `templates.shared.test.ts`'s "subject/text stay unescaped" cases.
+ *
  * `formatInr` always shows two decimal places ("₹531.00"), unlike wallet-tax.shared.ts's
  * `formatCurrencyMinor`, which drops the fraction on a whole rupee -- the plan's own copy examples
  * ("Payment received — ₹531.00") show paise unconditionally, and a receipt is a legal-adjacent
@@ -146,9 +153,15 @@ export interface PaymentReceiptEmailInput {
 export function buildPaymentReceiptEmail(input: PaymentReceiptEmailInput): EmailContent {
   const amount = formatInr(input.grossMinor);
   const itemLabel = escapeHtml(input.itemLabel);
+  const planNameRaw = input.planName ?? 'Kissago';
+  // subject/text carry the raw name (an email client renders them as plain text, so escaping would
+  // corrupt them -- "A&B" must arrive as "A&B", not "A&amp;B"); only the html heading below escapes it.
   const heading = input.variant === 'renewal'
-    ? `Your ${escapeHtml(input.planName ?? 'Kissago')} plan renewed`
+    ? `Your ${planNameRaw} plan renewed`
     : `Payment received — ${amount}`;
+  const htmlHeading = input.variant === 'renewal'
+    ? `Your ${escapeHtml(planNameRaw)} plan renewed`
+    : heading;
   const invoiceHtml = input.hasInvoice ? ' The invoice is attached to this email.' : '';
   const invoiceText = input.hasInvoice ? ' The invoice is attached to this email.' : '';
 
@@ -156,7 +169,7 @@ export function buildPaymentReceiptEmail(input: PaymentReceiptEmailInput): Email
     subject: heading,
     html: renderHtml({
       appUrl: input.appUrl,
-      heading,
+      heading: htmlHeading,
       bodyHtml: `<p style="margin:0 0 12px 0;">Your payment of <strong>${amount}</strong> for <strong>${itemLabel}</strong> was received.${invoiceHtml}</p>`,
       buttonLabel: 'View billing',
       buttonUrl: billingUrl(input.appUrl),
@@ -217,8 +230,8 @@ export interface SubscriptionPaymentFailedEmailInput {
 }
 
 export function buildSubscriptionPaymentFailedEmail(input: SubscriptionPaymentFailedEmailInput): EmailContent {
-  const planName = escapeHtml(input.planName);
-  const heading = `We couldn't renew your ${planName} plan`;
+  const heading = `We couldn't renew your ${input.planName} plan`;
+  const htmlHeading = `We couldn't renew your ${escapeHtml(input.planName)} plan`;
   const graceDate = formatIstDate(input.graceEndsAt);
   const buttonUrl = input.shortUrl?.trim() || billingUrl(input.appUrl);
 
@@ -226,7 +239,7 @@ export function buildSubscriptionPaymentFailedEmail(input: SubscriptionPaymentFa
     subject: heading,
     html: renderHtml({
       appUrl: input.appUrl,
-      heading,
+      heading: htmlHeading,
       bodyHtml: `<p style="margin:0;">Razorpay will retry the payment automatically. Your access continues until <strong>${graceDate}</strong>.</p>`,
       buttonLabel: 'Update payment',
       buttonUrl,
@@ -278,14 +291,14 @@ export interface SubscriptionEndedEmailInput {
 }
 
 export function buildSubscriptionEndedEmail(input: SubscriptionEndedEmailInput): EmailContent {
-  const planName = escapeHtml(input.planName);
-  const heading = `Your ${planName} plan has ended`;
+  const heading = `Your ${input.planName} plan has ended`;
+  const htmlHeading = `Your ${escapeHtml(input.planName)} plan has ended`;
 
   return {
     subject: heading,
     html: renderHtml({
       appUrl: input.appUrl,
-      heading,
+      heading: htmlHeading,
       bodyHtml: `<p style="margin:0;">Billing has stopped and your plan has ended. You can restart anytime.</p>`,
       buttonLabel: 'Restart',
       buttonUrl: `${input.appUrl}/plans`,
@@ -310,16 +323,16 @@ export interface RenewalReminderEmailInput {
 }
 
 export function buildRenewalReminderEmail(input: RenewalReminderEmailInput): EmailContent {
-  const planName = escapeHtml(input.planName);
   const renewDate = formatIstDate(input.renewsAt);
   const amount = formatInr(input.grossMinor);
-  const heading = `Your ${planName} plan renews on ${renewDate} for ${amount}`;
+  const heading = `Your ${input.planName} plan renews on ${renewDate} for ${amount}`;
+  const htmlHeading = `Your ${escapeHtml(input.planName)} plan renews on ${renewDate} for ${amount}`;
 
   return {
     subject: heading,
     html: renderHtml({
       appUrl: input.appUrl,
-      heading,
+      heading: htmlHeading,
       bodyHtml: `<p style="margin:0;">This is a reminder that your annual plan is about to renew. No action is needed unless you want to make changes.</p>`,
       buttonLabel: 'Manage plan',
       buttonUrl: billingUrl(input.appUrl),
@@ -341,14 +354,14 @@ export interface DocumentResendEmailInput {
 }
 
 export function buildDocumentResendEmail(input: DocumentResendEmailInput): EmailContent {
-  const documentNumber = escapeHtml(input.documentNumber);
-  const heading = `Your document ${documentNumber}`;
+  const heading = `Your document ${input.documentNumber}`;
+  const htmlHeading = `Your document ${escapeHtml(input.documentNumber)}`;
 
   return {
     subject: heading,
     html: renderHtml({
       appUrl: input.appUrl,
-      heading,
+      heading: htmlHeading,
       bodyHtml: `<p style="margin:0;">The document you requested is attached to this email.</p>`,
       buttonLabel: 'View billing',
       buttonUrl: billingUrl(input.appUrl),

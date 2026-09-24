@@ -60,7 +60,7 @@ describe('buildPaymentReceiptEmail', () => {
     expect(result.text).not.toContain('invoice is attached');
   });
 
-  it('uses the renewal heading and escapes the plan name', () => {
+  it('uses the renewal heading, escaping the plan name only in the html', () => {
     const result = buildPaymentReceiptEmail({
       appUrl: APP_URL,
       variant: 'renewal',
@@ -69,7 +69,10 @@ describe('buildPaymentReceiptEmail', () => {
       grossMinor: 19900,
       hasInvoice: true,
     });
-    expect(result.subject).toBe(`Your ${XSS_ESCAPED} plan renewed`);
+    // subject/text are plain text (a mail client's subject line, a text/plain body) -- escaping them
+    // would corrupt the name a reader actually sees, so they carry it raw.
+    expect(result.subject).toBe(`Your ${XSS_NAME} plan renewed`);
+    expect(result.text).toContain(`Your ${XSS_NAME} plan renewed`);
     expect(result.html).toContain(XSS_ESCAPED);
     expect(result.html).not.toContain('<script>alert(1)</script>');
   });
@@ -113,12 +116,13 @@ describe('buildSubscriptionPaymentFailedEmail', () => {
     expect(result.html).toContain(`${APP_URL}/account/billing`);
   });
 
-  it('escapes an untrusted plan name', () => {
+  it('escapes an untrusted plan name in the html only, keeping the subject raw', () => {
     const result = buildSubscriptionPaymentFailedEmail({
       appUrl: APP_URL,
       planName: XSS_NAME,
       graceEndsAt: '2026-10-05T00:00:00.000Z',
     });
+    expect(result.subject).toBe(`We couldn't renew your ${XSS_NAME} plan`);
     expect(result.html).toContain(XSS_ESCAPED);
     expect(result.html).not.toContain('<script>alert(1)</script>');
   });
@@ -133,9 +137,11 @@ describe('buildCancelScheduledEmail', () => {
 });
 
 describe('buildSubscriptionEndedEmail', () => {
-  it('links Restart to /plans and escapes the plan name', () => {
+  it('links Restart to /plans, escaping the plan name in the html only', () => {
     const result = buildSubscriptionEndedEmail({ appUrl: APP_URL, planName: XSS_NAME });
-    expect(result.subject).toBe(`Your ${XSS_ESCAPED} plan has ended`);
+    expect(result.subject).toBe(`Your ${XSS_NAME} plan has ended`);
+    expect(result.text).toContain(`Your ${XSS_NAME} plan has ended`);
+    expect(result.html).toContain(XSS_ESCAPED);
     expect(result.html).toContain(`${APP_URL}/plans`);
     expect(result.html).not.toContain('<script>alert(1)</script>');
   });
@@ -152,13 +158,75 @@ describe('buildRenewalReminderEmail', () => {
     expect(result.subject).toBe('Your Kissago Pro plan renews on 25 Dec 2026 for ₹1,999.00');
     expect(result.html).toContain(`${APP_URL}/account/billing`);
   });
+
+  it('escapes an untrusted plan name in the html only, keeping the subject raw', () => {
+    const result = buildRenewalReminderEmail({
+      appUrl: APP_URL,
+      planName: XSS_NAME,
+      renewsAt: '2026-12-25T00:00:00.000Z',
+      grossMinor: 199900,
+    });
+    expect(result.subject).toBe(`Your ${XSS_NAME} plan renews on 25 Dec 2026 for ₹1,999.00`);
+    expect(result.html).toContain(XSS_ESCAPED);
+    expect(result.html).not.toContain('<script>alert(1)</script>');
+  });
 });
 
 describe('buildDocumentResendEmail', () => {
-  it('names the document and escapes it', () => {
+  it('names the document, escaping it in the html only', () => {
     const result = buildDocumentResendEmail({ appUrl: APP_URL, documentNumber: XSS_NAME });
-    expect(result.subject).toBe(`Your document ${XSS_ESCAPED}`);
+    expect(result.subject).toBe(`Your document ${XSS_NAME}`);
+    expect(result.text).toContain(`Your document ${XSS_NAME}`);
     expect(result.html).toContain(XSS_ESCAPED);
     expect(result.html).not.toContain('<script>alert(1)</script>');
+  });
+});
+
+describe('Payments Phase 6 C2 template fix -- subject/text are never escaped', () => {
+  // The defect: every builder used to reuse the SAME (escaped) heading string for subject, html and
+  // text, so a name with "&" arrived in a mail client's subject line as "&amp;" -- readable nowhere
+  // outside a browser. This is a cross-cutting regression test for every kind whose heading carries
+  // untrusted data, distinct from the per-kind escaping tests above (which check the html side).
+  const AMPERSAND_NAME = 'Bed & Breakfast';
+
+  it('buildPaymentReceiptEmail (renewal)', () => {
+    const result = buildPaymentReceiptEmail({
+      appUrl: APP_URL, variant: 'renewal', itemLabel: 'x', planName: AMPERSAND_NAME, grossMinor: 100, hasInvoice: false,
+    });
+    expect(result.subject).not.toContain('&amp;');
+    expect(result.text).not.toContain('&amp;');
+    expect(result.html).toContain('&amp;');
+  });
+
+  it('buildSubscriptionPaymentFailedEmail', () => {
+    const result = buildSubscriptionPaymentFailedEmail({
+      appUrl: APP_URL, planName: AMPERSAND_NAME, graceEndsAt: '2026-10-05T00:00:00.000Z',
+    });
+    expect(result.subject).not.toContain('&amp;');
+    expect(result.text).not.toContain('&amp;');
+    expect(result.html).toContain('&amp;');
+  });
+
+  it('buildSubscriptionEndedEmail', () => {
+    const result = buildSubscriptionEndedEmail({ appUrl: APP_URL, planName: AMPERSAND_NAME });
+    expect(result.subject).not.toContain('&amp;');
+    expect(result.text).not.toContain('&amp;');
+    expect(result.html).toContain('&amp;');
+  });
+
+  it('buildRenewalReminderEmail', () => {
+    const result = buildRenewalReminderEmail({
+      appUrl: APP_URL, planName: AMPERSAND_NAME, renewsAt: '2026-12-25T00:00:00.000Z', grossMinor: 100,
+    });
+    expect(result.subject).not.toContain('&amp;');
+    expect(result.text).not.toContain('&amp;');
+    expect(result.html).toContain('&amp;');
+  });
+
+  it('buildDocumentResendEmail', () => {
+    const result = buildDocumentResendEmail({ appUrl: APP_URL, documentNumber: AMPERSAND_NAME });
+    expect(result.subject).not.toContain('&amp;');
+    expect(result.text).not.toContain('&amp;');
+    expect(result.html).toContain('&amp;');
   });
 });
