@@ -72,6 +72,10 @@ describe('nextCheckoutSheetState — the documented path', () => {
     expect(nextCheckoutSheetState('opening', 'prepare_failed')).toBe('summary');
   });
 
+  it("returns to summary when Razorpay's open() throws after the window phase fired", () => {
+    expect(nextCheckoutSheetState('window', 'prepare_failed')).toBe('summary');
+  });
+
   it('returns to summary on a plain dismissal from checking', () => {
     expect(nextCheckoutSheetState('checking', 'dismissed')).toBe('summary');
   });

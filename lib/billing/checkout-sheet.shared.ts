@@ -50,10 +50,10 @@ export function nextCheckoutSheetState(state: CheckoutSheetState, event: Checkou
       return state === 'quoting' ? 'quote_error' : state;
     case 'continue':
       return state === 'summary' ? 'opening' : state;
-    // A prepare rejection (the fetch to /api/billing/razorpay/prepare itself failing or refusing)
-    // returns to summary with its message shown inline, rather than a separate error screen.
+    // A prepare rejection returns to summary with its message shown inline. It can also land in
+    // 'window': that phase fires just before Razorpay's open(), which can itself throw.
     case 'prepare_failed':
-      return state === 'opening' ? 'summary' : state;
+      return state === 'opening' || state === 'window' ? 'summary' : state;
     case 'window_opened':
       return state === 'opening' ? 'window' : state;
     case 'verifying':

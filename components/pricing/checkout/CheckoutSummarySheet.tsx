@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { CheckCircle2, Loader2, ShoppingBag, X } from 'lucide-react';
 
@@ -50,7 +50,9 @@ export interface CheckoutSummarySheetProps {
 function describeSuccessFromQuote(quote: CheckoutQuote | null): string {
   if (!quote) return 'Payment received.';
   if (quote.kind === 'subscription') {
-    return `Your ${quote.title} plan is active. ${quote.coins.toLocaleString()} coins were added.`;
+    return quote.coins > 0
+      ? `Your ${quote.title} plan is active. ${quote.coins.toLocaleString()} coins were added.`
+      : `Your ${quote.title} plan is active.`;
   }
   return `${quote.coins.toLocaleString()} coins were added to your wallet.`;
 }
@@ -78,6 +80,8 @@ export default function CheckoutSummarySheet({
   const [prepareErrorMessage, setPrepareErrorMessage] = useState<string | null>(null);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
   const [attested, setAttested] = useState(false);
+  // Bumped on every open, so a poll still running from an earlier session can't write into this one.
+  const sessionRef = useRef(0);
 
   const send = useCallback((event: CheckoutSheetEvent) => {
     setState((current) => nextCheckoutSheetState(current, event));
@@ -90,6 +94,7 @@ export default function CheckoutSummarySheet({
     if (!open || !target) return;
 
     let cancelled = false;
+    sessionRef.current += 1;
     setState('quoting');
     setQuote(null);
     setQuoteErrorMessage(null);
@@ -124,10 +129,13 @@ export default function CheckoutSummarySheet({
   }, [open]);
 
   const applyOutcome = useCallback(
-    async (outcome: CheckoutOutcome) => {
+    async (outcome: CheckoutOutcome, session: number) => {
+      if (sessionRef.current !== session) return;
       switch (outcome.kind) {
         case 'success':
-          setResultMessage(outcome.message);
+          // The quote, not verify's text: when the webhook settles first, verify only knows the
+          // grant "has already been applied", which reads wrong to someone who just paid.
+          setResultMessage(quote ? describeSuccessFromQuote(quote) : outcome.message);
           send('success');
           onSettled();
           break;
@@ -135,6 +143,7 @@ export default function CheckoutSummarySheet({
           send('confirming');
           onSettled();
           const pollResult = await pollUntilPaid(outcome.internalOrderId);
+          if (sessionRef.current !== session) return;
           if (pollResult === 'paid') {
             setResultMessage(describeSuccessFromQuote(quote));
             send('success');
@@ -161,6 +170,7 @@ export default function CheckoutSummarySheet({
 
     setPrepareErrorMessage(null);
     send('continue');
+    const session = sessionRef.current;
 
     try {
       const outcome = await startRazorpayCheckout({
@@ -168,13 +178,15 @@ export default function CheckoutSummarySheet({
         pricingMarketKey,
         adultAttested: true,
         onProgress: (phase) => {
+          if (sessionRef.current !== session) return;
           if (phase === 'window') send('window_opened');
           else if (phase === 'verifying') send('verifying');
           else if (phase === 'checking') send('checking');
         },
       });
-      await applyOutcome(outcome);
+      await applyOutcome(outcome, session);
     } catch (err) {
+      if (sessionRef.current !== session) return;
       // startRazorpayCheckout only rejects for a prepare failure -- its message is already sanitised
       // (app/api/billing/razorpay/prepare/route.ts).
       setPrepareErrorMessage(err instanceof Error ? err.message : 'Failed to start checkout.');
@@ -202,7 +214,7 @@ export default function CheckoutSummarySheet({
               <h2 className="text-lg font-serif text-neutral-100">{quote ? quote.title : 'Checkout'}</h2>
               {quote && (
                 <p className="mt-0.5 text-xs text-neutral-500">
-                  {quote.kind === 'subscription' ? 'Monthly plan' : 'One-time top-up'}
+                  {quote.kind === 'topup' ? 'One-time top-up' : quote.interval === 'annual' ? 'Yearly plan' : 'Monthly plan'}
                 </p>
               )}
             </div>
@@ -271,7 +283,9 @@ export default function CheckoutSummarySheet({
                     {formatRenewalLine(quote.interval, quote.nextChargeDate)} Cancel anytime; you keep access until
                     the period ends.
                   </p>
-                  <p>{quote.coins.toLocaleString()} coins each month. They reset every cycle and don&apos;t roll over.</p>
+                  {quote.coins > 0 && (
+                    <p>{quote.coins.toLocaleString()} coins each month. They reset every cycle and don&apos;t roll over.</p>
+                  )}
                   {unlimitedWatching && <p>Unlimited watching.</p>}
                 </>
               ) : (
