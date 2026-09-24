@@ -1060,6 +1060,90 @@ phone. The cancel click is walked only once there is a live test subscription, a
 - `e2e/plans.spec.ts`, signed-out: the page renders, lists four plans, shows no ₹0 paid plan, and the table
   collapses at a phone width.
 
+#### G execution spec — anchored at `1cd1405` (2026-09-24), supersedes the plan text above where they differ
+
+**Current-state facts (checked at `1cd1405`):**
+- **Only `/wallet` is served without cross-origin isolation** (`next.config.ts:22`,
+  `lib/navigation/cross-origin-isolation.shared.ts:7`). Every other route gets COEP `credentialless`,
+  which **blocks Razorpay Checkout's frame**. So:
+  - `/plans` must never open checkout itself.
+  - **F's "Restart your plan" is broken today.** `components/billing/BillingAccountPage.tsx` opens
+    `CheckoutSummarySheet` in place on `/account/billing`, which is isolated. This unit fixes it.
+- `getPricingWalletPageData({ pricingMarketKey, currentPlanKey })` (`app/actions/pricing-runtime.ts:211`)
+  works signed out and returns `planOffers` (`PricingPlanOfferCard`: price per interval, `monthlyCoins`,
+  `storyLengthCap`, downloads, unbranded exports, creator controls, `unlimitedWatching`, `videoExportPreset`,
+  `isCurrentPlan`, `monthlyPlanVersionId` / `annualPlanVersionId`).
+  `getPricingRuntimeContext()` (`:53`) gives the viewer's market and current plan.
+- `buildPlanFeatures` / `getPlanDescription` (`lib/pricing/plan-copy.shared.ts`) are the wallet's plan copy.
+  Reuse them, don't rewrite.
+- The free daily watch quota is the pricing control `pricing_free_daily_watch_quota`
+  (`lib/pricing/snapshot.ts:76` → `controls.freeDailyWatchQuota`). Read it from there; never type the number in.
+- E2's sheet opens from `WalletPage` through `openCheckoutSheet(input, unlimitedWatching)`, behind the
+  billing-dialog-first gate (`handlePlanCheckout`). `WalletPage` reads no query parameters today.
+- The RPC refuses a second live subscription. Under P2(a), someone already on a paid plan switches by
+  cancelling, then subscribing once it ends. F's banner has that date.
+- `/[slug]` is the managed-pages catch-all. A static `app/plans/` route takes precedence. Check that the
+  registry has no `plans` slug.
+
+**Edits:**
+1. **`WalletPage.tsx`: `?checkout=<planVersionId>`.**
+   - On load, when signed in, not kids, checkout is enabled and the offers are loaded, find the offer whose
+     `monthlyPlanVersionId` or `annualPlanVersionId` matches, and run the same path as clicking its
+     button (`handlePlanCheckout`, billing dialog first).
+   - Then remove the parameter with `router.replace('/wallet')`, so a reload doesn't reopen it.
+   - Unknown or unpurchasable ids are ignored silently.
+   - It fires once per page load (use a ref).
+2. **F's restart fix:** in `BillingAccountPage.tsx`, after `restartMyHaltedSubscription()` returns a
+   `planVersionId`, go to `/wallet?checkout=<id>` with a full `window.location.assign`. The isolation
+   boundary needs a real document load (see `cross-origin-isolation.shared.ts`). Delete the in-page
+   `CheckoutSummarySheet`, `RazorpayScript` and `useRazorpayCheckout` from that page. A `null` id keeps
+   today's "Choose a plan on your wallet" line.
+3. **`app/plans/page.tsx`**: a public server component, `force-dynamic`, with a `metadata` title "Plans".
+   It uses the same page chrome as `/wallet` (logo header, dark `bg-neutral-950`), and loads:
+   - `getPricingRuntimeContext()` for the market (IN when signed out) and the current plan;
+   - `getPricingWalletPageData(...)` for the offers;
+   - the free watch quota control.
+   It renders `components/pricing/PlansComparison.tsx`, a client component only if it needs to be.
+4. **`PlansComparison`:**
+   - **At `md` and up, a real `<table>`**: one column per plan, with rows for:
+     - price, GST-exclusive: "₹200 / month + GST", or "Free";
+     - coins a month (`monthlyCoins`; "—" when 0);
+     - watching: "Unlimited", or "{freeDailyWatchQuota} stories a day";
+     - story length (`storyLengthCap` beats);
+     - downloads, unbranded exports, creator controls (✓ / —);
+     - video export quality (a readable label for `videoExportPreset`).
+   - **Below `md`, stacked cards** with the same facts, plus `buildPlanFeatures` bullets.
+   - Annual prices show only if an offer has an `annualPriceMinor` and an annual version. None is
+     published today, so there is no toggle.
+   - **A paid plan with a missing or ₹0 price is never shown as ₹0.** It shows "Coming soon", with no CTA.
+   - **CTAs:**
+     - signed out: "Sign in to choose <Plan>", via `openAuthDialog('sign_in', '/plans')`;
+     - signed in, current plan: "Your plan" (disabled);
+     - signed in, no paid plan: a link to `/wallet?checkout=<monthlyPlanVersionId>`;
+     - signed in, on a different paid plan (P2(a)): "Switch after your plan ends", disabled, with one line:
+       "Cancel your current plan in Billing, then choose this one once it ends." "Billing" links to
+       `/account/billing`.
+     - Free is "Included with every account" and has no CTA.
+   - Footer line: "Prices exclude GST, which is added at checkout. Coins reset each cycle and don't roll
+     over. Top-up coins never expire." Plus links to the Terms and the Refund Policy.
+5. **Links in:** `WalletPage`'s Plans section header gets "Compare plans →" (`/plans`). The account menu
+   is unchanged.
+6. **`e2e/plans.spec.ts`** (signed out):
+   - `/plans` returns 200 and lists every public plan name;
+   - no card or table cell shows "₹0" beside a paid plan;
+   - at 1280px a `table` is visible;
+   - at 375px the table is hidden, the cards are visible, and there is no horizontal scroll.
+
+**Tests:** any new pure helper, such as the CTA state or the preset label, goes in a `*.shared.ts` with a
+vitest test. That includes the CTA table: signed out, current, free, and paid-to-paid under P2(a).
+**Verify:** tsc, lint, `npm test`, `build:verify`, and `npx playwright test e2e/smoke.spec.ts e2e/plans.spec.ts`.
+Then Opus walks `/plans` signed out and signed in, and `/wallet?checkout=…` opening the sheet.
+**Review focus:**
+- nothing on `/plans` loads Razorpay;
+- `?checkout=` goes through the billing-dialog-first gate and can't loop;
+- the restart hand-off is a full navigation;
+- the quota comes from the control, not a literal.
+
 ---
 
 ## 6. Verification
