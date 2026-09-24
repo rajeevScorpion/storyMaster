@@ -129,7 +129,7 @@ export default function PlansComparison({
                 {offers.map((offer) => (
                   <th key={offer.planKey} scope="col" className="px-5 py-5 align-top">
                     <span className="text-lg font-serif text-neutral-100">{offer.name}</span>
-                    {offer.isCurrentPlan && (
+                    {userId && offer.isCurrentPlan && (
                       <span className="ml-2 inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 align-middle text-[10px] uppercase tracking-[0.18em] text-emerald-200">
                         Current
                       </span>
@@ -226,11 +226,11 @@ export default function PlansComparison({
             return (
               <article
                 key={offer.planKey}
-                className={`rounded-3xl border p-5 ${offer.isCurrentPlan ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-white/10 bg-neutral-900/60'}`}
+                className={`rounded-3xl border p-5 ${userId && offer.isCurrentPlan ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-white/10 bg-neutral-900/60'}`}
               >
                 <div className="flex items-start justify-between gap-3">
                   <p className="text-lg font-serif text-neutral-100">{offer.name}</p>
-                  {offer.isCurrentPlan && (
+                  {userId && offer.isCurrentPlan && (
                     <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-emerald-200">
                       Current
                     </span>
