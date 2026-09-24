@@ -65,8 +65,12 @@ function resolveSupportEmail(): string | null {
 /** Best-effort plan-name/interval lookup, mirroring admin-users.ts's loadBillingSubscriptionPlanKeys
  * embed pattern. Enrichment only: a failure here falls back to a generic name rather than blocking
  * the invoice, since the amount/tax/GST fields (the parts that actually matter for a tax document)
- * don't depend on it. */
-async function resolvePlanLineItemFields(
+ * don't depend on it.
+ *
+ * Exported for Unit C2's processors.ts, which needs the same plan-name lookup for the receipt/renewal/
+ * cancel/ended/reminder email copy -- reused rather than re-implemented so a subscription's plan name
+ * is resolved identically for its invoice and for its emails. */
+export async function resolvePlanLineItemFields(
   supabase: AdminClient,
   planVersionId: string | null
 ): Promise<{ planName: string; billingInterval: BillingInterval }> {
