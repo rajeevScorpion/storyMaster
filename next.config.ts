@@ -101,6 +101,9 @@ const nextConfig: NextConfig = {
   // bundle so /admin/help can fs.readFile it at runtime.
   outputFileTracingIncludes: {
     '/admin/help': ['./docs/admin-settings-manual.md'],
+    // Payments Phase 6 Unit B: render-pdf.ts fs.readFiles these TTFs at runtime, and Next's
+    // dependency trace can't see through that dynamic path.join() read to know they're needed.
+    '/api/billing/**': ['./lib/billing/documents/fonts/**'],
   },
   transpilePackages: ['motion'],
 };

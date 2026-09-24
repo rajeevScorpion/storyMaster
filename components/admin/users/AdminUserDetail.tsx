@@ -14,6 +14,7 @@ import {
   Clock3,
   Coins,
   CreditCard,
+  Download,
   Eye,
   ExternalLink,
   FileText,
@@ -969,7 +970,7 @@ export default function AdminUserDetail({
           sectionKey="documents"
           status={data.billing.documents.status}
           items={data.billing.documents.items}
-          headerCells={['Number', 'Type', 'Amount', 'Status', 'Issued']}
+          headerCells={['Number', 'Type', 'Amount', 'Status', 'Issued', '']}
           renderRow={(doc) => (
             <tr key={doc.id} className="border-b border-white/5 last:border-0">
               <td className="py-3 pr-4 text-neutral-200">{doc.documentNumber}</td>
@@ -977,6 +978,16 @@ export default function AdminUserDetail({
               <td className="px-4 py-3 text-neutral-300">{formatCurrencyMinor(doc.currencyCode, doc.grossMinor)}</td>
               <td className="px-4 py-3 capitalize text-neutral-500">{doc.status}</td>
               <td className="px-4 py-3 text-neutral-500">{formatDate(doc.issuedAt)}</td>
+              <td className="py-3 pl-4 text-right">
+                <a
+                  href={`/api/billing/documents/${doc.id}/pdf`}
+                  download
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-neutral-300 transition-colors hover:border-white/20 hover:bg-white/10 hover:text-neutral-100"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Download
+                </a>
+              </td>
             </tr>
           )}
         />

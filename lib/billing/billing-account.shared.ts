@@ -34,10 +34,20 @@ export interface BillingPaymentOverview {
 
 export interface BillingDocumentOverview {
   id: string;
+  documentType: string;
   documentNumber: string;
   issuedAt: string;
   totalMinor: number;
   currencyCode: string;
+}
+
+/** "Invoice" / "Credit note" for the billing page's document list (Payments Phase 6, Unit B6).
+ * Anything else (a legacy 'receipt' row, or an unrecognised future type) falls back to "Document"
+ * rather than printing the raw snake_case value. */
+export function documentTypeLabel(documentType: string): string {
+  if (documentType === 'tax_invoice') return 'Invoice';
+  if (documentType === 'credit_note') return 'Credit note';
+  return 'Document';
 }
 
 export interface BillingOverviewSections {

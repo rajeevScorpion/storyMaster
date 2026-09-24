@@ -454,7 +454,7 @@ async function loadDocumentsOverview(
 ): Promise<{ documents: BillingDocumentOverview[] } | { unavailable: true }> {
   const result = await supabase
     .from('billing_documents')
-    .select('id, document_number, issued_at, gross_minor, currency_code')
+    .select('id, document_type, document_number, issued_at, gross_minor, currency_code')
     .eq('subject_ref', userId)
     .order('issued_at', { ascending: false });
 
@@ -465,12 +465,14 @@ async function loadDocumentsOverview(
 
   const documents = ((result.data ?? []) as Array<{
     id: string;
+    document_type: string;
     document_number: string;
     issued_at: string;
     gross_minor: number;
     currency_code: string;
   }>).map((row) => ({
     id: row.id,
+    documentType: row.document_type,
     documentNumber: row.document_number,
     issuedAt: row.issued_at,
     totalMinor: row.gross_minor,

@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   Coins,
   CreditCard,
+  Download,
   Loader2,
   Receipt,
   RefreshCw,
@@ -28,7 +29,7 @@ import {
   getMyPaymentHistory,
   restartMyHaltedSubscription,
 } from '@/app/actions/billing-account';
-import { subscriptionBanner } from '@/lib/billing/billing-account.shared';
+import { documentTypeLabel, subscriptionBanner } from '@/lib/billing/billing-account.shared';
 import type { BillingPaymentOverview, GetMyBillingOverviewResult } from '@/lib/billing/billing-account.shared';
 import { buildPlanFeatures } from '@/lib/pricing/plan-copy.shared';
 import { formatCurrencyMinor } from '@/lib/billing/wallet-tax.shared';
@@ -463,10 +464,23 @@ export default function BillingAccountPage() {
               ) : (
                 <div className="mt-4 space-y-2">
                   {overview!.documents.map((doc) => (
-                    <div key={doc.id} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm">
-                      <span className="text-neutral-200">{doc.documentNumber}</span>
-                      <span className="text-neutral-500">{formatLongDate(doc.issuedAt)}</span>
-                      <span className="text-neutral-200">{formatCurrencyMinor(doc.currencyCode, doc.totalMinor)}</span>
+                    <div key={doc.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm">
+                      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                        <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] uppercase tracking-wide text-neutral-400">
+                          {documentTypeLabel(doc.documentType)}
+                        </span>
+                        <span className="text-neutral-200">{doc.documentNumber}</span>
+                        <span className="text-neutral-500">{formatLongDate(doc.issuedAt)}</span>
+                        <span className="text-neutral-200">{formatCurrencyMinor(doc.currencyCode, doc.totalMinor)}</span>
+                      </div>
+                      <a
+                        href={`/api/billing/documents/${doc.id}/pdf`}
+                        download
+                        className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-neutral-300 transition-colors hover:border-white/20 hover:bg-white/10 hover:text-neutral-100"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        Download
+                      </a>
                     </div>
                   ))}
                 </div>

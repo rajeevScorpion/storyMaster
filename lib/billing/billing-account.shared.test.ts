@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  documentTypeLabel,
   methodLabel,
   paymentDescription,
   pickCurrentSubscription,
@@ -191,5 +192,20 @@ describe('paymentDescription', () => {
       { planNames: {}, topupNames: {} }
     );
     expect(text).toBe('Plan');
+  });
+});
+
+describe('documentTypeLabel', () => {
+  it('labels a tax invoice', () => {
+    expect(documentTypeLabel('tax_invoice')).toBe('Invoice');
+  });
+
+  it('labels a credit note', () => {
+    expect(documentTypeLabel('credit_note')).toBe('Credit note');
+  });
+
+  it('falls back to a generic label for anything else', () => {
+    expect(documentTypeLabel('receipt')).toBe('Document');
+    expect(documentTypeLabel('something_new')).toBe('Document');
   });
 });
