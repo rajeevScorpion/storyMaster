@@ -12,6 +12,8 @@
     Sonnet agents at the end of the session, on the spec in **plan §10**.
   - **First thing:** `git log --oneline -15` to see whether their commits landed (prefixes
     `feat(payments): Phase 6 Unit C2 --` and `Unit D --`).
+  - At 90% usage both were told to commit what they had, prefixed **`wip(payments): … Unit C2/D --`**. A
+    wip commit's body says what's done and what isn't.
   - Check `git status` for uncommitted leftovers from a cut-off agent. Review what landed by **reading the
     diff against plan §10**, then finish whatever is missing.
 - **Then the walk** (plan §5): turn `billing_document_issuing_enabled` and `billing_emails_enabled` on
