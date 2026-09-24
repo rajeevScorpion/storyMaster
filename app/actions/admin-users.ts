@@ -14,6 +14,7 @@ import {
   beatsToCoins,
   deriveBillingPlanKeyCheck,
   mapAdminBillingDocument,
+  mapAdminBillingNotificationJob,
   mapAdminBillingOrder,
   mapAdminBillingPayment,
   mapAdminBillingProfile,
@@ -26,6 +27,7 @@ import {
   normalizePromotionalCohortInput,
   type AdminAccountStatus,
   type AdminBillingDocument,
+  type AdminBillingNotificationJob,
   type AdminBillingOrder,
   type AdminBillingPayment,
   type AdminBillingRefund,
@@ -46,6 +48,7 @@ import {
   type AdminUserWalletActivityItem,
   type AdminUserListInput,
   type RawBillingDocumentRow,
+  type RawBillingNotificationJobRow,
   type RawBillingOrderRow,
   type RawBillingPaymentRow,
   type RawBillingProfileRow,
@@ -506,6 +509,7 @@ async function getAdminUserDetailInternal(userId: string): Promise<AdminUserDeta
     paymentsResult,
     refundsResult,
     documentsResult,
+    notificationJobsResult,
     profileResult,
     webhookEventsResult,
     watchQuota,
@@ -586,6 +590,15 @@ async function getAdminUserDetailInternal(userId: string): Promise<AdminUserDeta
       .eq('subject_ref', userId)
       .order('created_at', { ascending: false })
       .limit(25),
+    // billing_notification_jobs (migration 135, Payments Phase 6 Unit D): also keyed by subject_ref,
+    // not user_id -- same reasoning as billing_documents above. Newest 20 only; this is an admin
+    // support list, not a full audit trail (that stays in admin_user_audit_events).
+    admin
+      .from('billing_notification_jobs')
+      .select('id, kind, status, attempt_count, email_status, document_outcome, last_error, created_at')
+      .eq('subject_ref', userId)
+      .order('created_at', { ascending: false })
+      .limit(20),
     admin
       .from('billing_profiles')
       .select('id, legal_name, billing_email, phone, company_name, gstin, state_code, country_code, address_line_1, address_line_2, city, postal_code, created_at, updated_at')
@@ -665,6 +678,12 @@ async function getAdminUserDetailInternal(userId: string): Promise<AdminUserDeta
       documentsResult.error,
       'load billing documents',
       mapAdminBillingDocument
+    ),
+    notificationJobs: mapBillingListSection<RawBillingNotificationJobRow, AdminBillingNotificationJob>(
+      notificationJobsResult.data,
+      notificationJobsResult.error,
+      'load billing notification jobs',
+      mapAdminBillingNotificationJob
     ),
     profile: mapBillingProfileSection(profileResult.data, profileResult.error),
     webhookEvents: mapBillingListSection<RawBillingWebhookEventRow, AdminBillingWebhookEvent>(
