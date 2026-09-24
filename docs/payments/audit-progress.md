@@ -124,6 +124,16 @@ The spec itself had two corrections:
   render;
 - at 360px there is no horizontal scroll;
 - the account menu has "Billing" and the wallet has "Manage billing".
+**Subscribe walk attempted 2026-09-24, deferred by the owner (OTP SMS limit hit).** For the next attempt:
+- **The card must be Razorpay's recurring test card, Visa 4718 6091 0820 4366.** The domestic test
+  Mastercard 5267… is refused with "This card is not eligible for recurring payments".
+- Subscriptions force "Save this card", which texts a **real OTP** to the profile phone (the owner's). The
+  code is reused for a few minutes.
+- "Skip OTP" leaves Razorpay stuck on "Confirming Payment", and nothing is charged.
+- While Razorpay showed its failure screen, our sheet correctly stayed on "Complete the payment".
+- The walk script (`.agent/sheet-walk/pay.pw.ts`, gitignored) waits for the OTP in `otp.txt` and retries if
+  a code is rejected.
+- Each attempt leaves a `created` subscription checkout order, which the next attempt supersedes.
 **The cancel and restart clicks are not walked:** `testuser` has no live test subscription. Creating one
 texts the owner's real phone (see the E2 notes). Owner's call: a dummy phone on `testuser`'s profile, or
 be present for the OTP. After that: subscribe, cancel from `/account/billing`, check "Cancels on <date>"
