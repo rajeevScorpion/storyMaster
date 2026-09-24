@@ -105,6 +105,10 @@ describe('formatPriceWithTaxLine', () => {
     expect(formatPriceWithTaxLine('INR', 145000, 0, 'GST')).toBe('');
   });
 
+  it('shows no tax line for a free (zero-price) plan even with a live rate', () => {
+    expect(formatPriceWithTaxLine('INR', 0, 18, 'GST')).toBe('');
+  });
+
   it('uses the supplied label rather than hardcoding GST', () => {
     expect(formatPriceWithTaxLine('USD', 100000, 10, 'VAT')).toContain('VAT');
   });

@@ -19,8 +19,6 @@ import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import Modal from '@/components/ui/Modal';
 import BillingDetailsDialog from '@/components/pricing/BillingDetailsDialog';
-import CheckoutSummarySheet from '@/components/pricing/checkout/CheckoutSummarySheet';
-import { RazorpayScript, useRazorpayCheckout } from '@/components/pricing/checkout/useRazorpayCheckout';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { getPricingWalletPageData } from '@/app/actions/pricing-runtime';
@@ -36,7 +34,7 @@ import { buildPlanFeatures } from '@/lib/pricing/plan-copy.shared';
 import { formatCurrencyMinor } from '@/lib/billing/wallet-tax.shared';
 import { indiaStateName } from '@/lib/billing/india-states.shared';
 import { COINS_PER_BEAT } from '@/lib/types/pricing';
-import type { BillingProfileDTO, PrepareRazorpayCheckoutInput, PricingWalletPageData } from '@/lib/types/pricing';
+import type { BillingProfileDTO, PricingWalletPageData } from '@/lib/types/pricing';
 
 /**
  * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit F execution spec): Settings -> Billing.
@@ -86,16 +84,9 @@ export default function BillingAccountPage() {
   const [restartError, setRestartError] = useState<string | null>(null);
   const [restartNeedsPlanPick, setRestartNeedsPlanPick] = useState(false);
 
-  const razorpay = useRazorpayCheckout();
-  const [checkoutSheetOpen, setCheckoutSheetOpen] = useState(false);
-  const [checkoutSheetTarget, setCheckoutSheetTarget] = useState<PrepareRazorpayCheckoutInput | null>(null);
-  const [checkoutScriptError, setCheckoutScriptError] = useState<string | null>(null);
-
   const userId = pricingData.userId;
   const resolvedMarketKey = pricingData.snapshot.pricingMarketKey;
   const currentPlanKey = pricingData.snapshot.planKey;
-  const usingRazorpayMarket = pricingData.snapshot.routingProvider === 'razorpay';
-  const checkoutEnabled = pricingData.controls.pricingCheckoutEnabled;
 
   const loadWalletData = useCallback(async () => {
     if (!userId) return;
@@ -173,20 +164,19 @@ export default function BillingAccountPage() {
       setRestartError(result.error);
       return;
     }
-    void loadOverview();
-    void refreshPricing();
     if (result.planVersionId) {
-      setCheckoutSheetTarget({ kind: 'subscription', planVersionId: result.planVersionId });
-      setCheckoutSheetOpen(true);
-    } else {
-      setRestartNeedsPlanPick(true);
+      // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit G execution spec): a full document
+      // load, not a client-side push. The wallet is the only route served without COEP
+      // (lib/navigation/cross-origin-isolation.shared.ts) -- Razorpay Checkout's frame needs that,
+      // and the isolation boundary is a header on the document, not something a router push can flip.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+      window.location.assign(`/wallet?checkout=${result.planVersionId}`);
+      return;
     }
-  }, [loadOverview, refreshPricing]);
-
-  const handleCheckoutSettled = useCallback(() => {
-    void refreshPricing();
     void loadOverview();
-  }, [refreshPricing, loadOverview]);
+    void refreshPricing();
+    setRestartNeedsPlanPick(true);
+  }, [loadOverview, refreshPricing]);
 
   if (!authLoading && !user) {
     return (
@@ -224,15 +214,6 @@ export default function BillingAccountPage() {
 
   return (
     <main className="relative min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
-      <RazorpayScript
-        enabled={checkoutEnabled && usingRazorpayMarket}
-        onLoad={razorpay.onScriptLoad}
-        onError={() => {
-          razorpay.onScriptError();
-          setCheckoutScriptError('Failed to load Razorpay checkout. Please refresh and try again.');
-        }}
-      />
-
       <KissagoLogo />
 
       <div className="fixed top-4 right-4 z-40">
@@ -247,19 +228,6 @@ export default function BillingAccountPage() {
         context="manage"
         onClose={() => setBillingDialogOpen(false)}
         onSaved={handleBillingDetailsSaved}
-      />
-
-      <CheckoutSummarySheet
-        open={checkoutSheetOpen}
-        target={checkoutSheetTarget}
-        pricingMarketKey={resolvedMarketKey}
-        razorpayReady={razorpay.ready}
-        onClose={() => setCheckoutSheetOpen(false)}
-        onNeedsBillingDetails={() => {
-          setCheckoutSheetOpen(false);
-          setBillingDialogOpen(true);
-        }}
-        onSettled={handleCheckoutSettled}
       />
 
       <Modal
@@ -411,7 +379,6 @@ export default function BillingAccountPage() {
                       .
                     </p>
                   )}
-                  {checkoutScriptError && <p className="mt-3 text-sm text-amber-200">{checkoutScriptError}</p>}
                 </>
               )}
             </section>

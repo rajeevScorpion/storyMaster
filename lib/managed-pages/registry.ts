@@ -50,6 +50,7 @@ export const RESERVED_ROOT_SLUGS = [
   'help-legal',
   'icon',
   'learn',
+  'plans',
   'signed-out',
   'sounds',
   'story',

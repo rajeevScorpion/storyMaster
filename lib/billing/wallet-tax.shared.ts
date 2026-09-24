@@ -79,9 +79,10 @@ function formatRatePercent(ratePercent: number): string {
 /**
  * The small line a wallet price shows once a tax rule is live: "+ 18% GST · ₹1,711 total" for a
  * ₹1,450 net price at 18%. Returns `''` -- render nothing, not an empty element -- when `ratePercent`
- * is `null` (no published rule, or the 'none' regime) or `0` (a published zero-rate rule), so a
- * caller can render `{line && <p>{line}</p>}` unconditionally without a layout shift on the common
- * no-tax path.
+ * is `null` (no published rule, or the 'none' regime), `0` (a published zero-rate rule), or `netMinor`
+ * is zero or less (the Free plan card: 18% of nothing is still nothing, and "+ 18% GST · ₹0 total"
+ * beside a free plan reads as a priced item, not a benefit), so a caller can render
+ * `{line && <p>{line}</p>}` unconditionally without a layout shift on the common no-tax path.
  */
 export function formatPriceWithTaxLine(
   currencyCode: string,
@@ -89,7 +90,7 @@ export function formatPriceWithTaxLine(
   ratePercent: number | null,
   taxLabel: string
 ): string {
-  if (ratePercent === null || ratePercent === 0) {
+  if (ratePercent === null || ratePercent === 0 || netMinor <= 0) {
     return '';
   }
 

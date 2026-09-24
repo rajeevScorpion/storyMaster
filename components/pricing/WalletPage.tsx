@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, BookOpen, CheckCircle2, Coins, CreditCard, Loader2, Sparkles, Star, Wallet as WalletIcon } from 'lucide-react';
@@ -282,7 +282,10 @@ export default function WalletPage() {
   const topupCoins = beatsToCoins(pricingData.snapshot.availableTopupBeats);
   const bonusCoins = beatsToCoins(pricingData.snapshot.availablePromoBeats);
 
-  const offers = walletData?.planOffers ?? [];
+  // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit G execution spec): stable across renders
+  // where walletData hasn't changed -- the ?checkout= effect below depends on it, and a fresh []/
+  // fallback array on every render would otherwise make that dependency array change every render.
+  const offers = useMemo(() => walletData?.planOffers ?? [], [walletData]);
   const topups = walletData?.topupOffers ?? [];
   const activity = walletData?.recentActivity ?? [];
 
@@ -371,6 +374,61 @@ export default function WalletPage() {
     void loadWalletData();
     router.refresh();
   }, [refreshPricing, loadWalletData, router]);
+
+  // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit G execution spec): the /plans buy links
+  // and BillingAccountPage's restart both land here as /wallet?checkout=<planVersionId>. A ref, not
+  // state, gates this to once per page load -- state would itself cause the re-render this effect
+  // reacts to, risking a second fire before the guard commits. Runs the exact same billing-dialog-
+  // first gate a card's own button does, then always strips the param so a reload can't replay it.
+  const checkoutParamHandledRef = useRef(false);
+  useEffect(() => {
+    if (checkoutParamHandledRef.current) return;
+    if (typeof window === 'undefined') return;
+    if (!pricingData.userId || isKidsMode || !checkoutEnabled || walletLoading) return;
+
+    const checkoutParam = new URLSearchParams(window.location.search).get('checkout');
+    if (!checkoutParam) return;
+
+    checkoutParamHandledRef.current = true;
+
+    const matchedOffer = offers.find(
+      (offer) => offer.monthlyPlanVersionId === checkoutParam || offer.annualPlanVersionId === checkoutParam
+    );
+
+    if (matchedOffer && matchedOffer.planKey !== 'free' && !matchedOffer.isCurrentPlan) {
+      const interval: BillingInterval = matchedOffer.annualPlanVersionId === checkoutParam ? 'annual' : 'monthly';
+      const provider = getSelectedPlanProvider(matchedOffer, interval);
+      const currentTierRank = currentPlan?.tierRank ?? 1;
+      const isDowngrade = matchedOffer.tierRank < currentTierRank;
+      const purchasable = provider === 'razorpay' && !isDowngrade && !(yearlyCheckoutDeferred && interval === 'annual');
+
+      if (purchasable) {
+        const input: PrepareRazorpayCheckoutInput = { kind: 'subscription', planVersionId: checkoutParam };
+        if (requiresBillingDetails) {
+          setPendingCheckoutAction(() => () => openCheckoutSheet(input, matchedOffer.unlimitedWatching));
+          setBillingDialogContext('checkout');
+          setBillingDialogOpen(true);
+        } else {
+          openCheckoutSheet(input, matchedOffer.unlimitedWatching);
+        }
+      }
+      // An unpurchasable match (already the current plan, a downgrade under P2(a), or no razorpay
+      // version for this market) is ignored silently -- same as a stale or crafted id.
+    }
+
+    router.replace('/wallet');
+  }, [
+    pricingData.userId,
+    isKidsMode,
+    checkoutEnabled,
+    walletLoading,
+    offers,
+    currentPlan,
+    yearlyCheckoutDeferred,
+    requiresBillingDetails,
+    openCheckoutSheet,
+    router,
+  ]);
 
   return (
     <main className="relative min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
@@ -647,6 +705,12 @@ export default function WalletPage() {
               <div>
                 <h3 className="text-2xl font-serif text-neutral-100">Plans</h3>
                 <p className="mt-1 text-sm text-neutral-400">Choose the rhythm that fits how you create with Kissago.</p>
+                <Link
+                  href="/plans"
+                  className="mt-1 inline-block text-sm text-emerald-300 underline-offset-2 hover:underline"
+                >
+                  Compare plans →
+                </Link>
               </div>
               <div className="flex items-center gap-3">
                 <div className="rounded-2xl border border-white/10 bg-neutral-900/60 p-1">
