@@ -21,6 +21,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { createAdminClient, verifyAdmin } from '@/lib/supabase/admin';
+import { getFeatureFlag } from '@/lib/ai/model-config';
 import { isMissingBillingSchemaError } from '@/lib/billing/schema-availability.shared';
 import { enqueueBillingJob, kickBillingJobs } from '@/lib/billing/notifications/queue';
 import type { AdminBillingActionResult } from '@/lib/admin/billing-admin-ui.shared';
@@ -170,9 +171,19 @@ export async function resendBillingDocument(input: { documentId: string }): Prom
     throw new Error(`This document is "${doc.status}", not "issued", so it cannot be resent.`);
   }
 
+  // With emails off the queue drops the job (or the worker records skipped_disabled), so "queued"
+  // would be untrue.
+  if (!(await getFeatureFlag('billing_emails_enabled', false))) {
+    throw new Error('Billing emails are switched off, so nothing would be sent.');
+  }
+
   // "If that auth user no longer exists, refuse with 'This account was deleted.'" (plan §10 D).
+  // Only a 404 means deleted; any other lookup error is reported as itself.
   const userLookup = await admin.auth.admin.getUserById(doc.subject_ref);
-  if (userLookup.error || !userLookup.data?.user) {
+  if (userLookup.error && userLookup.error.status !== 404) {
+    throw new Error(`Could not check the account: ${userLookup.error.message}`);
+  }
+  if (!userLookup.data?.user) {
     throw new Error('This account was deleted.');
   }
 
