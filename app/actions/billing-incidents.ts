@@ -163,7 +163,8 @@ export interface ExportSaleOnDomesticCardRow {
   amountMinor: number;
   currencyCode: string;
   capturedAt: string;
-  cardCountry: string | null;
+  /** The billing address's country the customer gave -- what a domestic card contradicts. */
+  billingCountry: string | null;
 }
 
 export interface BillingIncidentsDashboardData {
@@ -582,7 +583,7 @@ async function loadExportSalesOnDomesticCard(
 ): Promise<BillingIncidentSection<ExportSaleOnDomesticCardRow>> {
   const result = await supabase
     .from('billing_payments')
-    .select('id, subject_ref, user_id, gross_minor, currency_code, captured_at, purchase_snapshot_json', {
+    .select('id, subject_ref, user_id, gross_minor, currency_code, captured_at, customer_snapshot_json', {
       count: 'exact',
     })
     .eq('provider', 'razorpay')
@@ -602,8 +603,8 @@ async function loadExportSalesOnDomesticCard(
     amountMinor: row.gross_minor as number,
     currencyCode: row.currency_code as string,
     capturedAt: row.captured_at as string,
-    cardCountry:
-      ((row.purchase_snapshot_json as { cardCountry?: string | null } | null)?.cardCountry as string | null) ?? null,
+    billingCountry:
+      ((row.customer_snapshot_json as { countryName?: string | null } | null)?.countryName as string | null) ?? null,
   }));
 
   return { status: 'ok', unavailableReason: null, totalCount: result.count ?? rows.length, rows };

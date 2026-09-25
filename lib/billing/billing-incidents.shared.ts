@@ -180,8 +180,8 @@ export function isStalePendingRefundIncident(row: BillingRefundRowShape, nowMs: 
 
 // ── Export sale on a domestic card (Payments Phase 8, docs/payments/phase-8-plan.md §8, Unit AC) ──
 // A payment sold at the zero-rated ROW price should be paid with an international (foreign-issued)
-// card -- lib/billing/razorpay-sync.ts records the payment entity's own `international`/`card.country`
-// into billing_payments.purchase_snapshot_json as cardInternational/cardCountry at capture time
+// card -- lib/billing/razorpay-sync.ts records the payment entity's own `international` flag
+// into billing_payments.purchase_snapshot_json as cardInternational at capture time
 // (step 6). A `false` here may mean an India-resident customer claimed a US billing address to reach
 // the zero-rated price.
 

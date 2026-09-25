@@ -73,27 +73,24 @@ export interface SettleTopupOrderResult {
 
 /**
  * Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, step 6): whether the card that paid was
- * foreign-issued, and its country -- the evidence behind billing-incidents.shared.ts's
+ * foreign-issued -- the evidence behind billing-incidents.shared.ts's
  * "export sale on a domestic card" card (a sale sold at the zero-rated ROW price should be paid with
  * an international card; a domestic one may mean an India-resident customer claiming a US address).
  */
 export interface PaymentCaptureEvidence {
   cardInternational: boolean | null;
-  cardCountry: string | null;
 }
 
 /**
- * Razorpay's payment entity carries `international` (true for a foreign-issued card) and `card.country`
- * on a card payment, but lib/billing/razorpay.ts's RazorpayPayment type deliberately doesn't declare
- * `card` at all (its own comment: "card/bank_account/vpa/etc. are intentionally absent... they are
- * never read"). Reading the two extra fields locally, rather than widening that shared type, keeps
- * that boundary intact -- only this file's capture-evidence step needs them.
+ * Razorpay's payment entity carries `international` (true for a foreign-issued card), but
+ * lib/billing/razorpay.ts's RazorpayPayment type deliberately doesn't declare it. Reading it locally,
+ * rather than widening that shared type, keeps that boundary intact. There is no card country to read:
+ * Razorpay's card entity has none, even expanded (the Phase 8 walk saw it null on every payment).
  */
 function paymentCaptureEvidence(payment: RazorpayPayment): PaymentCaptureEvidence {
-  const raw = payment as RazorpayPayment & { international?: boolean; card?: { country?: string | null } | null };
+  const raw = payment as RazorpayPayment & { international?: boolean };
   return {
     cardInternational: typeof raw.international === 'boolean' ? raw.international : null,
-    cardCountry: raw.card?.country ?? null,
   };
 }
 
@@ -108,7 +105,7 @@ function withCaptureEvidence(
   snapshot: Record<string, unknown> | null,
   evidence: PaymentCaptureEvidence
 ): Record<string, unknown> {
-  return { ...(snapshot ?? {}), cardInternational: evidence.cardInternational, cardCountry: evidence.cardCountry };
+  return { ...(snapshot ?? {}), cardInternational: evidence.cardInternational };
 }
 
 /** Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit B): the net/tax/gross a top-up payment
@@ -511,7 +508,6 @@ interface SubscriptionPaymentMethod {
    * below (no Razorpay payment was actually fetched, so there is no card evidence to report) -- never
    * guessed from the subscription entity, which carries no card details at all. */
   cardInternational: boolean | null;
-  cardCountry: string | null;
 }
 
 /**
@@ -535,7 +531,6 @@ async function resolveSubscriptionPaymentMethod(input: {
     providerFeeMinor: null,
     providerTaxMinor: null,
     cardInternational: null,
-    cardCountry: null,
   };
 
   const existing = await input.supabase
@@ -561,7 +556,6 @@ async function resolveSubscriptionPaymentMethod(input: {
       providerFeeMinor: payment.fee ?? null,
       providerTaxMinor: payment.tax ?? null,
       cardInternational: evidence.cardInternational,
-      cardCountry: evidence.cardCountry,
     };
   } catch (err) {
     console.error(
@@ -821,7 +815,6 @@ export async function syncSubscriptionFromProvider(input: {
           // the snapshot's only content, never the stale checkout-time selling context above.
           purchaseSnapshot: withCaptureEvidence(isFirstCharge ? (checkoutOrder?.purchase_snapshot_json ?? null) : null, {
             cardInternational: method.cardInternational,
-            cardCountry: method.cardCountry,
           }),
           customerSnapshot,
           cycleStart: razorpayUnixToIso(paidInvoice.billing_start),

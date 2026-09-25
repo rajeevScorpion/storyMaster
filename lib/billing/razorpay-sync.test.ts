@@ -1236,7 +1236,7 @@ describe('syncSubscriptionFromProvider — subscription payment method & custome
         // Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, step 6): the checkout order's
         // own snapshot, plus this call's own captured card evidence -- fakePayment() here carries
         // neither `international` nor `card`, so both come back null.
-        purchaseSnapshot: { ...checkoutOrder.purchase_snapshot_json, cardInternational: null, cardCountry: null },
+        purchaseSnapshot: { ...checkoutOrder.purchase_snapshot_json, cardInternational: null },
       })
     );
   });
@@ -1285,7 +1285,7 @@ describe('syncSubscriptionFromProvider — subscription payment method & custome
         // selling-context snapshot of its own (unchanged), but now carries this call's own captured
         // card evidence instead of staying bare null -- fakePayment() here carries neither
         // `international` nor `card`, so both come back null.
-        purchaseSnapshot: { cardInternational: null, cardCountry: null },
+        purchaseSnapshot: { cardInternational: null },
         customerSnapshot: expect.objectContaining({ profileType: 'personal', legalName: 'Jane Doe', stateCode: '24', stateName: 'Gujarat' }),
       })
     );

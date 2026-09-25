@@ -372,7 +372,7 @@ export default async function BillingIncidentsPage() {
               <StatusPill tone="attention">domestic card</StatusPill>
             </div>
             <p className="mt-2 text-xs text-neutral-500">
-              <FieldLabel>Card country</FieldLabel> {row.cardCountry ?? 'unknown'}
+              <FieldLabel>Billing country</FieldLabel> {row.billingCountry ?? 'unknown'}
             </p>
           </RowCard>
         ))}
