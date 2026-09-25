@@ -753,9 +753,11 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   graphic style extraction, voice selection and novelty assessment on 3.8 Low — compare on real calls.
 
 **Billing and cost**
-- **Payments are not safe for real money yet.** Work is in progress on branch `payments`; the living handoff is
-  `docs/payments/audit-progress.md` (audit, Phase 0 discovery, phase status, owner decisions). Nothing is merged
-  to `dev` or `main`. As of 2026-09-23: Phases 1-4 are code-complete;
+- **Payments are not live for real money yet.** As of 2026-09-26, Phases 1-8 are built and walked in Razorpay
+  test mode. **`payments` is merged into `dev`** (`--no-ff`) for tester smoke tests in test mode, and it stays
+  open for further work. **Not on `main`.** Migrations 124-138 are applied on dev. The go-live steps are
+  `docs/payments/go-live-runbook.md`, and the living handoff is `docs/payments/audit-progress.md`.
+  Older detail follows. As of 2026-09-23: Phases 1-4 are code-complete;
   **migrations 124-133 are applied on dev and none on prod**.
   **133 applied on dev 2026-09-23.** Phase 4 shipped the first code that can move money out of the
   business, now with its admin UI; its kill switch `billing_admin_actions_enabled` is off everywhere. The

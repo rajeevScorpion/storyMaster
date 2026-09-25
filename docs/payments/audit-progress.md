@@ -86,12 +86,22 @@ What the walk left behind:
 probe and subscribe → cancel → reconcile (runbook §1.1) can be walked on a USD subscription without the
 owner's phone. Only India-specific checks still need an Indian card.
 
-**Next:**
-1. Commit and push the 2026-09-26 fixes. Then, on the Preview: render an invoice, and look at the billing page's
-   dates.
-2. **Owner:** publish the Refund Policy and Terms. Confirm or file the LUT and send its ARN. Ask Razorpay about the
-   currency-conversion offer.
-3. The CA's still-open questions. Then runbook §12 when the owner is ready.
+**Pushed 2026-09-26** (`3aff5a3`..`adc22df`). The Preview built. Existing documents are served from storage in
+the old layout; the first new one will show the logo.
+
+**Owner, 2026-09-26:**
+- **Refund Policy published on dev** (1.1.0, verified by query). **Terms is still 1.0.0 from 29 Aug:** neither
+  Phase 7's §7-8 nor Phase 8's §7 is published. Republish it (minor change).
+- **LUT: deferred. Remind the owner** at the US switch-on, or when the CA questions next come up.
+- **Razorpay currency-conversion offer:** the owner isn't sure what to ask. Research it online before the US
+  switch-on.
+- **The US-address e2e test: later.** Keep it on the list for the next walk with US checkout on.
+
+**Next:** see "What's left" in the owner's status summary of 2026-09-26. In short:
+1. The India go-live gate: the deferred walks (runbook §1.1), the CA's India answers, publish Terms, the Phase 7
+   allowlist re-run.
+2. The release itself: runbook §2-§8.
+3. The US later: runbook §12.
 
 ## Previous block (2026-09-25 night — Phase 8 batch 1 building)
 
