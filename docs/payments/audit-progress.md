@@ -18,13 +18,13 @@
 - **D:**
   - One review fix, `5dd9814`: Resend refuses when emails are off, and only a 404 reads as "deleted".
   - Tests in `9f4eeb2`.
-- **Migration 137** (`f20e419`) adds the `billing_job_retried` and `billing_document_resent` audit types.
-  **Applied nowhere.** Phase 7 keeps 136.
+- **Migration 136** (`f20e419`) adds the `billing_job_retried` and `billing_document_resent` audit types.
+  **Applied nowhere.** Phase 7's allowlist moved to 137 (owner, 2026-09-25).
 - **Gates on `9f4eeb2`+C2 (run by Opus):** tsc and lint clean, **2,460 tests / 194 files**, `build:verify`
   compiled, smoke e2e 8/8.
 
 **Next:**
-1. **Owner:** apply 137 on dev.
+1. **Owner:** apply 136 on dev.
 2. **The walk** (plan §5, steps 1-6), which Opus runs. Turn both switches on on dev; this needs `testuser`'s
    password from the owner. Step 7 (the subscription kinds) waits on the OTP session.
 3. Phase 7 (`phase-7-plan.md`).
@@ -57,7 +57,7 @@
   - Owner decisions R1-R3, all as recommended: a 7-day refund warning with an override; the Terms updated
     as a *minor* change; named-account rollout first.
   - Units: **P7-A** (Opus writes the policy text), **P7-B** (Sonnet: the disclosure fix, the 7-day window,
-    the allowlist flag plus migration 136, the health cards), **P7-C** (Opus: `go-live-runbook.md`).
+    the allowlist flag plus migration 137, the health cards), **P7-C** (Opus: `go-live-runbook.md`).
   - None started.
 - **Phase 8** (international readiness): a short review doc only. Not started.
 - **Usage was 82% at the end of this session.** The owner said to let the running agents land and start

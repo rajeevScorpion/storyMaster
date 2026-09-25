@@ -11,7 +11,7 @@
  * admin-billing-actions.ts's auditResyncBestEffort already uses), and kick the worker so the effect
  * is visible without waiting for the next daily reconcile.
  *
- * The two audit action types need migration 137. Where it has not run, the audit insert fails with
+ * The two audit action types need migration 136. Where it has not run, the audit insert fails with
  * 23514 and is logged, and the retry/resend itself still succeeds.
  */
 

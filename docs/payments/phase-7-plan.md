@@ -133,7 +133,7 @@ contains "Starter Draft".
      checkbox when outside the window;
    - tests for the helper and the refusal.
 3. **Named-account rollout (R3):**
-   - A new flag row `billing_checkout_allowlist` (the Phase 7 migration **136**, §4). **`enabled` = the
+   - A new flag row `billing_checkout_allowlist` (the Phase 7 migration **137**, §4). **`enabled` = the
      restriction is on**, and `value` = a comma-separated list of user ids.
    - In `prepareRazorpayCheckoutInternal`, after the kill-switch check and the auth lookup: if the flag is
      enabled and the user id is not in the list, throw `CheckoutRefusalError("Payments aren't open yet.
@@ -158,7 +158,7 @@ A checklist for the owner, each item with the exact page or command and a check 
    - the CA's answers replacing the assumptions (audit-progress, "CA questions");
    - the Refund Policy published.
 2. **Prod database:**
-   - apply 125 → 135 (and 136) **in numeric order**, one at a time;
+   - apply 125 → 137 **in numeric order**, one at a time;
    - after each, `select migration_number from public.schema_migration_ledger order by 1 desc limit 3;`;
    - a pre-check for 124's backfill note (no live key ever set).
 3. **Prod env vars (Vercel Production):**
@@ -200,7 +200,7 @@ A checklist for the owner, each item with the exact page or command and a check 
 9. **The go-live report template:** flags, migrations, env, dashboard checks, test results, known limits,
    open CA items, the final commit hash.
 
-## 4. Migration 136 — `136_billing_checkout_allowlist.sql`
+## 4. Migration 137 — `137_billing_checkout_allowlist.sql`
 
 ```sql
 -- Phase 7: a named-account rollout switch. enabled = checkout restricted to the user ids in value
@@ -213,7 +213,7 @@ VALUES ('billing_checkout_allowlist', false, '')
 ON CONFLICT (flag_key) DO NOTHING;
 
 INSERT INTO public.schema_migration_ledger (migration_number, file_name)
-VALUES (136, '136_billing_checkout_allowlist.sql')
+VALUES (137, '137_billing_checkout_allowlist.sql')
 ON CONFLICT (migration_number) DO NOTHING;
 ```
 
@@ -221,7 +221,7 @@ The rollback:
 
 ```sql
 DELETE FROM public.feature_flags WHERE flag_key = 'billing_checkout_allowlist';
-DELETE FROM public.schema_migration_ledger WHERE migration_number = 136;
+DELETE FROM public.schema_migration_ledger WHERE migration_number = 137;
 ```
 
 ## 5. Owner actions
@@ -232,7 +232,7 @@ DELETE FROM public.schema_migration_ledger WHERE migration_number = 136;
 - The same for Terms (a new version, **minor**, R2), Privacy (minor) and Account Deletion if it changed.
 - **Check:** `/refund-policy` no longer shows "Starter Draft".
 
-**Apply 136 on dev** (the SQL editor). Check with the query in the file header.
+**Apply 137 on dev** (the SQL editor). Check with the query in the file header.
 
 ## 6. Carried into the go-live checklist (none may be dropped)
 
