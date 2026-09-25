@@ -34,6 +34,10 @@ vi.mock('@/lib/billing/razorpay-webhook', () => ({
   processRazorpayWebhookEvent: vi.fn(),
 }));
 
+vi.mock('@/lib/billing/notifications/queue', () => ({
+  enqueueBillingJob: vi.fn(),
+}));
+
 // Decision 15/16's two new helper modules are used for REAL here -- this file exercises the whole
 // wired-together flow, not a mock of the new logic. Only their I/O edges (Razorpay, Supabase) are
 // mocked, which is why razorpay/supabase/admin above are mocked but subscription-refund-end(.shared)
@@ -44,6 +48,7 @@ import { getFeatureFlag, getFeatureFlagValue } from '@/lib/ai/model-config';
 import { cancelRazorpaySubscription, refundRazorpayPayment } from '@/lib/billing/razorpay';
 import { recordRefund } from '@/lib/billing/ledger';
 import { reconcilePricingSubscription } from '@/app/actions/pricing-admin';
+import { enqueueBillingJob } from '@/lib/billing/notifications/queue';
 import { cancelBillingSubscriptionAtCycleEnd, refundBillingPayment } from './admin-billing-actions';
 
 const verifyAdminMock = vi.mocked(verifyAdmin);
@@ -54,6 +59,7 @@ const cancelRazorpaySubscriptionMock = vi.mocked(cancelRazorpaySubscription);
 const refundRazorpayPaymentMock = vi.mocked(refundRazorpayPayment);
 const recordRefundMock = vi.mocked(recordRefund);
 const reconcilePricingSubscriptionMock = vi.mocked(reconcilePricingSubscription);
+const enqueueBillingJobMock = vi.mocked(enqueueBillingJob);
 
 interface QueryResult {
   data?: unknown;
@@ -380,6 +386,66 @@ describe('refundBillingPayment', () => {
       expect(result.subscriptionEndError).toMatch(/network error/);
     });
   });
+
+  describe('Payments Phase 6, Unit C2, hook 5 -- refund_processed enqueue', () => {
+    it('enqueues refund_processed for a newly-recorded processed refund, with the frozen billing email', async () => {
+      const payment = fakePayment({ customer_snapshot_json: { billingEmail: 'buyer@example.com' } });
+      const fake = withStandardSetup(payment);
+      fake.enqueue('beat_grants', 'select', { data: { id: 'grant-9', beats_total: 100, beats_remaining: 100 }, error: null });
+      queueThroughClawback(fake, { hasGrant: true });
+      fake.enqueue('admin_user_audit_events', 'update', { data: null, error: null });
+      createAdminClientMock.mockReturnValue(fake.supabase);
+      refundRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'rfnd_9', payment_id: 'pay_1', amount: 1180, currency: 'INR', status: 'processed',
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-9' });
+
+      await refundBillingPayment({ paymentId: PAYMENT_ID, reason: REASON, requestKey: REQUEST_KEY });
+
+      expect(enqueueBillingJobMock).toHaveBeenCalledWith({
+        kind: 'refund_processed',
+        dedupeKey: 'refund:refund-9',
+        subjectRef: 'user-1',
+        userId: 'user-1',
+        refundId: 'refund-9',
+        payload: { billingEmail: 'buyer@example.com' },
+      });
+    });
+
+    it('does not enqueue while the refund is still pending at Razorpay', async () => {
+      const payment = fakePayment();
+      const fake = withStandardSetup(payment);
+      fake.enqueue('beat_grants', 'select', { data: { id: 'grant-10', beats_total: 100, beats_remaining: 100 }, error: null });
+      queueThroughClawback(fake, { hasGrant: true });
+      fake.enqueue('admin_user_audit_events', 'update', { data: null, error: null });
+      createAdminClientMock.mockReturnValue(fake.supabase);
+      refundRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'rfnd_10', payment_id: 'pay_1', amount: 1180, currency: 'INR', status: 'pending',
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-10' });
+
+      await refundBillingPayment({ paymentId: PAYMENT_ID, reason: REASON, requestKey: REQUEST_KEY });
+
+      expect(enqueueBillingJobMock).not.toHaveBeenCalled();
+    });
+
+    it('does not enqueue when the best-effort ledger write reports no id (schema unavailable)', async () => {
+      const payment = fakePayment();
+      const fake = withStandardSetup(payment);
+      fake.enqueue('beat_grants', 'select', { data: { id: 'grant-11', beats_total: 100, beats_remaining: 100 }, error: null });
+      queueThroughClawback(fake, { hasGrant: true });
+      fake.enqueue('admin_user_audit_events', 'update', { data: null, error: null });
+      createAdminClientMock.mockReturnValue(fake.supabase);
+      refundRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'rfnd_11', payment_id: 'pay_1', amount: 1180, currency: 'INR', status: 'processed',
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'unavailable' });
+
+      await refundBillingPayment({ paymentId: PAYMENT_ID, reason: REASON, requestKey: REQUEST_KEY });
+
+      expect(enqueueBillingJobMock).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A; migration 134): the post-cancel write
@@ -391,6 +457,7 @@ function fakeSubscriptionRow(overrides: Record<string, unknown> = {}) {
     provider_subscription_id: 'sub_1',
     status: 'active',
     cancel_at_period_end: false,
+    current_period_end: '2026-10-24T00:00:00.000Z',
     ...overrides,
   };
 }
@@ -510,5 +577,46 @@ describe('cancelBillingSubscriptionAtCycleEnd', () => {
     ).rejects.toThrow(/already "cancelled"/);
 
     expect(cancelRazorpaySubscriptionMock).not.toHaveBeenCalled();
+  });
+
+  describe('Payments Phase 6, Unit C2, hook 6 -- cancel_scheduled enqueue', () => {
+    it('enqueues cancel_scheduled after Razorpay and the marker write both succeed', async () => {
+      const fake = withStandardCancelSetup(fakeSubscriptionRow());
+      fake.enqueue('admin_user_audit_events', 'update', { data: null, error: null });
+      fake.enqueue('billing_subscriptions', 'update', { data: null, error: null });
+      createAdminClientMock.mockReturnValue(fake.supabase);
+      cancelRazorpaySubscriptionMock.mockResolvedValueOnce(fakeCancelledSubscription());
+
+      await cancelBillingSubscriptionAtCycleEnd({
+        subscriptionId: SUBSCRIPTION_ID,
+        reason: REASON,
+        requestKey: REQUEST_KEY,
+      });
+
+      expect(enqueueBillingJobMock).toHaveBeenCalledWith({
+        kind: 'cancel_scheduled',
+        dedupeKey: 'cancel:sub-row-1:2026-10-24T00:00:00.000Z',
+        subjectRef: 'user-1',
+        userId: 'user-1',
+        billingSubscriptionId: 'sub-row-1',
+        payload: { accessUntil: '2026-10-24T00:00:00.000Z' },
+      });
+    });
+
+    it('does not enqueue for a subscription with no live user (account deleted)', async () => {
+      const fake = withStandardCancelSetup(fakeSubscriptionRow({ user_id: null }));
+      fake.enqueue('admin_user_audit_events', 'update', { data: null, error: null });
+      fake.enqueue('billing_subscriptions', 'update', { data: null, error: null });
+      createAdminClientMock.mockReturnValue(fake.supabase);
+      cancelRazorpaySubscriptionMock.mockResolvedValueOnce(fakeCancelledSubscription());
+
+      await cancelBillingSubscriptionAtCycleEnd({
+        subscriptionId: SUBSCRIPTION_ID,
+        reason: REASON,
+        requestKey: REQUEST_KEY,
+      });
+
+      expect(enqueueBillingJobMock).not.toHaveBeenCalled();
+    });
   });
 });

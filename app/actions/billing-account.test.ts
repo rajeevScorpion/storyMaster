@@ -51,10 +51,15 @@ vi.mock('@/lib/billing/billing-profile', async (importOriginal) => {
   };
 });
 
+vi.mock('@/lib/billing/notifications/queue', () => ({
+  enqueueBillingJob: vi.fn(),
+}));
+
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { cancelRazorpaySubscription, getRazorpayMode } from '@/lib/billing/razorpay';
 import { syncSubscriptionFromProvider } from '@/lib/billing/razorpay-sync';
+import { enqueueBillingJob } from '@/lib/billing/notifications/queue';
 import { cancelMySubscription } from './billing-account';
 
 const createClientMock = vi.mocked(createClient);
@@ -62,6 +67,7 @@ const createAdminClientMock = vi.mocked(createAdminClient);
 const cancelRazorpaySubscriptionMock = vi.mocked(cancelRazorpaySubscription);
 const getRazorpayModeMock = vi.mocked(getRazorpayMode);
 const syncSubscriptionFromProviderMock = vi.mocked(syncSubscriptionFromProvider);
+const enqueueBillingJobMock = vi.mocked(enqueueBillingJob);
 
 interface QueryResult {
   data?: unknown;
@@ -213,6 +219,47 @@ describe('cancelMySubscription', () => {
     const markerUpdate = fake.calls.find((call) => call.table === 'billing_subscriptions' && call.op === 'update');
     expect(markerUpdate?.payload).toMatchObject({ cancel_at_period_end: true, cancel_requested_by: 'user' });
     expect((markerUpdate?.payload as any)?.cancel_requested_at).toEqual(expect.any(String));
+  });
+
+  it('enqueues cancel_scheduled (Payments Phase 6, Unit C2, hook 6) after a successful cancel', async () => {
+    const fake = createFakeSupabase();
+    fake.enqueue('billing_subscriptions', 'select', { data: [fakeSubscriptionRow()], error: null });
+    fake.enqueue('billing_subscriptions', 'update', { data: null, error: null });
+    fake.enqueue('pricing_plan_versions', 'select', { data: { id: 'plan-version-1' }, error: null });
+    createAdminClientMock.mockReturnValue(fake.supabase);
+    cancelRazorpaySubscriptionMock.mockResolvedValueOnce(fakeRazorpaySubscription() as any);
+    syncSubscriptionFromProviderMock.mockResolvedValueOnce({} as any);
+
+    await cancelMySubscription();
+
+    expect(enqueueBillingJobMock).toHaveBeenCalledWith({
+      kind: 'cancel_scheduled',
+      dedupeKey: 'cancel:sub-row-1:2026-10-24T00:00:00.000Z',
+      subjectRef: USER_ID,
+      userId: USER_ID,
+      billingSubscriptionId: 'sub-row-1',
+      payload: { accessUntil: '2026-10-24T00:00:00.000Z' },
+    });
+  });
+
+  it('does not enqueue when cancel_at_period_end is already true (no new cancel this call)', async () => {
+    const fake = createFakeSupabase();
+    fake.enqueue('billing_subscriptions', 'select', { data: [fakeSubscriptionRow({ cancel_at_period_end: true })], error: null });
+    createAdminClientMock.mockReturnValue(fake.supabase);
+
+    await cancelMySubscription();
+
+    expect(enqueueBillingJobMock).not.toHaveBeenCalled();
+  });
+
+  it('does not enqueue when there is no live subscription to cancel', async () => {
+    const fake = createFakeSupabase();
+    fake.enqueue('billing_subscriptions', 'select', { data: [], error: null });
+    createAdminClientMock.mockReturnValue(fake.supabase);
+
+    await cancelMySubscription();
+
+    expect(enqueueBillingJobMock).not.toHaveBeenCalled();
   });
 
   it('a provider throw followed by a raced marker write reports alreadyApplied', async () => {

@@ -23,11 +23,16 @@ vi.mock('@/lib/billing/subscription-refund-end', () => ({
   endSubscriptionAfterFullRefund: vi.fn(),
 }));
 
+vi.mock('@/lib/billing/notifications/queue', () => ({
+  enqueueBillingJob: vi.fn(),
+}));
+
 import { fetchRazorpayPayment, getRazorpayMode } from '@/lib/billing/razorpay';
 import { settleTopupOrder, syncSubscriptionFromProvider } from '@/lib/billing/razorpay-sync';
 import { recordDispute, recordRefund } from '@/lib/billing/ledger';
 import { endSubscriptionAfterFullRefund } from '@/lib/billing/subscription-refund-end';
-import { processRazorpayWebhookEvent, resolveRefundStatus, type RazorpayWebhookPayload } from './razorpay-webhook';
+import { enqueueBillingJob } from '@/lib/billing/notifications/queue';
+import { applyRefundOutcome, processRazorpayWebhookEvent, resolveRefundStatus, type RazorpayWebhookPayload } from './razorpay-webhook';
 
 const fetchRazorpayPaymentMock = vi.mocked(fetchRazorpayPayment);
 const getRazorpayModeMock = vi.mocked(getRazorpayMode);
@@ -36,6 +41,7 @@ const syncSubscriptionFromProviderMock = vi.mocked(syncSubscriptionFromProvider)
 const recordRefundMock = vi.mocked(recordRefund);
 const recordDisputeMock = vi.mocked(recordDispute);
 const endSubscriptionAfterFullRefundMock = vi.mocked(endSubscriptionAfterFullRefund);
+const enqueueBillingJobMock = vi.mocked(enqueueBillingJob);
 
 // Decision 15's default: most refund tests below have nothing to do with subscriptions ending, so
 // every test gets "there was nothing to end" unless it overrides this with mockResolvedValueOnce.
@@ -707,6 +713,100 @@ describe('processRazorpayWebhookEvent — refunds', () => {
       expect(endSubscriptionAfterFullRefundMock).not.toHaveBeenCalled();
       expect(result.outcome).toBe('refund_recorded');
     });
+  });
+});
+
+describe('applyRefundOutcome \u2014 refund_processed hook (Payments Phase 6, Unit C2, hook 4)', () => {
+  it('enqueues refund_processed off the new refund row, with the billing email frozen on the payment', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    enqueue('billing_payments', 'update', { data: null, error: null }); // markLedgerPaymentStatus
+    recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-1' });
+
+    await applyRefundOutcome({
+      supabase,
+      payment: fakeLedgerPayment({ customer_snapshot_json: { billingEmail: 'buyer@example.com' } }) as any,
+      status: 'processed',
+      refundEntity: { id: 'rfnd_1', amount: 1180, status: 'processed' },
+      refundedTotalMinor: null,
+      source: 'webhook',
+    });
+
+    expect(enqueueBillingJobMock).toHaveBeenCalledWith({
+      kind: 'refund_processed',
+      dedupeKey: 'refund:refund-1',
+      subjectRef: 'user-1',
+      userId: 'user-1',
+      refundId: 'refund-1',
+      payload: { billingEmail: 'buyer@example.com' },
+    });
+  });
+
+  it('passes billingEmail: null when the payment carries no customer snapshot', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    enqueue('billing_payments', 'update', { data: null, error: null });
+    recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-2' });
+
+    await applyRefundOutcome({
+      supabase,
+      payment: fakeLedgerPayment() as any, // no customer_snapshot_json field
+      status: 'processed',
+      refundEntity: { id: 'rfnd_2', amount: 1180, status: 'processed' },
+      refundedTotalMinor: null,
+      source: 'webhook',
+    });
+
+    expect(enqueueBillingJobMock).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: { billingEmail: null } })
+    );
+  });
+
+  it('does not enqueue while the refund is still pending at Razorpay', async () => {
+    const { supabase } = createFakeSupabase();
+    recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-3' });
+
+    await applyRefundOutcome({
+      supabase,
+      payment: fakeLedgerPayment() as any,
+      status: 'pending',
+      refundEntity: { id: 'rfnd_3', amount: 1180, status: null },
+      refundedTotalMinor: null,
+      source: 'webhook',
+    });
+
+    expect(enqueueBillingJobMock).not.toHaveBeenCalled();
+  });
+
+  it('does not enqueue when recordRefund reports an already-recorded row with no id', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    enqueue('billing_payments', 'update', { data: null, error: null });
+    recordRefundMock.mockResolvedValueOnce({ state: 'already_recorded', id: null });
+
+    await applyRefundOutcome({
+      supabase,
+      payment: fakeLedgerPayment() as any,
+      status: 'processed',
+      refundEntity: { id: 'rfnd_4', amount: 1180, status: 'processed' },
+      refundedTotalMinor: null,
+      source: 'webhook',
+    });
+
+    expect(enqueueBillingJobMock).not.toHaveBeenCalled();
+  });
+
+  it('does not enqueue when the ledger schema is unavailable', async () => {
+    const { supabase } = createFakeSupabase();
+    recordRefundMock.mockResolvedValueOnce({ state: 'unavailable' });
+
+    await applyRefundOutcome({
+      supabase,
+      payment: fakeLedgerPayment() as any,
+      status: 'processed',
+      refundEntity: { id: 'rfnd_5', amount: 1180, status: 'processed' },
+      refundedTotalMinor: null,
+      source: 'webhook',
+    });
+
+    expect(enqueueBillingJobMock).not.toHaveBeenCalled();
   });
 });
 

@@ -52,6 +52,7 @@ import {
   reconcilePricingTopup,
 } from '@/app/actions/pricing-admin';
 import { processRazorpayWebhookEvent, type RazorpayWebhookPayload } from '@/lib/billing/razorpay-webhook';
+import { enqueueBillingJob } from '@/lib/billing/notifications/queue';
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
@@ -175,7 +176,7 @@ export async function refundBillingPayment(input: {
   const paymentResult = await admin
     .from('billing_payments')
     .select(
-      'id, user_id, provider_payment_id, provider_mode, status, gross_minor, currency_code, kind, billing_order_id, provider_subscription_id, cycle_start, cycle_end, plan_version_id'
+      'id, user_id, provider_payment_id, provider_mode, status, gross_minor, currency_code, kind, billing_order_id, provider_subscription_id, cycle_start, cycle_end, plan_version_id, customer_snapshot_json'
     )
     .eq('id', paymentId)
     .maybeSingle();
@@ -405,7 +406,7 @@ export async function refundBillingPayment(input: {
   });
 
   try {
-    await recordRefund({
+    const recordResult = await recordRefund({
       supabase: admin,
       subjectRef: payment.user_id,
       paymentId: payment.id,
@@ -421,6 +422,24 @@ export async function refundBillingPayment(input: {
       coinAdjustment: { beatsClawedBack: eligibility.beatsToClaw, grantId: grant?.id ?? null },
       rawPayload: refund as unknown as Record<string, unknown>,
     });
+
+    // Payments Phase 6 (docs/payments/phase-6-plan.md §10, hook 5): covers a processed admin refund
+    // whose refund.processed webhook never arrives -- same dedupe key as applyRefundOutcome's hook 4
+    // (both key off recordRefund's own row id), so whichever of the two lands first is the one that
+    // actually enqueues; the other is a free no-op via the dedupe index. Stays inside this best-effort
+    // try/catch on purpose: nothing here may turn a successful refund into a reported failure.
+    if (refund.status === 'processed' && recordResult.state !== 'unavailable' && recordResult.id) {
+      await enqueueBillingJob({
+        kind: 'refund_processed',
+        dedupeKey: `refund:${recordResult.id}`,
+        subjectRef: payment.user_id,
+        userId: payment.user_id,
+        refundId: recordResult.id,
+        payload: {
+          billingEmail: (payment.customer_snapshot_json as { billingEmail?: string | null } | null)?.billingEmail ?? null,
+        },
+      });
+    }
   } catch (err) {
     console.error('[admin-billing-actions] best-effort ledger write for refund failed (webhook remains the record)', {
       paymentId: payment.id,
@@ -517,7 +536,7 @@ export async function cancelBillingSubscriptionAtCycleEnd(input: {
 
   const subscriptionResult = await admin
     .from('billing_subscriptions')
-    .select('id, user_id, provider_subscription_id, status, cancel_at_period_end')
+    .select('id, user_id, provider_subscription_id, status, cancel_at_period_end, current_period_end')
     .eq('id', subscriptionId)
     .maybeSingle();
   throwOnBillingQueryError(subscriptionResult.error, 'Cancel');
@@ -600,6 +619,21 @@ export async function cancelBillingSubscriptionAtCycleEnd(input: {
         message: cancelMarkerUpdate.error.message,
       });
     }
+  }
+
+  // Payments Phase 6 (docs/payments/phase-6-plan.md §10, hook 6): best-effort, matching
+  // billing-account.ts's own cancel-marker hook. `subject_ref` isn't selected on this row (unlike a
+  // ledger row, a billing_subscriptions row can go user_id-null on account deletion with no
+  // subject_ref fallback read here), so this only fires while there is a live user to notify.
+  if (subscription.user_id) {
+    await enqueueBillingJob({
+      kind: 'cancel_scheduled',
+      dedupeKey: `cancel:${subscription.id}:${subscription.current_period_end}`,
+      subjectRef: subscription.user_id,
+      userId: subscription.user_id,
+      billingSubscriptionId: subscription.id,
+      payload: { accessUntil: subscription.current_period_end },
+    });
   }
 
   // Best-effort immediate convergence -- the webhook/reconcile backstop still owns the real state.

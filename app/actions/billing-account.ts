@@ -13,6 +13,7 @@ import type { CheckoutQuote } from '@/lib/billing/checkout-quote.shared';
 import { cancelRazorpaySubscription, getRazorpayMode, type RazorpayMode } from '@/lib/billing/razorpay';
 import { syncSubscriptionFromProvider } from '@/lib/billing/razorpay-sync';
 import { isMissingBillingSchemaError } from '@/lib/billing/schema-availability.shared';
+import { enqueueBillingJob } from '@/lib/billing/notifications/queue';
 import {
   methodLabel,
   paymentDescription,
@@ -630,6 +631,18 @@ export async function cancelMySubscription(): Promise<CancelMySubscriptionResult
         console.error('[billing-account] cancelMySubscription: failed to record the cancel request', markerUpdate.error);
       }
     }
+
+    // Payments Phase 6 (docs/payments/phase-6-plan.md §10, hook 6): best-effort, mirroring the admin
+    // cancel action's own hook. `userId` here is always the live, authenticated caller, so unlike the
+    // admin path there is no deleted-account case to guard against.
+    await enqueueBillingJob({
+      kind: 'cancel_scheduled',
+      dedupeKey: `cancel:${candidate.id}:${candidate.current_period_end}`,
+      subjectRef: userId,
+      userId,
+      billingSubscriptionId: candidate.id,
+      payload: { accessUntil: candidate.current_period_end },
+    });
 
     // Best-effort immediate convergence -- the webhook/reconcile backstop still owns the real state.
     // Never fails the result: Razorpay has already accepted the cancel.

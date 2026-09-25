@@ -10,6 +10,7 @@ import {
 } from '@/lib/billing/razorpay-sync';
 import { recordDispute, recordRefund } from '@/lib/billing/ledger';
 import { endSubscriptionAfterFullRefund } from '@/lib/billing/subscription-refund-end';
+import { enqueueBillingJob } from '@/lib/billing/notifications/queue';
 import { splitRefundProportionally } from '@/lib/billing/tax.shared';
 import { resolveDisputeOutcome } from '@/lib/billing/dispute-status.shared';
 import type { DbBillingOrder, DbBillingPayment, DbBillingSubscription, DbPricingPlanVersion } from '@/lib/types/database';
@@ -408,6 +409,20 @@ export async function applyRefundOutcome(input: ApplyRefundOutcomeInput): Promis
         outcome = 'refund_recorded_subscription_ended';
       }
     }
+  }
+
+  // Payments Phase 6 (docs/payments/phase-6-plan.md §10, hook 4): shared by the webhook
+  // (processRefundEvent) and the pending-refund reconcile sweep (razorpay-reconcile.ts's
+  // reconcilePendingRefunds), both of which call this same function -- "that one place covers both".
+  if (status === 'processed' && recordResult.id) {
+    await enqueueBillingJob({
+      kind: 'refund_processed',
+      dedupeKey: `refund:${recordResult.id}`,
+      subjectRef: payment.subject_ref,
+      userId: payment.user_id,
+      refundId: recordResult.id,
+      payload: { billingEmail: (payment.customer_snapshot_json as { billingEmail?: string | null } | null)?.billingEmail ?? null },
+    });
   }
 
   return { outcome, refundId: recordResult.id };
