@@ -276,3 +276,162 @@ The walk:
 | Phase 6 step 7, the subscription emails | the same session |
 | The checkout sheet and logo on a phone | the owner's phone |
 | The six CA answers | the CA. Send §6's questions in the same message. |
+
+## 8. Execution spec, batch 1 — anchored at the commit that adds this section (2026-09-25)
+
+**Already done (Opus):**
+- **Migration 138** (`138_international_checkout_us.sql` + rollback): the `in_export_lut` regime, a
+  draft ROW rule, `billing_profiles.region`, and flag `billing_international_countries` (off, value
+  `US`).
+- **`lib/billing/international.shared.ts`:**
+  - `SUPPORTED_BILLING_COUNTRIES` (IN, US), `isSupportedBillingCountry`, `isForeignBillingCountry`,
+    `billingCountryName`, `parseInternationalCountries`;
+  - `FOREIGN_PLACE_OF_SUPPLY_CODE = '96'`, `INDIA_COUNTRY_CODE`.
+- **`lib/billing/international.ts`** (`server-only`): `getInternationalCheckoutCountries()` returns `[]`
+  unless the flag is on. Tests for both.
+
+**Plan change:** units A and C merge into **AC**, because the country gate and the tax choice both
+live in `resolveCheckoutTax`. **AC ∥ B**, with disjoint files. D follows.
+
+**Both agents:**
+- Commit as you go, `git add` your own files by name only (never `-A`).
+- The other agent is editing the same working tree. A tsc error in a file you don't own is theirs:
+  note it, don't fix it.
+- Before the final commit, run the full gate: tsc, lint, the full test suite, and `npm run
+  build:verify`.
+- Commit prefix: `feat(payments): Phase 8 AC --` / `Phase 8 B --`.
+
+### AC — checkout guard and export tax (Sonnet)
+
+**Files:**
+- `app/actions/pricing-checkout.ts`
+- `app/actions/billing-account.ts` (the quote only)
+- `lib/billing/checkout-guard.shared.ts`
+- `lib/billing/tax.shared.ts`, `lib/billing/tax-rules.ts`, `lib/billing/tax-rules-admin.ts`
+- `lib/billing/razorpay-sync.ts` (the tax fallback and capture evidence only)
+- `lib/billing/billing-incidents.shared.ts`, `app/actions/billing-incidents.ts`, the billing-incidents
+  admin page
+- their tests
+
+1. **Tax types** (`tax.shared.ts`):
+   - `taxRegime` gains `'in_export_lut'` on `TaxRuleInput` and `TaxBreakdown`.
+   - `GstSupplyType` gains `'export'`.
+   - In `computeTax` and `computeTaxFromGross`, `in_export_lut` gives tax 0, supply type `'export'`,
+     and all components 0.
+   - `in_gst` behaviour is unchanged. `'none'` stays `'none'`.
+   - Also update the `DbBillingTaxRule` type and anything that maps it or switches on the regime.
+2. **Pure guards** (`checkout-guard.shared.ts`):
+   - `CheckoutRefusalCode` gains `'provider_unavailable'`, `'country_not_supported'` and
+     `'market_country_mismatch'`.
+   - `assertCheckoutProvider(provider: string | null)`: anything but `'razorpay'` refuses, with "This
+     item can't be bought here yet."
+   - `assertMarketMatchesCountry({ itemMarketKey, profileCountryCode, internationalCountries })`:
+     - an `IN` item needs profile country `IN`. Otherwise: "This price is for customers in India.
+       Please choose the price for your country." (`market_country_mismatch`)
+     - a non-IN item needs a profile country in `internationalCountries`. Otherwise: "Payments from
+       your country aren't open yet." (`country_not_supported`)
+     - A null profile country counts as `IN`: every profile saved before 138 is Indian.
+   - Tests for each pass and each refusal.
+3. **`resolveCheckoutTax`** (`pricing-checkout.ts:~96`) gains an `itemMarketKey` input:
+   - Load the profile **before** the rule. The rule market is `'IN'` when the profile country is IN
+     (or null), else `'ROW'`.
+   - Call `assertMarketMatchesCountry` with `getInternationalCheckoutCountries()` before any tax maths.
+   - **Schema-unavailable path:** for a non-IN item, refuse with `billing_schema_unavailable` instead of
+     charging the net.
+   - A ROW rule `not_found` (the seeded rule is a draft) gives the existing `tax_rules_unavailable`
+     refusal, unchanged.
+   - `placeOfSupplyStateCode` for a foreign profile is its stored `'96'`.
+   - Pass `itemMarketKey` from both prepare paths and both quote paths (`billing-account.ts:184`,
+     `:214`).
+4. **Provider guard:**
+   - After each `assertBetaMarketAllowed` (`pricing-checkout.ts:211`, `:405`), call
+     `assertCheckoutProvider(version.provider)` / `(topup.provider)`, and the same in `quoteCheckout`'s
+     two paths.
+   - The top-up insert's `provider: 'razorpay'` (`:438`) becomes `topup.provider`.
+   - **The annual refusal stays** for every Razorpay item: US launches on monthly plans and top-ups.
+5. **The renewal fallback** (`razorpay-sync.ts:~422`): when there's no checkout snapshot, pick the rule
+   market from the profile country, as in step 3. No gate here: the charge has already happened.
+6. **Capture evidence:**
+   - Where a payment is recorded from a Razorpay payment entity (`settleTopupOrder` and the
+     subscription payment path in `razorpay-sync.ts`), store the entity's `international` (boolean)
+     and `card.country` if present, as `cardInternational` and `cardCountry`.
+   - Read `ledger.ts`'s write-once rules first, and choose the place that is actually written at
+     capture: the purchase snapshot, or the payment's raw payload. Say which in the commit body.
+7. **Billing-incidents card:** "Export sales on a domestic card".
+   - It lists payments whose `tax_breakdown_json->>'supplyType' = 'export'` and whose captured
+     evidence says `cardInternational` is false.
+   - It follows the four Phase 7 cards' pattern: a pure mapper in `billing-incidents.shared.ts`, and
+     fail-closed to "unavailable".
+8. **Tests:**
+   - the regime maths;
+   - the rule market chosen by country, never by the chosen market;
+   - an India profile buying a ROW item is refused;
+   - a US profile with the flag off is refused;
+   - a `stripe` item is refused and Razorpay is never called;
+   - the renewal fallback picks ROW for a US profile;
+   - the card's mapper.
+
+### B — international billing details (Sonnet)
+
+**Files:**
+- `lib/billing/billing-profile.shared.ts`, `lib/billing/billing-profile.ts`
+- `components/pricing/billing-details-form.shared.ts`, `components/pricing/BillingDetailsDialog.tsx`
+- `app/actions/billing-profile.ts`
+- `components/billing/BillingAccountPage.tsx` (the profile display only)
+- `lib/types/pricing.ts` (`BillingProfileInput` / `DTO` only), `lib/types/database.ts`
+  (`DbBillingProfile` only)
+- a new `lib/billing/us-states.shared.ts`
+- their tests
+
+1. **Types:**
+   - `BillingProfileInput` gains `countryCode?: string` (absent means `'IN'`, for old clients) and
+     `region?: string | null`.
+   - `BillingProfileDTO` gains `region`.
+   - `DbBillingProfile` gains `region: string | null`.
+2. **`us-states.shared.ts`:** the 50 states plus DC, as `{ code: 'CA', name: 'California' }`.
+3. **Validation** (`validateBillingProfile`), branching on the resolved country:
+   - **IN, or absent:** exactly today's rules.
+   - **US:**
+     - Personal only: a GSTIN or company name gives "Business billing is available for Indian GST
+       registrations only."
+     - `region` must be a code from `us-states.shared.ts`.
+     - The postal code matches `^\d{5}(-\d{4})?$`.
+     - The phone goes through `normalizeUsPhone`: 10 digits, or 11 starting with 1, or `+1…`, gives
+       `+1XXXXXXXXXX`, and the area code can't start with 0 or 1.
+     - The name, email and city rules are as India's.
+     - `stateCode` is ignored.
+   - **Any other country:** "We can't bill addresses in that country yet."
+   - Add `normalizeBillingPhone(raw, countryCode)`. Keep `normalizeIndianPhone` exported and unchanged.
+4. **Save** (`saveBillingProfile`):
+   - `country_code` comes from the input.
+   - For a foreign profile, `state_code = FOREIGN_PLACE_OF_SUPPLY_CODE` and `region` = the US state
+     code.
+   - For IN, `region = null`.
+   - The phone uses `normalizeBillingPhone`.
+   - Write `region` only when the column exists. Follow the file's existing missing-schema latch
+     pattern, so a pre-138 database still saves Indian profiles.
+   - `toBillingProfileDTO` maps `region`.
+   - `buildCustomerSnapshot` adds `region` and `countryName` (`billingCountryName`). For a foreign
+     profile, `stateName` is the US state's name.
+5. **Which countries the dialog offers:**
+   - Add a server action `getBillingCountryOptions()` in `app/actions/billing-profile.ts`. It returns
+     `['IN', ...getInternationalCheckoutCountries()]`.
+   - **The dialog shows the country `FilterDropdown` only when that list has more than one entry, or
+     the saved profile is already foreign.** With the flag off (the state at the India launch), the
+     dialog looks exactly as it does today.
+6. **The form** (`billing-details-form.shared.ts` + dialog):
+   - `countryCode` and `region` go in the form state.
+   - **US:** hide the Personal/Business toggle, GSTIN and company fields. Show a US-state
+     `FilterDropdown` in place of the India one. Label the postal code "ZIP code" and the phone "Mobile
+     number (US)".
+   - Switching country clears the state or region and re-validates.
+   - All logic lives in the `.shared.ts` file, with tests (the repo has no DOM test environment).
+7. **The profile display** (`BillingAccountPage.tsx`): show "City, CA 94103, United States" for a US
+   profile. India's display is unchanged.
+8. **Tests:**
+   - US validation: each field;
+   - the phone normaliser;
+   - an IN input without `countryCode` still validates exactly as before, checked against the existing
+     tests;
+   - the save row for US (`state_code` 96, `region`) and for IN (`region` null);
+   - the form's country switching.
