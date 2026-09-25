@@ -5,8 +5,8 @@ because the step "obviously worked"; most billing defects so far were found by a
 
 Written 2026-09-25 (Payments Phase 7, P7-C). Plan: `phase-7-plan.md`. History: `audit-progress.md`.
 
-**The rule that governs everything below:** real money starts only at step 6, and only for your own
-account. Everyone else waits for step 8.
+**The rule that governs everything below:** real money starts only at §7, and only for your own
+account. Everyone else waits for §8.
 
 ---
 
@@ -36,7 +36,7 @@ answer differs:
 5. Turnover is under ₹5 crore (so no e-invoicing), and SAC 998439 at 18% is right for coins and plans.
 6. The live series starts at 000001 on go-live day.
 
-**Until the CA confirms, `billing_document_issuing_enabled` stays off on prod** (step 5). Receipts still
+**Until the CA confirms, `billing_document_issuing_enabled` stays off on prod** (§6). Receipts still
 email without an attachment.
 
 ### 1.3 Publish the policy pages (after the release reaches Production)
@@ -60,7 +60,7 @@ Following WORKING_AGREEMENTS:
 - let the dev Preview build;
 - then merge `dev` → `main` with `--no-ff`.
 
-Write the merge commit hash into the report (§10). `git revert -m 1 <that hash>` is the code rollback.
+Write the merge commit hash into the report (§11). `git revert -m 1 <that hash>` is the code rollback.
 
 **Check:** the Production deployment is Ready in Vercel, and `/wallet` loads signed in.
 
@@ -163,7 +163,7 @@ From `/admin/settings/billing-operations`. Check each with the query in §3.
 2. `billing_reconcile_enabled` **on**.
 3. `billing_emails_enabled` **on**.
 4. `billing_admin_actions_enabled` **on**. This is the switch that can move money out. It is needed for
-   the refund in step 7.
+   the refund in §7.
 5. `billing_document_issuing_enabled` **on only after the CA (§1.2)**. Turning the switches on never
    replays old payments: the catch-up sweep reaches back only to when the switch went on.
 6. `pricing_checkout_enabled` **on, last**. Signed-out visitors and unlisted accounts still see
