@@ -260,3 +260,112 @@ DELETE FROM public.schema_migration_ledger WHERE migration_number = 137;
   `testuser` listed, it passes.
 - **The policy pages** render: e2e `legal-pages.spec.ts` plus a read of `/refund-policy` after reseeding
   on dev.
+
+## 8. Execution spec — anchored at `2e9588e` (2026-09-25); supersedes §2-§6 where they differ
+
+Re-verified against the code after Phase 6 was built and walked. §2's facts still hold; the line numbers below
+replace its.
+
+**Already done:** migration 137 is written as files (`137_billing_checkout_allowlist.sql` + rollback), with
+the SQL from §4. `feature_flags.value` is `text`, checked on dev. **Applied nowhere.**
+
+**Order:**
+- P7-A (Opus) and two Sonnet units, **B1 ∥ B2**, run together. Their files are disjoint.
+- Then P7-C (Opus).
+- Then the owner walk.
+
+### P7-A — policy text (Opus), `lib/managed-pages/registry.ts`
+
+The content is as §3. The seeds are:
+- `privacy` `:72`;
+- `terms` `:223`;
+- `refund-policy` `:307`, which carries `policyPlaceholder: true` at `:316` and the draft header at `:318`;
+- `account-deletion` `:603`.
+
+A second "Starter Draft" header sits at `:575`; check which page it belongs to.
+
+Before writing any claim, check it against the code:
+- the grace period and retry wording against `razorpay-sync.ts`'s `gracePeriodEndsAt`;
+- the 7-day window against B1;
+- the refund cap against `resolveRefundCapPerAccount`.
+
+### B1 — disclosure and the 7-day window (Sonnet)
+
+1. **The renewal line.**
+   - `formatRenewalLine(interval, nextChargeDate)` in `lib/billing/checkout-quote.shared.ts:78` gains the
+     amount, giving "Renews monthly on the 24th at ₹531." and "Renews yearly on September 24, 2027 at
+     ₹5,310." Pass `grossMinor` and `currencyCode`, and format with the existing currency helper.
+   - Its caller is `components/pricing/checkout/CheckoutSummarySheet.tsx:283`.
+   - The annual line at `:274` becomes "Billed once a year (≈ ₹X / month)".
+   - Update `checkout-quote.shared.test.ts`.
+2. **The 7-day window (R1).**
+   - Add `isOutsideRefundWindow(capturedAt, now, days = 7)` to `lib/billing/refund-eligibility.shared.ts`.
+     A null `capturedAt` counts as outside, so it needs the confirmation.
+   - `refundBillingPayment` (`app/actions/admin-billing-actions.ts:149`):
+     - add `captured_at` to the payment select, and a `confirmOutsideWindow?: boolean` input;
+     - outside the window without it, throw "This payment is outside the 7-day refund window. Confirm to
+       refund anyway." **before** the `attempting` audit row (`:275`) and any mutation;
+     - put `outsideWindow` in that row's `before_json`.
+   - The settled wrapper in `app/actions/admin-billing-ui-actions.ts` passes the new field through.
+   - The refund dialog's config in `components/admin/users/AdminUserDetail.tsx` (~`:353`), when outside the
+     window, shows the warning line and a checkbox. Confirm stays disabled until it is ticked.
+     `AdminBillingPayment` needs `capturedAt` if the mapper doesn't carry it (`lib/admin/user-management.shared.ts`).
+   - Tests: the helper's boundaries (exactly 7 days, null), the refusal, and the confirmed path.
+
+### B2 — allowlist and health cards (Sonnet)
+
+3. **The named-account rollout (R3).**
+   - `parseCheckoutAllowlist(value)` goes in `lib/billing/checkout-guard.shared.ts`: split on commas and
+     whitespace, trim, lowercase, and drop empty entries. Test it.
+   - A new `lib/billing/checkout-allowlist.ts` (`server-only`) holds `isCheckoutOpenForUser(userId: string
+     | null)`: true unless the flag is enabled and the user isn't listed. `getFeatureFlagValue` is at
+     `lib/ai/model-config.ts:513`.
+     - A missing row means no restriction.
+     - A signed-out visitor counts as not listed.
+     - A flag-read error falls back to "no restriction", but the kill switch fails closed on the same error,
+       so checkout is shut either way. Say this in a comment.
+   - `prepareRazorpayCheckoutInternal` (`app/actions/pricing-checkout.ts`): after `getAuthenticatedUser`
+     (`:196`), refuse with `CheckoutRefusalError("Payments aren't open yet. We'll let you know when they
+     are.", 'not_in_rollout', 403)`. Add `'not_in_rollout'` to `CheckoutRefusalCode`.
+   - **The UI, which §3 missed:** without it, an unlisted user sees live Buy/Upgrade buttons that refuse on
+     click.
+     - `getPricingWalletPageData` (`app/actions/pricing-runtime.ts:211`) and the data behind
+       `app/plans/page.tsx` set `controls.pricingCheckoutEnabled = global && isCheckoutOpenForUser(userId)`.
+     - The wallet's existing "coming soon" states (`components/pricing/WalletPage.tsx:136`, `:567`) then
+       apply unchanged.
+     - Do not change the shared pricing snapshot, which is not per-user.
+   - Add the flag to `lib/admin/operational-flags.shared.ts`, with help text that says **on = restricted**,
+     and that the id list is edited in SQL for now.
+4. **Phase 6 health cards** on `/admin/pricing/billing-incidents` (`app/actions/billing-incidents.ts`, with
+   pure mappers in `lib/billing/billing-incidents.shared.ts`):
+   - failed billing jobs;
+   - pending jobs older than 1h;
+   - refunds pending over 24h;
+   - captured payments without an issued invoice.
+   - **For the last card, count only payments captured after the switches went on.** Otherwise the four
+     pre-switch dev payments, and every pre-go-live payment on prod, show as defects forever. Export the
+     switch-on reader from `lib/billing/notifications/sweeps.ts` (`loadQueueSwitchedOnSince`) and reuse
+     it. With issuing off, the card reads "issuing off", not 0.
+   - Each card fails closed to "unavailable".
+
+**Both units:**
+- commit as they go;
+- stay inside their own files;
+- pass the full gate before the final commit (tsc, lint, test, `build:verify`).
+
+### P7-C — additions to the runbook, from the Phase 6 walk
+
+- **Env on Production:**
+  - `APP_URL` must be the prod domain, because the email links use it;
+  - `BILLING_EMAIL_FROM`;
+  - Resend's domain verified;
+  - `R2_PRIVATE_BUCKET_NAME` for the PDFs.
+- **The live webhook** includes `refund.created`, `refund.processed` and `refund.failed`.
+- **Turning the switches on is safe after payments exist.** The receipt sweep reaches back only to the
+  switch-on time (`df01903`), so nothing is replayed.
+- **Migrations on prod:** 125 → 137, including 136 (the audit types).
+- **Carried items, added to §6:**
+  - Phase 6 walk step 7, the subscription email kinds (deferred by the owner on 2026-09-25, to go with
+    the OTP session).
+  - The image-job worker's re-kick uses the same `APP_URL` pattern that broke billing's kick on Preview.
+  - A Resend 4xx retries all 5 times.
