@@ -71,10 +71,16 @@ on the OTP session, with the deferred Phase 5 subscribe walk.
 - no open jobs;
 - the agent server is stopped.
 
-**Next:**
-1. **Push `payments`**, so the Preview gets the in-process kick.
-2. Step 7 with the OTP session.
-3. Phase 7 (`phase-7-plan.md`).
+**The owner pushed `payments` after the walk** (2026-09-25). **Step 7 is deferred by the owner** and
+carried into the Phase 7 go-live checklist.
+
+**Phase 7, 2026-09-25:**
+- **The execution spec is `phase-7-plan.md` §8,** anchored at `2e9588e`. It supersedes §2-§6 where they
+  differ.
+- **Migration 137 is written** (`fafb518`). **Applied nowhere.**
+- **Order:** P7-A (Opus policy text) ∥ B1 (Sonnet: disclosure and the 7-day window) ∥ B2 (Sonnet:
+  allowlist and health cards), then P7-C (Opus runbook), then the owner walk.
+- Usage at planning: **47%**.
 
 **Earlier block (2026-09-24 late) follows.**
 
