@@ -3,7 +3,97 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-25 night — Phase 8 batch 1 building)
+## Next session starts here (updated 2026-09-25 late night — Phase 8 walked on the Preview; passes)
+
+**P8-E ran on the Preview** (`43e8dfd`, dev DB, Razorpay test). Opus drove it with Playwright:
+`.agent/sheet-walk/p8.pw.ts` + `p8.config.ts` (gitignored). The owner ran the setup and teardown SQL.
+- **Razorpay test mode takes USD** with no dashboard change. International cards need a name on the card.
+- **Refusals: pass.** Each was a 400 unless noted.
+  - An IN profile buying ROW: "Payments from your country aren't open yet."
+  - A `stripe` item: "not available yet" (the loader's filter).
+  - A US profile with the ROW rule still draft: **503**, tax rules unavailable.
+  - A US profile with `billing_international_countries` off: refused. This is runbook §12's stop switch.
+  - A US profile buying an IN pack: "This price is for customers in India…"
+- **US profile: pass.** Saved through the real dialog: `+15125550142`, region `TX`, state code `96`.
+- **Top-up: pass.**
+  - The sheet reads "Total $4 · No GST: export of services".
+  - The Visa test card `4012 8888 8888 1881` took the order in USD, and it was captured with 0 tax,
+    supply `export` and `cardInternational: true`.
+  - Invoice TEST-KG/26-27/000008: place of supply "Other Countries (96)", a US buyer block, IGST @ 0%,
+    the LUT endorsement, "US Dollars Four Only". The email was sent, and the grant happened once.
+  - The admin refund went `processed`, with credit note TEST-KGC/26-27/000002 in USD. Its email was sent.
+- **Subscription: pass. No SMS OTP was asked for.**
+  - The Mastercard test card `5104 0600 0000 0008` bought Studio monthly at $29. Checkout created the USD
+    Razorpay plan (`plan_TgM4Pmt9OWUQmm`).
+  - The payment is `subscription_first`, USD, 0 tax, export. Invoice TEST-KG/26-27/000009 was issued and
+    emailed.
+  - The customer then cancelled from `/account/billing` (cycle-end, `cancel_at_period_end`).
+  - An admin refund then ended it at once, with credit note TEST-KGC/26-27/000003 in USD.
+  - **This card is issued in Tunisia,** so Razorpay showed its currency-choice screen, which pre-selects
+    TND 95.55 with a conversion fee. The walk picked USD. A USD-issued card won't see that screen.
+- **Admin:** the ROW rule was published from `/admin/pricing/tax-rules`, and all five incident cards
+  read Healthy, "Export sales on a domestic card" included.
+- **Before merge (§5): pass.** After teardown, the India Audience sheet reads "₹200 + IGST ₹36 · Renews
+  monthly on the 25th at ₹236", with Yearly disabled. An IN top-up prepares at ₹531, and ROW is refused
+  again.
+  - **The Phase 7 allowlist re-run was not done.** It needs the owner's SQL for the id list.
+
+**Found by the walk, and fixed on 2026-09-26 (uncommitted at the time of writing; gates green: tsc, lint,
+2,634 tests, `build:verify`):**
+1. **Dates:** every billing date a customer sees is now IST: the billing page, the plan banner, the cancel
+   dialog, the wallet's refill line and the checkout sheet's "on the 25th". Emails and invoices already
+   were. The helper is `lib/billing/billing-dates.shared.ts`.
+2. **`cardCountry` is removed.** Razorpay's card entity has no country, even expanded. The "export sale on a
+   domestic card" incident now shows the customer's billing country instead.
+3. **Refusal wording:** an India profile choosing a ROW price now reads "Your billing address is in India, so
+   please choose the India price." (code `market_country_mismatch`).
+4. **e2e:** `e2e/billing-details-international.spec.ts`. It needs `E2E_BILLING_USER_EMAIL`/`_PASSWORD`
+   (a throwaway account), and skips while `billing_international_countries` is off. **Never run green yet**,
+   because the flag is off on dev. Run it during the next walk that turns the flag on.
+5. **Razorpay's currency choice:** there's no Checkout option for it. It's now a request to Razorpay, in runbook
+   §12 step 2.
+
+**Also on 2026-09-26 (owner + the CA's answers):**
+- **Documents:** the Kissago mark and wordmark are top right in black and white, drawn as vectors. "Original
+  for recipient" moves under the logo, and the footer adds "Subject to Gandhinagar Jurisdiction".
+  - The export endorsement adds the CA's sentence: "Opted for LUT under the GST Act, so no GST is charged."
+  - The pinned India render hash was re-pinned on purpose.
+  - Dev's stored PDFs predate the change. A re-render of those rows differs. No prod documents exist.
+- **Policy text:** the Refund Policy has a new "Customers outside India" section (currency, LUT/no GST, no US
+  sales tax, refunds, IST dates). Terms §7 no longer says payments are India-only.
+  - It's written to stay true before the US opens.
+  - **Owner publishes** the Refund Policy and Terms (runbook §1.3). Terms is a minor change.
+- **The CA's answers** are recorded in runbook §1.2 and `international-readiness.md` §6.
+  - Signature: stay computer-generated (owner).
+  - US sales tax: doesn't apply.
+  - LUT: yes, file it before the first export invoice.
+  - **Still open:** the numbering, Rule 48, the credit-note timing, turnover/SAC, the live series start, an INR
+    value on export invoices, and EU/UK.
+
+**Dev after the walk (verified by query):**
+- the switches and flags are as before: the market lock on, ROW routing `stripe`/off, and the four
+  billing switches off;
+- no refund-cap row;
+- the ROW rule is draft, and the ROW items are `stripe` again;
+- `testuser` is back on IN/27 with `testuser@test.com`.
+
+What the walk left behind:
+- four unpaid test orders (three USD, one INR `f0167813…`), which the stuck top-ups card will list;
+- the Studio monthly ROW version keeps its Razorpay test plan ref;
+- `testuser` has 5 refunds now.
+
+**Unblocked:** an international test card subscribes with no SMS OTP. So the Unit 0 cycle-end-cancel
+probe and subscribe → cancel → reconcile (runbook §1.1) can be walked on a USD subscription without the
+owner's phone. Only India-specific checks still need an Indian card.
+
+**Next:**
+1. Commit and push the 2026-09-26 fixes. Then, on the Preview: render an invoice, and look at the billing page's
+   dates.
+2. **Owner:** publish the Refund Policy and Terms. Confirm or file the LUT and send its ARN. Ask Razorpay about the
+   currency-conversion offer.
+3. The CA's still-open questions. Then runbook §12 when the owner is ready.
+
+## Previous block (2026-09-25 night — Phase 8 batch 1 building)
 
 **Phase 8 (the US on Razorpay International) is in execution.** The spec is `phase-8-plan.md` §8.
 - **M done (`adc2eed`):**

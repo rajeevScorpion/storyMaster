@@ -157,4 +157,14 @@ These are the same questions as plan §6, kept here so the doc stands alone:
    state reach it from the first sale?
 6. Confirm the EU/UK position (§4, step 1) that justifies the US only.
 
+**The CA's answers, 2026-09-26:**
+- **1 and 2:** the LUT applies. It may already be filed; if not, file it before the first export invoice.
+  Put its ARN in `LEGAL_LUT_ARN`.
+- **3:** export invoices carry a sentence that the LUT was opted for, so no GST is charged. **Done:** "Supply
+  meant for export under LUT without payment of IGST. Opted for LUT under the GST Act, so no GST is charged."
+  The series question wasn't answered, so exports stay on `KG/` (U3).
+- **5:** US sales tax does not apply to Kissago.
+- **Also:** every document now says "Subject to Gandhinagar Jurisdiction".
+- **Still open:** 4 (an INR value on export invoices) and 6 (EU/UK).
+
 The steps to switch the US on are in `go-live-runbook.md` §12.

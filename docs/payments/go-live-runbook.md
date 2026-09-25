@@ -36,6 +36,13 @@ answer differs:
 5. Turnover is under ₹5 crore (so no e-invoicing), and SAC 998439 at 18% is right for coins and plans.
 6. The live series starts at 000001 on go-live day.
 
+**The CA's answers, 2026-09-26** (with the US questions in `international-readiness.md` §6):
+- **Jurisdiction:** print "Subject to Gandhinagar Jurisdiction" in the footer. **Done:** every invoice and
+  credit note carries it.
+- **Question 2 (signature):** the CA suggests a stamp and a digital signature. **Owner: stay with
+  computer-generated documents for now.** No change.
+- **Still open:** questions 1, 3, 4, 5 and 6.
+
 **Until the CA confirms, `billing_document_issuing_enabled` stays off on prod** (§6). Receipts still
 email without an attachment.
 
@@ -290,8 +297,13 @@ Background: `international-readiness.md`. Do these in order. Every step has a ch
 
 1. **The CA's answers** to `international-readiness.md` §6 are in, and nothing contradicts the build.
    - **Check:** each answer is written into that doc, next to its question.
-2. **The LUT is filed.** Put its ARN in `LEGAL_LUT_ARN` (`lib/legal/business-config.ts`) and deploy.
+2. **The LUT is filed.** The CA says it can be filed any time before the first export invoice. Put its ARN
+   in `LEGAL_LUT_ARN` (`lib/legal/business-config.ts`) and deploy.
    - **Check:** a test-mode export invoice on the Preview prints "LUT ARN: …".
+   - **Ask Razorpay** whether the card-currency offer (Dynamic Currency Conversion) can be turned off,
+     or can default to USD. Today a card issued outside the US is offered its own currency first, with
+     Razorpay's markup. There is no Checkout option for it.
+     - **Check:** a test payment with a non-USD card (`5104 0600 0000 0008`) opens straight on USD.
 3. **Razorpay live:** International Cards is approved (Dashboard → Account & Settings → International
    payments).
    - **Check:** the dashboard shows it active.
