@@ -85,10 +85,10 @@ Write the merge commit hash into the report (§11). `git revert -m 1 <that hash>
 
 ## 3. The production database
 
-Prod is at **124**. Apply **125 through 137, one at a time, in numeric order**, from the Supabase
+Prod is at **124**. Apply **125 through 138, one at a time, in numeric order**, from the Supabase
 dashboard (prod project) → SQL editor → paste the whole file → Run.
 
-`125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137`
+`125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138`
 
 After **each** one:
 ```sql
@@ -103,12 +103,15 @@ Notes:
   subscription is refused a live one.
 - **132** is the refund clawback. Admin refunds refuse without it.
 - **134** stops the sync from clearing a scheduled cancel.
+- **138** is the US groundwork (Phase 8). It opens nothing: its flag ships off and its tax rule as a draft.
+  The India release doesn't need it, but applying it now keeps prod in step with dev.
 
-**After 137, check the switches exist and are all off:**
+**After 138, check the switches exist and are all off:**
 ```sql
 select flag_key, enabled, value from public.feature_flags
 where flag_key in ('pricing_checkout_enabled','billing_checkout_allowlist','billing_reconcile_enabled',
-  'billing_document_issuing_enabled','billing_emails_enabled','billing_admin_actions_enabled')
+  'billing_document_issuing_enabled','billing_emails_enabled','billing_admin_actions_enabled',
+  'billing_international_countries')
 order by flag_key;
 ```
 A missing row reads as off, except `billing_checkout_allowlist`, whose missing row means "no
@@ -266,7 +269,7 @@ Fill this in and keep it with the release.
 ```
 Date / time (IST):
 Merge commit on main:
-Migrations applied on prod (ledger top row after each): 125 … 137
+Migrations applied on prod (ledger top row after each): 125 … 138
 Env vars set (names only):
 Razorpay live: KYC ☐  Subscriptions ☐  Auto-capture ☐  Webhook URL + events ☐
 Switches, final values:
@@ -278,3 +281,49 @@ Smoke ladder: 1 ☐ 2 ☐ 3 ☐ 4 ☐ 5 ☐ 6 ☐   (payment ids, document numbe
 Anything that failed, and what was done:
 Open items carried forward:
 ```
+
+---
+
+## 12. Switching the US on (Phase 8; after India is live and stable)
+
+Background: `international-readiness.md`. Do these in order. Every step has a check.
+
+1. **The CA's answers** to `international-readiness.md` §6 are in, and nothing contradicts the build.
+   - **Check:** each answer is written into that doc, next to its question.
+2. **The LUT is filed.** Put its ARN in `LEGAL_LUT_ARN` (`lib/legal/business-config.ts`) and deploy.
+   - **Check:** a test-mode export invoice on the Preview prints "LUT ARN: …".
+3. **Razorpay live:** International Cards is approved (Dashboard → Account & Settings → International
+   payments).
+   - **Check:** the dashboard shows it active.
+4. **Prices.** In `/admin/pricing`, publish the US (ROW) plan versions and top-ups with provider
+   **Razorpay** and your USD prices. Archive the old `stripe` ROW rows.
+   - **Check:**
+     ```sql
+     select provider, currency_code, count(*) from public.pricing_plan_versions
+     where pricing_market_key = 'ROW' and status = 'published' group by 1, 2;
+     ```
+     Only `razorpay`/`USD`, plus the free plan's null.
+5. **Routing:** set `pricing_routing_provider_row` to `razorpay`, enabled (`/admin/settings`, the pricing
+   runtime panel).
+6. **The tax rule:** publish the ROW `in_export_lut` rule.
+   ```sql
+   update public.billing_tax_rules set status = 'published', effective_from = now(), updated_at = now()
+   where market_key = 'ROW' and tax_regime = 'in_export_lut' and status = 'draft';
+   ```
+   - **Check:** `select status from public.billing_tax_rules where market_key = 'ROW';` returns
+     `published`.
+7. **The policy text** for customers outside India is published (§1.3's steps: reset, version, save,
+   publish minor).
+8. **Your own account first.** In this order:
+   1. Turn `billing_checkout_allowlist` on, with only your user id. This closes checkout to everyone
+      else, India included, for the minutes this takes.
+   2. Turn `billing_international_countries` on, with value `US`.
+   3. Turn `pricing_india_only_beta_enabled` **off**. The allowlist still keeps everyone but you out.
+9. **Smoke:** one USD top-up, with a US billing profile, on a real foreign card if you have one.
+   - **Check:** the payment is `captured` in USD, and its invoice has the export wording and IGST 0%.
+   - **Check:** `/admin/pricing/billing-incidents` → "Export sales on a domestic card" is empty, or
+     shows it if you used an Indian card. That is expected, and it proves the card works.
+   - Refund it from admin, and check the credit note.
+10. **Open:** turn `billing_checkout_allowlist` off.
+
+**To stop US sales only:** set `billing_international_countries` off. India is untouched.
