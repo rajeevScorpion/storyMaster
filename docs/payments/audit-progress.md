@@ -3,30 +3,72 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-25 — Phase 6 code complete; the dev walk is next)
+## Next session starts here (updated 2026-09-25 — Phase 6 walked on dev; four defects found and fixed)
 
-**Phase 6 is code-complete and reviewed. Every unit (M, A, B, C1, C2, D) is built and has been reviewed by Opus.**
-- **C2:**
-  - Leftovers committed in `d41eb04`.
-  - Processors: one review fix, `1c4a6fe` (the "attached" copy now follows the actual attachment).
-  - Hooks 1-3 in `cada295`, hooks 4-6 in `83ebb1a`, sweeps and reconcile wiring in `56eb920`. All three
-    diffs were reviewed against §10 and accepted.
-  - Deviations:
-    - The admin cancel keys its job on `user_id` and skips the enqueue when it is null, since `subject_ref`
-      isn't selected there.
-    - The renewal-reminder sweep isn't gated on `shouldEnqueue` (the enqueue is).
-- **D:**
-  - One review fix, `5dd9814`: Resend refuses when emails are off, and only a 404 reads as "deleted".
-  - Tests in `9f4eeb2`.
-- **Migration 136** (`f20e419`) adds the `billing_job_retried` and `billing_document_resent` audit types.
-  **Applied nowhere.** Phase 7's allowlist moved to 137 (owner, 2026-09-25).
-- **Gates on `9f4eeb2`+C2 (run by Opus):** tsc and lint clean, **2,460 tests / 194 files**, `build:verify`
-  compiled, smoke e2e 8/8.
+**Phase 6 is built, reviewed and walked on dev (plan §5 steps 1-6).** Step 7 (the subscription kinds) waits
+on the OTP session, with the deferred Phase 5 subscribe walk.
+- **Migration 136 applied on dev** (owner, 2026-09-25). Verified: the ledger row, and the CHECK lists both
+  new types plus 131's twelve. Phase 7's allowlist is now **137**.
+- **Review of C2 and D:**
+  - C2 fixes in `1c4a6fe`.
+  - D fixes in `5dd9814`, with D's tests in `9f4eeb2`.
+  - The hooks (`cada295`, `83ebb1a`) and the sweeps (`56eb920`) were accepted.
+
+**The walk, 2026-09-25 (Opus, Playwright on the agent server, dev DB, Razorpay test):**
+- **How it was run:**
+  - `testuser`'s billing email was set to `delivered@resend.dev` (Resend's test inbox).
+  - The switches were flipped from `/admin/settings/billing-operations`.
+  - Scripts are in `.agent/sheet-walk/p6.pw.ts` (gitignored). Credentials come from the shell.
+- **1 pass:** a top-up became TEST-KG/26-27/000001, the job went `done`, and the email was `sent`.
+- **2 pass:** the reconcile re-ran it with no second document or email.
+- **3 pass:**
+  - The admin refund went `pending`, then `processed` via Razorpay's webhook.
+  - Credit note TEST-KGC/26-27/000001 references the invoice, and the refund email was sent.
+  - The PDF text was checked: every Rule 46 field is present, with the TEST band.
+- **4 pass:** a Gujarat profile gives TEST-KG/26-27/000007, intra-state, with CGST ₹40.50 and SGST ₹40.50.
+- **Downloads:**
+  - the owner gets 200 and a PDF;
+  - signed out gets 401;
+  - an unknown id gets 404.
+  - Another user's document was not tried live, because every dev document is `testuser`'s. The route
+    tests cover it.
+- **5 pass:** with both switches off, a top-up created no job and no document.
+- **6:** a bad `RESEND_API_KEY` gives attempt 1 "API key is invalid", then a 2-minute backoff. Resend
+  queued and audited (136 works). The walk continues below.
+
+**Defects the walk found, all fixed:**
+1. **The enqueue kick never ran the worker on a Preview.** It POSTed to `APP_URL`, which on Preview names
+   the **dev branch** deployment. Vercel logs showed `POST /api/billing/jobs/run 404` on
+   `branch=dev` after every payment, and nothing was logged. Jobs would have waited for the daily
+   reconcile. **Fixed in `df01903`:** the kick now runs the worker in-process via `after()`, and the
+   runner's HTTP re-kick logs a non-2xx status. Production's `APP_URL` is its own domain, so prod was only
+   exposed to the silence. **`lib/media/image-job-runner.ts`'s re-kick uses the same `APP_URL` pattern**
+   and is not changed.
+2. **The receipt sweep replayed a backlog.** Turning the switches on, then running the reconcile, numbered
+   TEST-KG 000002-000005 for four older `testuser` top-ups (two of them already refunded, so they have
+   invoices and no credit notes). It emailed those receipts to **`testuser@test.com`**, a real third-party
+   domain. **Fixed in `df01903`:** the sweep never reaches back past the switches' `updated_at`.
+3. **Every dropdown inside a dialog opened behind it** (list z-1000, Modal z-1100, story dialogs
+   z-1200). In the billing dialog, a customer could not pick a state with a mouse or touch, and the state
+   is required before the first payment. **Fixed in `14f840e`** (z-1300), and verified by a mouse click in
+   the walk.
+4. The issuing switch's off-state help said Phase 6 rendering didn't exist (`df01903`).
+
+**Known, not changed:**
+- A Resend 4xx (bad key, invalid recipient) retries all 5 times. The runner only fails early on
+  `PermanentBillingJobError` and ignores `EmailSendError.retryable`. That is fine for a bad key; for an
+  invalid address it wastes four attempts.
+- The dev series has gaps in meaning, not in numbers: 000002-000005 belong to pre-switch payments. Test
+  series only.
+
+**Dev state left by the walk:**
+- **All three switches are ON** (`billing_admin_actions_enabled` too).
+- `testuser`'s billing email is `delivered@resend.dev`, with state Gujarat.
+- Restore these at the end of the walk; the next session should check them.
 
 **Next:**
-1. **Owner:** apply 136 on dev.
-2. **The walk** (plan §5, steps 1-6), which Opus runs. Turn both switches on on dev; this needs `testuser`'s
-   password from the owner. Step 7 (the subscription kinds) waits on the OTP session.
+1. **Push `payments`**, so the Preview gets the in-process kick.
+2. Step 7 with the OTP session.
 3. Phase 7 (`phase-7-plan.md`).
 
 **Earlier block (2026-09-24 late) follows.**
