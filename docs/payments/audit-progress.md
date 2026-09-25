@@ -3,6 +3,49 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
+## Next session starts here (updated 2026-09-25 late — Phase 7 built and reviewed; the owner walk is next)
+
+**Phase 7 is code-complete and reviewed by Opus (plan §8).** Session usage at the end: **73%**. The owner
+said no new agents.
+- **Migration 137 applied on dev** (owner). Verified: the ledger row, and the flag row off with an empty
+  value.
+- **P7-A, policy text** (`f79a956`, Opus):
+  - The Refund / Cancellation Policy was rewritten from the draft. Every rule was checked against the
+    code.
+  - Terms §7-8, Privacy (billing details and Resend), account deletion, and the FAQ's checkout answer
+    were updated.
+  - **Not what the plan said:** a lost chargeback does **not** remove coins in code, so the policy only
+    reserves an account review.
+  - **Owner:** publish the pages (runbook §1.3).
+- **B1** (`f340905`, `ab0516b`, Sonnet), reviewed and accepted:
+  - the renewal line now carries the amount, and annual reads "Billed once a year";
+  - the 7-day refund window, warn-and-override, refused on the server before any mutation, with
+    `outsideWindow` in the audit row.
+- **B2** (`d1fe033`, `b1ee342`, `8451640`, Sonnet), reviewed and accepted:
+  - **The allowlist.** It refuses with `not_in_rollout` at prepare. Its per-user override lives in
+    **`getPricingRuntimeContext`**: the spec said the wallet-data function, but that is not where the
+    wallet reads the switch. `/plans` had no checkout gating before; it now shows "coming soon".
+  - **Four health cards.** The invoice card is scoped to payments since switch-on, and reads "Issuing off"
+    when issuing is off.
+  - **Review notes, not fixed:** the invoice card checks only `captured` payments, so a quickly-refunded
+    uninvoiced payment is missed. A payment from the last few minutes, whose job hasn't run, shows until
+    it does.
+- **P7-C** is `docs/payments/go-live-runbook.md` (`568d77c`, `c5b613c`, Opus).
+- **Gates on the final tree (Opus):** tsc and lint clean, **2,516 tests / 196 files**, `build:verify`
+  compiled, e2e smoke + plans + filter-dropdown + legal-pages **18/18**.
+
+**Next:**
+1. **Owner walk on the Preview, after push** (plan §7):
+   - the sheet's renewal line for monthly and annual;
+   - the allowlist: on with `testuser` unlisted gives "coming soon" and a refusal, and listed passes;
+   - the 7-day checkbox on an old payment;
+   - the health cards;
+   - `/refund-policy` after reseeding.
+2. The deferred items, all in runbook §1.1 (step 7 included).
+3. Phase 8 (the international review doc). Not started.
+
+**Earlier block (2026-09-25, Phase 6 walk) follows.**
+
 ## Next session starts here (updated 2026-09-25 — Phase 6 walk steps 1-6 pass on dev; four defects fixed)
 
 **Phase 6 is built, reviewed and walked on dev (plan §5 steps 1-6).** Step 7 (the subscription kinds) waits
