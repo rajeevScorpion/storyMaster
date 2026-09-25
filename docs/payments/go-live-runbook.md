@@ -41,11 +41,28 @@ email without an attachment.
 
 ### 1.3 Publish the policy pages (after the release reaches Production)
 
-The code only carries seed text. The live text changes when you publish.
-- `/admin` → Pages → **Refund / Cancellation Policy** → "Reset to seed" → read it → Publish as a new
-  version.
-- The same for **Terms** (a **minor** version, decision R2, so nobody is asked to re-accept), **Privacy**
-  (minor), **Account Deletion** and **FAQ**.
+The code only carries seed text. **"Reset seed" makes the new text live at once**: public pages render
+the saved text. Publishing then records a numbered version of it for consent. A version number can't
+be published twice, so Publish stays disabled until the version is set and saved. (Walked on dev,
+2026-09-25.)
+
+For each page, in `/admin/settings/pages`:
+1. Select the page → **Reset seed** → OK. You see "Starter seed restored.", and the page is live.
+2. Read it on the site.
+3. Under **Version & consent**, set **Document version** and **Acceptance kind** as in the table.
+   Set **Effective date** to today. Then **Save**.
+4. **Publish (minor)**. Never Publish (material): decision R2, so nobody is asked to re-accept.
+
+| Page | Version now (dev) | Set to | Acceptance kind |
+|---|---|---|---|
+| Refund / Cancellation Policy | never versioned | 1.0.0 | Acknowledged |
+| Terms | 1.0.0 | 1.1.0 | Accepted |
+| Privacy | 1.0.0 | 1.1.0 | Acknowledged |
+| Account Deletion | never versioned | 1.0.0 | Acknowledged |
+| FAQ | check on the page | next minor | as it is now |
+
+Prod's versions may differ from dev's. Read "Published vX" on each page first, and bump the middle
+number.
 - **Check:** `/refund-policy` shows "Cancelling a plan" and no "Starter Draft".
 - **If `billing_refund_cap_per_account` is ever set**, the policy's "two refunds per account" must change
   with it. Today the row doesn't exist, and the code default is 2.

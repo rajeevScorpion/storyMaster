@@ -3,6 +3,56 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
+## Next session starts here (updated 2026-09-25 night — Phase 7 walked on the Preview; passes)
+
+**The Phase 7 walk ran on the Preview** (`5662a3e`, dev DB, Razorpay test). Opus ran it with Playwright,
+using `.agent/sheet-walk/p7.pw.ts` and `p7.config.ts` (gitignored). Credentials came from the shell.
+- **Renewal line: pass.** The Audience monthly sheet reads "Renews monthly on the 25th at ₹236."
+  - **Annual can't be walked.** The Yearly toggle is disabled in the IN market (`yearlyCheckoutDeferred`),
+    and no annual version has a Razorpay plan. It rests on the unit tests.
+- **Allowlist: pass.** The switch was on, with only `testuser` listed:
+  - `testuser` sees "Buy coins", and prepare returns 200.
+  - The admin (unlisted) sees "Upgrade coming soon" and "Top-ups coming soon". Prepare returns **403**,
+    "Payments aren't open yet…".
+  - On `/plans`, the unlisted CTA row renders "—", the existing `coming_soon` rendering. There are no dead
+    links, but also no words. Wording only; not changed.
+- **7-day window: pass.**
+  - One `testuser` payment was backdated to 10 Sep by the owner. The dialog then shows the warning and the
+    checkbox, and Refund stays disabled until the box is ticked.
+  - The server accepted the override, then refused at the **refund cap**: `testuser` has 3 refunds, and the
+    cap is 2 lifetime. That check runs after the window check and before the audit row, so nothing was
+    written.
+  - `outsideWindow` in the audit row was therefore not seen live. The unit tests cover it.
+- **Health cards: pass.**
+  - Failed jobs, stuck pending jobs and pending refunds all read Healthy.
+  - The invoice card reads "Issuing off" with issuing off, and "Healthy" with it on.
+  - Stuck top-ups lists ten `testuser` orders from the Phase 5/6 walks. The walk added an eleventh:
+    order `1a8cafa3…`, `created` and never paid.
+- **Refund policy: pass.** Reset seed, then `/refund-policy` shows "Cancelling a plan" and no "Starter
+  Draft".
+  - **Runbook §1.3 was wrong, and is now fixed.** Reset makes the text live at once. Publish needs a
+    version, an acceptance kind and a Save first, and a version number can't be republished (Terms and
+    Privacy are at 1.0.0, so they go to 1.1.0).
+  - On dev, the refund policy is live but **not versioned**. Nothing else on dev was reset.
+
+**Dev after the walk (verified by query):**
+- all four billing switches are off, and checkout is on;
+- no documents were created.
+
+**Owner, restore the test data (dev SQL editor):**
+```sql
+update public.feature_flags set value = '' where flag_key = 'billing_checkout_allowlist';
+update public.billing_payments set captured_at = '2026-09-22 18:38:29+00'
+where id = '7105eec1-95e0-4081-835b-9f649dd53967';
+```
+
+**Next:**
+1. The deferred items in runbook §1.1: the OTP session (subscribe, cancel and reconcile, plus the
+   Phase 6 step 7 emails), the Unit 0 probe, the phone look, and the CA answers.
+2. Phase 8 (the international review doc). Not started.
+
+**Earlier block (2026-09-25 late, Phase 7 build) follows.**
+
 ## Next session starts here (updated 2026-09-25 late — Phase 7 built and reviewed; the owner walk is next)
 
 **Phase 7 is code-complete and reviewed by Opus (plan §8).** Session usage at the end: **73%**. The owner
