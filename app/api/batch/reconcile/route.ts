@@ -8,6 +8,8 @@ import { cleanupAbandonedReferenceSetups } from '@/lib/references/reference-clea
 import { drainAgentRuns } from '@/lib/agentic/orchestrator';
 import { getAgenticFlags } from '@/lib/agentic/flags';
 import { reconcilePendingRefunds, reconcileRazorpayBilling } from '@/lib/billing/razorpay-reconcile';
+import { sweepMissingReceiptJobs, sweepRenewalReminders } from '@/lib/billing/notifications/sweeps';
+import { runBillingJobsOnce } from '@/lib/billing/notifications/runner';
 
 // Reconciliation downloads + compresses images; give it room but stay bounded.
 export const maxDuration = 300;
@@ -112,6 +114,22 @@ async function handle(request: Request): Promise<Response> {
       console.error('Pending refund reconcile failed:', error instanceof Error ? error.message : error);
       return 0;
     });
+    // Payments Phase 6 (docs/payments/phase-6-plan.md §10, Unit C2, "Sweeps"): the notification-job
+    // backstops, run after the money reconciles above -- each independently .catch-wrapped so one
+    // failing (or the worker run after them) never fails this route or blocks the others. Both
+    // sweeps are themselves best-effort (never throw), but this route must never depend on that.
+    const missingReceiptJobsSwept = await sweepMissingReceiptJobs().catch((error) => {
+      console.error('Missing-receipt sweep failed:', error instanceof Error ? error.message : error);
+      return 0;
+    });
+    const renewalRemindersSwept = await sweepRenewalReminders().catch((error) => {
+      console.error('Renewal-reminder sweep failed:', error instanceof Error ? error.message : error);
+      return 0;
+    });
+    const billingJobsRun = await runBillingJobsOnce().catch((error) => {
+      console.error('Billing notification job run failed:', error instanceof Error ? error.message : error);
+      return { processed: 0, failed: 0, remaining: 0 };
+    });
     return NextResponse.json({
       ok: true,
       ...images,
@@ -125,6 +143,9 @@ async function handle(request: Request): Promise<Response> {
       referenceSourcesDeleted: referenceCleanup.sourcesDeleted,
       billingReconcile,
       pendingRefundsProcessed,
+      missingReceiptJobsSwept,
+      renewalRemindersSwept,
+      billingJobsRun,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Reconcile failed.';
