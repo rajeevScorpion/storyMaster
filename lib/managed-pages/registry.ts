@@ -92,7 +92,8 @@ Kissago is initially rolling out in India and is built with the intent to expand
 - **Uploaded and generated media** — reference images you upload, generated illustrations, narration audio, storyline cover art, and browser-exported videos.
 - **Device and technical information** — the technical data a web request ordinarily carries (browser, device type, request metadata) as needed to operate and secure the Service. Kissago does not currently run a dedicated analytics or error-monitoring vendor; operational logs live in the hosting and database platforms themselves.
 - **Cookies and session data** — authentication session cookies (Supabase) and a small consent-status cookie used to avoid repeatedly re-checking agreement to these documents.
-- **Payment-related data** — when billing is enabled, plan, checkout, order, subscription, top-up, webhook, and coin-ledger records, including payment references from Razorpay. Kissago does not store your card or bank details; Razorpay processes and holds payment instrument data directly.
+- **Payment-related data** — when billing is enabled, plan, checkout, order, subscription, top-up, webhook, and coin-ledger records, including payment references from Razorpay.
+- **Billing details** — the name, billing email, phone number, state, address, and (for a business) company name and GSTIN you give for invoices. Kissago uses them to issue GST tax invoices and credit notes and to email receipts. Kissago does not store your card or bank details; Razorpay processes and holds payment instrument data directly.
 
 ## AI Providers and How They Process Your Data
 
@@ -112,6 +113,7 @@ Kissago uses AI-assisted systems to generate story text, images, narration, and 
 - **Cloudflare R2** — primary media storage, with Supabase Storage as a fallback.
 - **Vercel** — application hosting and scheduled background jobs.
 - **Razorpay** — payment processing for India checkout, when billing is enabled.
+- **Resend** — sending billing emails (receipts, invoices, credit notes, and plan notices), which requires your billing email address.
 
 ## Storage and Sharing
 
@@ -121,7 +123,7 @@ Private story assets are stored in Cloudflare R2 or Supabase Storage. Published 
 
 - **High-resolution originals of generated media** are retained on a plan-based schedule: 24 hours on the Free plan, 10 days on Plus, and 30 days on Studio, after which the original is removed while display, thumbnail, and share-ready copies are kept.
 - **Display, thumbnail, and share-ready media**, story data, and account data are otherwise kept for as long as your account or the associated content exists, or as needed for the purposes described in this notice.
-- **Billing records** (orders, subscriptions, payments, and the tax details on them) are kept for 8 years after they are created, as Indian tax and accounting law requires, even after the account that made them is deleted. Deletion removes the name, email, and other contact details from these records; it does not remove the transaction itself.
+- **Billing records** (orders, subscriptions, payments, invoices, credit notes, and the tax details on them) are kept for 8 years after they are created, as Indian tax and accounting law requires, even after the account that made them is deleted. Deletion removes the name, email, and other contact details from these records; it does not remove the transaction itself.
 - **Other security and operational records** (including cost and narration-generation logs) currently have no fixed deletion schedule beyond what account deletion does to them, and may be retained for fraud-prevention, dispute-resolution, or legal-compliance purposes.
 - Kissago is reviewing shorter fixed retention periods for records that do not need indefinite retention; this notice will be updated when that review concludes.
 
@@ -259,11 +261,11 @@ You must not use Kissago to create or distribute illegal, abusive, harassing, ha
 
 ## 7. Subscriptions, Payments, and Usage Limits
 
-Kissago offers free and paid creator plans, coin-based usage, and — where the Service is being used to read or watch rather than create — may offer viewer plans with usage limits communicated within the Service (for example, a daily limit on free story viewing). Kissago does not fix these limits in these Terms because they may change as the product evolves; the limits, features, and pricing applicable to a plan will be shown to you at the time of subscription or use. Payments for India checkout are processed through Razorpay. ${LEGAL_ENTITY_NAME} is GST-registered (GSTIN ${LEGAL_GSTIN}); applicable taxes are shown at checkout where required.
+Kissago offers free and paid creator plans, coin-based usage, and — where the Service is being used to read or watch rather than create — may offer viewer plans with usage limits communicated within the Service (for example, a daily limit on free story viewing). Kissago does not fix these limits in these Terms because they may change as the product evolves; the limits, features, and pricing applicable to a plan will be shown to you at the time of subscription or use. Payments for India checkout are processed through Razorpay. ${LEGAL_ENTITY_NAME} is GST-registered (GSTIN ${LEGAL_GSTIN}). Prices are shown before GST, and the total including GST is shown before you pay. **Subscriptions renew automatically** at the end of each billing period until you cancel.
 
 ## 8. Cancellation and Refunds
 
-Kissago does not currently offer self-serve subscription cancellation or automated refunds. To cancel a subscription or raise a billing dispute, contact {{SUPPORT_EMAIL}}; cancellation requests are handled manually, and access is not automatically extended or reduced outside your current billing period unless Kissago agrees otherwise. Consumed coins, generated content, and completed top-ups are not refundable except where required by law or approved on manual review.
+You can cancel a subscription yourself at any time from **Billing** in the account menu; the plan runs until the end of the period you have paid for and does not renew. When a payment can be refunded, and what happens to your coins, is set out in the **Refund / Cancellation Policy**, which is part of these Terms. Nothing in these Terms limits a refund you are entitled to by law.
 
 ## 9. Third-Party Services
 
@@ -312,28 +314,62 @@ ${LEGAL_FULL_ADDRESS}
     accessLevel: 'public',
     pageType: 'legal',
     seedVersion: SEED_VERSION,
-    excerpt: 'Current billing limitations and support-based refund or cancellation handling.',
-    metadata: { requiresLegalReview: true, policyPlaceholder: true },
+    excerpt: 'How cancelling works, when a payment can be refunded, and what happens to your coins.',
+    metadata: { requiresLegalReview: false },
     content: seed(`
-## Starter Draft - Review Before Rollout
+This policy covers Kissago plans and coin top-ups bought through Razorpay in India. It is part of the **Terms of Service**.
 
-This policy must be finalized before live billing rollout. The current codebase supports Razorpay India subscription checkout, top-up checkout, wallet grants, payment verification, and webhook sync. It does not yet include self-serve cancellation, subscription switching, or refund management inside Kissago.
+## Cancelling a plan
 
-## Cancellations
+You can cancel any time from **Billing** in the account menu. Your plan keeps working until the end of the period you have paid for, then it does not renew and your account moves to the Free plan. Until that date you can restart the plan from the same page.
 
-Subscription cancellation is currently handled through support or provider-side/manual workflows. The product documentation notes that cancellation should preserve paid access until the current billing period ends, but the self-serve account-management flow is not yet implemented.
-
-## Plan Changes
-
-Users cannot currently self-serve a switch from one active Razorpay subscription to another. The checkout path blocks overlapping Razorpay subscriptions and asks users to wait for manual account management.
+Cancelling does not refund the rest of the current period.
 
 ## Refunds
 
-Refunds are not automated in the current product. Refund requests, duplicate payment concerns, or billing disputes should be sent to {{SUPPORT_EMAIL}} for manual review. Digital usage, generated content, consumed coins, or completed top-ups may not be refundable unless required by law or approved after review.
+You can ask for a refund of a payment within **7 days** of making it. A refund is:
 
-## Billing Support
+- **for the full amount** of that payment — Kissago does not issue partial refunds;
+- **available only while no more than 20% of that purchase's coins have been used**. The unused coins from that purchase are removed from your wallet when the refund is made. Coins you have already spent are not refundable;
+- **limited to two refunds per account**.
 
-Please include the account email, payment date, plan or top-up details, and any Razorpay payment information available when contacting support.
+A plan that includes no coins (for example Audience) can be refunded within the same 7 days.
+
+**Refunding the current period's payment for a plan ends that plan straight away**, rather than at the end of the period.
+
+Requests made after 7 days are considered only in exceptional cases.
+
+## How to ask for a refund
+
+Email {{SUPPORT_EMAIL}} from your account's email address with the date and amount of the payment. The money goes back to the card, UPI account or other method you paid with. Your bank usually takes 5 to 7 working days to show it. Where a GST tax invoice was issued for the payment, a credit note is issued against it.
+
+## Coins
+
+- Coins included with a plan reset at the start of each billing period and do not roll over.
+- Coins from a top-up do not expire.
+- Coins have no cash value and cannot be transferred.
+
+## Delivery
+
+Kissago is a digital service. Coins are added to your wallet, and a plan starts, as soon as the payment is confirmed. Nothing is shipped. If money leaves your account but the coins or the plan don't appear, it is usually corrected automatically within 24 hours; if it isn't, email {{SUPPORT_EMAIL}} with the payment details.
+
+## Failed renewals
+
+If a renewal payment fails, Razorpay retries it. Your plan keeps working for a grace period of 5 days after the renewal date. If the payment still hasn't gone through by then, your account moves to the Free plan until it does, or until you subscribe again.
+
+## Changing plans
+
+Switching directly from one plan to another is not available yet. Email {{SUPPORT_EMAIL}} and we will help you move.
+
+## Chargebacks
+
+If a payment is reversed through your bank (a chargeback), it is treated as refunded. Kissago may review the account, and may restrict it where chargebacks are used to keep coins or access that were not paid for.
+
+## Questions and complaints
+
+Billing questions: {{SUPPORT_EMAIL}}. If you are not satisfied with how a billing issue was handled, you can write to the Grievance Officer, **${GRIEVANCE_OFFICER_NAME}**, at ${GRIEVANCE_EMAIL}.
+
+${LEGAL_ENTITY_NAME}
 `),
   },
   {
@@ -474,9 +510,9 @@ Kissago shows user-facing wallet value as coins. Internally, the code tracks sto
 
 This FAQ is visible when live pricing information is enabled by the pricing_snapshot_enabled runtime flag.
 
-## Can I buy a subscription today?
+## Can I buy a plan or coins?
 
-Checkout is controlled separately by the pricing_checkout_enabled flag. The implemented live checkout path is Razorpay for the India market. Outside-India Stripe routing exists in configuration but is not implemented as a checkout flow in this codebase.
+In India, yes: plans and coin top-ups are paid through Razorpay, and the total including GST is shown before you pay. Checkout outside India is not available yet. You can cancel a plan any time from **Billing** in the account menu; the **Refund / Cancellation Policy** explains refunds and what happens to your coins.
 
 ## Can I cancel or change my subscription inside Kissago?
 
@@ -633,7 +669,7 @@ No stored media (images, narration audio, exported video) is deleted by account 
 
 ## What Kissago is required to keep
 
-Billing records — orders, subscriptions, payments, and the tax details on them — are kept for **8 years** after they are created, as Indian tax and accounting law requires. Deletion removes your name, email, and other contact details from these records; it keeps the amount, date, tax breakdown, and whatever the applicable GST rules require to identify the recipient. Some other records that legally cannot be deleted before a resolution, such as an active support or moderation matter, are kept until that resolution is reached.
+Billing records — orders, subscriptions, payments, invoices, credit notes, and the tax details on them — are kept for **8 years** after they are created, as Indian tax and accounting law requires. Deletion removes your name, email, and other contact details from these records; it keeps the amount, date, tax breakdown, and whatever the applicable GST rules require to identify the recipient. Some other records that legally cannot be deleted before a resolution, such as an active support or moderation matter, are kept until that resolution is reached.
 
 ## Deletion requests you cannot complete yourself
 

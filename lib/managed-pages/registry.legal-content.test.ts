@@ -39,3 +39,24 @@ describe('legal document seed content', () => {
     expect(html).not.toContain('##');
   });
 });
+
+describe('refund / cancellation policy seed (Payments Phase 7)', () => {
+  const refundPolicy = MANAGED_PAGE_DEFINITIONS.find((page) => page.pageKey === 'refund_policy')!;
+
+  it('is no longer a draft', () => {
+    expect(refundPolicy.content).not.toContain('Starter Draft');
+    expect(refundPolicy.metadata).not.toMatchObject({ policyPlaceholder: true });
+  });
+
+  it('states the rules the refund code enforces', () => {
+    expect(refundPolicy.content).toContain('7 days');
+    expect(refundPolicy.content).toContain('20%');
+    expect(refundPolicy.content).toContain('two refunds per account');
+  });
+
+  it('renders without leftover placeholders or raw markdown', () => {
+    expect(refundPolicy.content).not.toMatch(/\[[A-Z][A-Z0-9 _/-]*\]/);
+    const html = renderToStaticMarkup(createElement('div', null, ...renderManagedPageBlocksFromContent(refundPolicy.content)));
+    expect(html).not.toContain('##');
+  });
+});
