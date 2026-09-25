@@ -234,6 +234,10 @@ export async function renderDocumentPdf(
   buyerLines.push(...view.buyer.addressLines);
   const cityLine = [view.buyer.city, view.buyer.state, view.buyer.postalCode].filter(Boolean).join(', ');
   if (cityLine) buyerLines.push(cityLine);
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): a country line only for an export
+  // document -- view.exportEndorsement is non-null exactly then, so it doubles as the gate here.
+  // India's buyer block never printed a country line and must not start now.
+  if (view.exportEndorsement && view.buyer.country) buyerLines.push(view.buyer.country);
   if (buyerLines.length === 0) buyerLines.push('Unregistered recipient');
   for (const [i, line] of buyerLines.entries()) {
     const font = i === 0 ? fonts.bold : fonts.regular;
@@ -307,6 +311,16 @@ export async function renderDocumentPdf(
     cursor.y -= isTotal ? 18 : 15;
   }
   cursor.y -= 6;
+
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): the export-under-LUT endorsement,
+  // under the totals and above the amount in words -- null (and so skipped entirely) for every India
+  // document, keeping that render byte-identical.
+  if (view.exportEndorsement) {
+    for (const part of wrapLine(view.exportEndorsement, rightEdge - MARGIN, (s) => fonts.regular.widthOfTextAtSize(s, 9.5))) {
+      text(cursor, fonts, part, { size: 9.5, color: MUTED, dy: 13 });
+    }
+    cursor.y -= 4;
+  }
 
   text(cursor, fonts, `Amount in words: ${view.amountInWords}`, { size: 9.5, color: MUTED, dy: 20 });
 

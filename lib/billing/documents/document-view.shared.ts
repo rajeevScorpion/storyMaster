@@ -21,6 +21,8 @@ import type {
 } from '@/lib/billing/documents/types.shared';
 import type { TaxBreakdown } from '@/lib/billing/tax.shared';
 import { indiaStateName } from '@/lib/billing/india-states.shared';
+import { billingCountryName } from '@/lib/billing/international.shared';
+import { LEGAL_LUT_ARN } from '@/lib/legal/business-config';
 
 export interface DocumentViewLineItem {
   description: string;
@@ -77,6 +79,10 @@ export interface DocumentView {
   reverseCharge: 'No';
   footerNote: string;
   testBanner: string | null;
+  /** Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): Rule 46's export-under-LUT wording,
+   * only for a document whose tax_breakdown_json.supplyType is 'export' -- null for every India
+   * document, unchanged. See buildExportEndorsement. */
+  exportEndorsement: string | null;
 }
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -148,6 +154,53 @@ export function amountInWordsIndian(grossMinor: number): string {
   return `Indian Rupees ${rupeeWords} and ${numberToIndianWords(paise)} Paise Only`;
 }
 
+/** Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): Western thousand/million grouping
+ * (thousand, million, billion), not the Indian crore/lakh grouping above -- for a USD export invoice's
+ * "amount in words" line. Reuses threeDigitWords/twoDigitWords, which are grouping-agnostic. Handles 0
+ * up to 999,999,999,999 (comfortably past any real invoice). */
+export function numberToWesternWords(value: number): string {
+  if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
+    throw new Error(`numberToWesternWords: expected a non-negative integer, got ${value}`);
+  }
+  if (value === 0) return 'Zero';
+
+  const billion = Math.floor(value / 1e9);
+  const million = Math.floor((value % 1e9) / 1e6);
+  const thousand = Math.floor((value % 1e6) / 1e3);
+  const hundred = value % 1e3;
+
+  const parts: string[] = [];
+  if (billion > 0) parts.push(`${threeDigitWords(billion)} Billion`);
+  if (million > 0) parts.push(`${threeDigitWords(million)} Million`);
+  if (thousand > 0) parts.push(`${threeDigitWords(thousand)} Thousand`);
+  if (hundred > 0) parts.push(threeDigitWords(hundred));
+  return parts.join(' ');
+}
+
+/** "US Dollars Twenty-Nine and Fifty Cents Only" (cents present) or "... Only" (a whole dollar
+ * amount) -- the USD twin of amountInWordsIndian, for an export invoice. `grossMinor` is integer
+ * cents, as stored on the row. */
+export function amountInWordsUsd(grossMinor: number): string {
+  if (!Number.isInteger(grossMinor) || grossMinor < 0) {
+    throw new Error(`amountInWordsUsd: expected a non-negative integer minor amount, got ${grossMinor}`);
+  }
+  const dollars = Math.floor(grossMinor / 100);
+  const cents = grossMinor % 100;
+  const dollarWords = numberToWesternWords(dollars);
+  if (cents === 0) return `US Dollars ${dollarWords} Only`;
+  return `US Dollars ${dollarWords} and ${numberToWesternWords(cents)} Cents Only`;
+}
+
+/** Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): Rule 46's export-under-LUT
+ * endorsement, with the LUT ARN appended only once the owner has filed one (business-config.ts's
+ * LEGAL_LUT_ARN, empty by default). A separate function from buildDocumentView so a test can exercise
+ * both the with- and without-ARN wording directly, without needing to mock business-config's constant
+ * import. */
+export function buildExportEndorsement(lutArn: string): string {
+  const base = 'Supply meant for export under LUT without payment of IGST';
+  return lutArn ? `${base}. LUT ARN: ${lutArn}` : `${base}.`;
+}
+
 function documentTitle(documentType: BillingDocumentRow['document_type']): string {
   if (documentType === 'tax_invoice') return 'Tax Invoice';
   if (documentType === 'credit_note') return 'Credit Note';
@@ -173,17 +226,28 @@ function buildSellerParty(business: DocumentBusinessSnapshot | null): DocumentVi
   };
 }
 
+/** Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): billingCountryName maps a supported
+ * code (IN, US) to its full name; billingCountryName('IN') is already 'India', so this keeps the
+ * India output byte-identical while a US buyer now prints "United States" instead of the raw code. An
+ * unrecognised code (should not happen -- checkout only accepts a supported country) falls back to the
+ * upper-cased code itself rather than fabricating a name. */
 function countryName(code: string | null | undefined): string | null {
   if (!code) return null;
-  return code.toUpperCase() === 'IN' ? 'India' : code;
+  return billingCountryName(code) ?? code.toUpperCase();
 }
 
 function buildBuyerParty(
   customer: DocumentCustomerSnapshot | null,
   tax: Partial<TaxBreakdown> | null
 ): { party: DocumentViewParty; identityShown: boolean } {
+  const isExport = tax?.supplyType === 'export';
   const stateCode = customer?.stateCode ?? tax?.placeOfSupplyStateCode ?? null;
-  const state = customer?.stateName ?? (stateCode ? indiaStateName(stateCode) : null);
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): an export buyer's city line prints
+  // the US state's own code ("Austin, TX, 78701"), not its GST place-of-supply state name -- India's
+  // non-export path is unchanged (the state name, as before).
+  const state = isExport
+    ? (customer?.region ?? null)
+    : (customer?.stateName ?? (stateCode ? indiaStateName(stateCode) : null));
   const gstin = customer?.gstin ?? null;
 
   const legalName = customer?.companyName ?? customer?.legalName ?? null;
@@ -205,6 +269,13 @@ function buildBuyerParty(
 }
 
 function buildTaxRows(tax: Partial<TaxBreakdown> | null): DocumentViewTaxRow[] {
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): an export supply prints an explicit
+  // "IGST @ 0%" row rather than no tax row at all, so the zero-rating is visible on the invoice face --
+  // checked first since ratePercent is itself 0 for the seeded ROW rule, which the falsy check below
+  // would otherwise read as "no breakdown at all".
+  if (tax?.supplyType === 'export') {
+    return [{ label: 'IGST', ratePercent: 0, amountMinor: 0 }];
+  }
   if (!tax || !tax.ratePercent || tax.supplyType === 'none' || !tax.supplyType) return [];
   if (tax.supplyType === 'inter_state') {
     return [{ label: 'IGST', ratePercent: tax.ratePercent, amountMinor: tax.igstMinor ?? 0 }];
@@ -244,9 +315,17 @@ export function buildDocumentView(
   originalDoc?: OriginalDocumentReference | null
 ): DocumentView {
   const tax = row.tax_breakdown_json;
+  const isExport = tax?.supplyType === 'export';
   const buyer = buildBuyerParty(row.customer_snapshot_json, tax);
   const placeOfSupplyCode = tax?.placeOfSupplyStateCode ?? buyer.party.stateCode ?? null;
-  const placeOfSupplyName = placeOfSupplyCode ? (indiaStateName(placeOfSupplyCode) ?? placeOfSupplyCode) : 'Unknown';
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): '96' (FOREIGN_PLACE_OF_SUPPLY_CODE)
+  // is never an Indian state code, so indiaStateName would otherwise print the raw digits -- an
+  // export's place of supply reads "Other Countries (96)" instead.
+  const placeOfSupplyName = isExport
+    ? 'Other Countries'
+    : placeOfSupplyCode
+      ? (indiaStateName(placeOfSupplyCode) ?? placeOfSupplyCode)
+      : 'Unknown';
 
   const sellerLegalName = row.business_snapshot_json?.legalName ?? 'Kissago';
 
@@ -272,9 +351,13 @@ export function buildDocumentView(
     taxMinor: row.tax_minor,
     grossMinor: row.gross_minor,
     currencyCode: row.currency_code,
-    amountInWords: amountInWordsIndian(row.gross_minor),
+    // Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): chosen by the row's own
+    // currency_code, not by isExport -- a future non-USD ROW currency would still want Western words.
+    // INR keeps amountInWordsIndian, unchanged.
+    amountInWords: row.currency_code === 'INR' ? amountInWordsIndian(row.gross_minor) : amountInWordsUsd(row.gross_minor),
     reverseCharge: 'No',
     footerNote: `Computer-generated document. Authorised signatory: ${sellerLegalName}`,
     testBanner: row.provider_mode === 'test' ? 'TEST — not a tax document' : null,
+    exportEndorsement: isExport ? buildExportEndorsement(LEGAL_LUT_ARN) : null,
   };
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
+import crypto from 'node:crypto';
 
 vi.mock('server-only', () => ({}));
 
@@ -136,6 +137,19 @@ describe('renderDocumentPdf -- determinism', () => {
       { documentNumber: 'KG/26-27/000001', issuedAt: '2026-09-20T08:00:00.000Z' }
     );
     expect(Buffer.from(invoiceBytes).equals(Buffer.from(creditNoteBytes))).toBe(false);
+  });
+});
+
+describe('renderDocumentPdf -- India unchanged (Payments Phase 8 §9, Unit D)', () => {
+  // The plan's own acceptance step: an export/foreign document may now add lines this row never
+  // triggers (the endorsement, the region-code city line, the country line), so this fixes a real
+  // Indian invoice's bytes to the SHA-256 captured from the pre-Unit-D code -- a change here means an
+  // India document moved, which the plan says must never happen.
+  it('renders byte-identical to the pre-Unit-D hash for an unchanged Indian row', async () => {
+    const bytes = await renderDocumentPdf(sampleRow());
+    const hash = crypto.createHash('sha256').update(Buffer.from(bytes)).digest('hex');
+    expect(bytes.length).toBe(18213);
+    expect(hash).toBe('8f58fcb488ed4a93c50d46b5cc2601e083bf277d3bdacd54ae0db3af9e8a7551');
   });
 });
 

@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   amountInWordsIndian,
+  amountInWordsUsd,
   buildDocumentView,
+  buildExportEndorsement,
   formatIstDate,
   numberToIndianWords,
+  numberToWesternWords,
 } from '@/lib/billing/documents/document-view.shared';
 import type { BillingDocumentRow, DocumentBusinessSnapshot } from '@/lib/billing/documents/types.shared';
 import type { TaxBreakdown } from '@/lib/billing/tax.shared';
@@ -53,6 +56,45 @@ const INTRA_STATE_TAX: TaxBreakdown = {
   igstMinor: 0,
   cgstMinor: 4050,
   sgstMinor: 4050,
+};
+
+/**
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): a US top-up's export breakdown --
+ * ratePercent 0 (the seeded ROW rule) and placeOfSupplyStateCode '96'
+ * (lib/billing/international.shared.ts's FOREIGN_PLACE_OF_SUPPLY_CODE).
+ */
+const EXPORT_TAX: TaxBreakdown = {
+  ruleId: 'rule-row-1',
+  marketKey: 'ROW',
+  appliesTo: 'topup',
+  taxRegime: 'in_export_lut',
+  ratePercent: 0,
+  sacCode: '998439',
+  supplierStateCode: '24',
+  placeOfSupplyStateCode: '96',
+  supplyType: 'export',
+  cgstMinor: 0,
+  sgstMinor: 0,
+  igstMinor: 0,
+};
+
+const US_CUSTOMER_SNAPSHOT = {
+  profileType: 'personal' as const,
+  legalName: 'John Smith',
+  companyName: null,
+  gstin: null,
+  billingEmail: 'john@example.com',
+  phone: '+15125551234',
+  stateCode: '96',
+  stateName: 'Texas',
+  region: 'TX',
+  countryCode: 'US',
+  addressLine1: '100 Congress Ave',
+  addressLine2: null,
+  city: 'Austin',
+  postalCode: '78701',
+  capturedAt: null,
+  profileUpdatedAt: null,
 };
 
 function baseRow(overrides: Partial<BillingDocumentRow> = {}): BillingDocumentRow {
@@ -292,5 +334,107 @@ describe('amountInWordsIndian', () => {
 
   it('renders a paise remainder', () => {
     expect(amountInWordsIndian(45081)).toBe('Indian Rupees Four Hundred Fifty and Eighty-One Paise Only');
+  });
+});
+
+describe('numberToWesternWords', () => {
+  it('converts zero', () => {
+    expect(numberToWesternWords(0)).toBe('Zero');
+  });
+
+  it('converts a plain three-digit number', () => {
+    expect(numberToWesternWords(531)).toBe('Five Hundred Thirty-One');
+  });
+
+  it('converts a thousand-scale number using Western grouping', () => {
+    expect(numberToWesternWords(1_000)).toBe('One Thousand');
+  });
+
+  it('converts a million-scale number', () => {
+    expect(numberToWesternWords(1_000_000)).toBe('One Million');
+  });
+
+  it('rejects a negative or non-integer input', () => {
+    expect(() => numberToWesternWords(-1)).toThrow();
+    expect(() => numberToWesternWords(1.5)).toThrow();
+  });
+});
+
+describe('amountInWordsUsd', () => {
+  it('renders the plan.md sample (29 dollars, 50 cents)', () => {
+    expect(amountInWordsUsd(2950)).toBe('US Dollars Twenty-Nine and Fifty Cents Only');
+  });
+
+  it('renders zero', () => {
+    expect(amountInWordsUsd(0)).toBe('US Dollars Zero Only');
+  });
+
+  it('renders one cent', () => {
+    expect(amountInWordsUsd(1)).toBe('US Dollars Zero and One Cents Only');
+  });
+
+  it('renders an even one thousand dollars with no cents clause', () => {
+    expect(amountInWordsUsd(100_000)).toBe('US Dollars One Thousand Only');
+  });
+
+  it('renders an even one million dollars', () => {
+    expect(amountInWordsUsd(100_000_000)).toBe('US Dollars One Million Only');
+  });
+});
+
+describe('buildExportEndorsement', () => {
+  it('reads the plain LUT wording when no ARN has been filed', () => {
+    expect(buildExportEndorsement('')).toBe('Supply meant for export under LUT without payment of IGST.');
+  });
+
+  it('appends the ARN once one is set', () => {
+    expect(buildExportEndorsement('AD290920001234')).toBe(
+      'Supply meant for export under LUT without payment of IGST. LUT ARN: AD290920001234'
+    );
+  });
+});
+
+describe('buildDocumentView -- export supply (Payments Phase 8 §9, Unit D)', () => {
+  function exportRow(overrides: Partial<BillingDocumentRow> = {}): BillingDocumentRow {
+    return baseRow({
+      currency_code: 'USD',
+      net_minor: 2900,
+      tax_minor: 0,
+      gross_minor: 2900,
+      tax_breakdown_json: EXPORT_TAX,
+      customer_snapshot_json: US_CUSTOMER_SNAPSHOT,
+      ...overrides,
+    });
+  }
+
+  it('prints "Other Countries (96)" as the place of supply, never an Indian state lookup', () => {
+    const view = buildDocumentView(exportRow());
+    expect(view.placeOfSupply).toBe('Other Countries (96)');
+  });
+
+  it('carries the export endorsement, empty ARN by default', () => {
+    const view = buildDocumentView(exportRow());
+    expect(view.exportEndorsement).toBe('Supply meant for export under LUT without payment of IGST.');
+  });
+
+  it('prints the buyer state as the region code, not the state name, and the country name', () => {
+    const view = buildDocumentView(exportRow());
+    expect(view.buyer.state).toBe('TX');
+    expect(view.buyer.country).toBe('United States');
+  });
+
+  it('prints a single explicit "IGST @ 0%" row rather than no tax row at all', () => {
+    const view = buildDocumentView(exportRow());
+    expect(view.taxRows).toEqual([{ label: 'IGST', ratePercent: 0, amountMinor: 0 }]);
+  });
+
+  it('chooses amountInWordsUsd for a USD row', () => {
+    const view = buildDocumentView(exportRow());
+    expect(view.amountInWords).toBe('US Dollars Twenty-Nine Only');
+  });
+
+  it('carries no export endorsement for an India (non-export) document', () => {
+    const view = buildDocumentView(baseRow());
+    expect(view.exportEndorsement).toBeNull();
   });
 });

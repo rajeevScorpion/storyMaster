@@ -45,6 +45,11 @@ export interface DocumentCustomerSnapshot {
   stateCode?: string | null;
   stateName?: string | null;
   countryCode?: string | null;
+  /** Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): a foreign customer's state/province
+   * code (e.g. a US state code) -- billing-profile.ts's BillingCustomerSnapshot has carried this since
+   * Unit B; added here too so an export document's buyer block can print "Austin, TX, 78701" instead
+   * of the GST place-of-supply state name. Always null/absent for an Indian snapshot. */
+  region?: string | null;
   addressLine1?: string | null;
   addressLine2?: string | null;
   city?: string | null;
