@@ -18,6 +18,8 @@ import { recordPayment } from '@/lib/billing/ledger';
 import { getPublishedTaxRule } from '@/lib/billing/tax-rules';
 import { buildCustomerSnapshot, loadBillingProfile } from '@/lib/billing/billing-profile';
 import { computeTaxFromGross, type TaxBreakdown } from '@/lib/billing/tax.shared';
+import { enqueueBillingJob } from '@/lib/billing/notifications/queue';
+import { subscriptionTransitionJobs } from '@/lib/billing/notifications/subscription-transition.shared';
 import type {
   DbBillingOrder,
   DbBillingProfile,
@@ -189,7 +191,13 @@ export async function settleTopupOrder(input: {
   const subjectRef = order.subject_ref ?? order.user_id ?? null;
   if (subjectRef) {
     const money = deriveTopupPaymentMoney(order, payment);
-    await recordPayment({
+    // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): frozen at checkout time into
+    // the order's own snapshot -- there is no live profile to re-derive from here, and the ledger's
+    // write-once guard means this only ever fills the row once anyway. Payments Phase 6 (§10, hook 1)
+    // reuses this exact same snapshot as the receipt email's preferred address.
+    const customerSnapshot =
+      (order.purchase_snapshot_json as { customer?: Record<string, unknown> | null } | null)?.customer ?? null;
+    const paymentRecordResult = await recordPayment({
       supabase: input.supabase,
       subjectRef,
       userId: order.user_id,
@@ -210,12 +218,26 @@ export async function settleTopupOrder(input: {
       providerFeeMinor: payment.fee ?? null,
       providerTaxMinor: payment.tax ?? null,
       purchaseSnapshot: order.purchase_snapshot_json,
-      // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): frozen at checkout time into
-      // the order's own snapshot -- there is no live profile to re-derive from here, and the ledger's
-      // write-once guard means this only ever fills the row once anyway.
-      customerSnapshot: (order.purchase_snapshot_json as { customer?: Record<string, unknown> | null } | null)?.customer ?? null,
+      customerSnapshot,
       capturedAt: payment.created_at ? razorpayUnixToIso(payment.created_at) : new Date().toISOString(),
     });
+
+    // Payments Phase 6 (docs/payments/phase-6-plan.md §10, hook 1): a brand-new payment row earns a
+    // receipt email; a re-observed one (a verify/webhook race, or the daily reconcile re-seeing the
+    // same captured payment) does not -- recordPayment's own idempotency already decided that via
+    // `state`, so this hook just reads it rather than re-deriving "is this new" itself.
+    if (paymentRecordResult.state === 'inserted') {
+      await enqueueBillingJob({
+        kind: 'payment_receipt',
+        dedupeKey: `payment:${paymentRecordResult.id}`,
+        subjectRef,
+        userId: order.user_id,
+        paymentId: paymentRecordResult.id,
+        payload: {
+          billingEmail: (customerSnapshot as { billingEmail?: string | null } | null)?.billingEmail ?? null,
+        },
+      });
+    }
   }
 
   if (isFullyRefunded) {
@@ -603,6 +625,33 @@ export async function syncSubscriptionFromProvider(input: {
     billingSubscriptionId = insertResult.data?.id ?? null;
   }
 
+  // Payments Phase 6 (docs/payments/phase-6-plan.md §10, hook 3): the pure transition rule decides
+  // whether this status change (verify/webhook/reconcile all land here) earns a "payment failed" or
+  // "plan ended" email -- see subscription-transition.shared.ts's own header for why `existing?.status
+  // ?? null` is the right `prev` even on a brand-new insert. Skipped with no billingSubscriptionId
+  // (an insert that somehow returned no id) since every job kind below needs one to process.
+  if (billingSubscriptionId) {
+    const transitionJob = subscriptionTransitionJobs(existing?.status ?? null, subscription.status);
+    if (transitionJob === 'subscription_payment_failed') {
+      await enqueueBillingJob({
+        kind: 'subscription_payment_failed',
+        dedupeKey: `sub_failed:${billingSubscriptionId}:${currentPeriodEnd}`,
+        subjectRef,
+        userId: input.userId,
+        billingSubscriptionId,
+        payload: { graceEndsAt: gracePeriodEndsAt, shortUrl: subscription.short_url ?? null },
+      });
+    } else if (transitionJob === 'subscription_ended') {
+      await enqueueBillingJob({
+        kind: 'subscription_ended',
+        dedupeKey: `sub_ended:${billingSubscriptionId}`,
+        subjectRef,
+        userId: input.userId,
+        billingSubscriptionId,
+      });
+    }
+  }
+
   let grantedBeats = 0;
   let firstChargeConfirmed = Boolean(firstChargeConfirmedAt);
 
@@ -681,7 +730,7 @@ export async function syncSubscriptionFromProvider(input: {
           customerSnapshot = buildCustomerSnapshot(money.profile) as Record<string, unknown> | null;
         }
 
-        await recordPayment({
+        const paymentRecordResult = await recordPayment({
           supabase: input.supabase,
           subjectRef,
           userId: input.userId,
@@ -712,6 +761,24 @@ export async function syncSubscriptionFromProvider(input: {
           cycleEnd: razorpayUnixToIso(paidInvoice.billing_end),
           capturedAt: paidInvoice.paid_at ? razorpayUnixToIso(paidInvoice.paid_at) : new Date().toISOString(),
         });
+
+        // Payments Phase 6 (docs/payments/phase-6-plan.md §10, hook 2): same "only a brand-new row
+        // earns an email" rule as hook 1 (settleTopupOrder) -- the processor itself decides the
+        // 'renewal' vs 'receipt' copy variant off billing_payments.kind, so this always enqueues the
+        // one `payment_receipt` kind regardless of isFirstCharge.
+        if (paymentRecordResult.state === 'inserted' && billingSubscriptionId) {
+          await enqueueBillingJob({
+            kind: 'payment_receipt',
+            dedupeKey: `payment:${paymentRecordResult.id}`,
+            subjectRef,
+            userId: input.userId,
+            paymentId: paymentRecordResult.id,
+            billingSubscriptionId,
+            payload: {
+              billingEmail: (customerSnapshot as { billingEmail?: string | null } | null)?.billingEmail ?? null,
+            },
+          });
+        }
       }
 
       let includedBeats = input.planVersion.monthly_included_beats;

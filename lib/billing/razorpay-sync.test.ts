@@ -34,6 +34,10 @@ vi.mock('@/lib/billing/billing-profile', async (importOriginal) => {
   };
 });
 
+vi.mock('@/lib/billing/notifications/queue', () => ({
+  enqueueBillingJob: vi.fn(),
+}));
+
 import {
   fetchRazorpayPayment,
   captureRazorpayPayment,
@@ -47,6 +51,7 @@ import {
 import { recordPayment } from '@/lib/billing/ledger';
 import { getPublishedTaxRule } from '@/lib/billing/tax-rules';
 import { loadBillingProfile } from '@/lib/billing/billing-profile';
+import { enqueueBillingJob } from '@/lib/billing/notifications/queue';
 import {
   cancelAtPeriodEndPatch,
   isUniqueViolation,
@@ -64,6 +69,7 @@ const fetchRazorpaySubscriptionInvoicesMock = vi.mocked(fetchRazorpaySubscriptio
 const recordPaymentMock = vi.mocked(recordPayment);
 const getPublishedTaxRuleMock = vi.mocked(getPublishedTaxRule);
 const loadBillingProfileMock = vi.mocked(loadBillingProfile);
+const enqueueBillingJobMock = vi.mocked(enqueueBillingJob);
 
 // --- A minimal, generic stand-in for the supabase-js query builder: every chain method is a
 // no-op passthrough, and the builder is directly awaitable (like the real one) so callers that
@@ -748,6 +754,59 @@ describe('settleTopupOrder — ledger recording (Payments Phase 2, Unit B)', () 
   });
 });
 
+describe('settleTopupOrder — payment_receipt hook (Payments Phase 6, Unit C2, hook 1)', () => {
+  it('enqueues a payment_receipt when the payment is newly recorded, with the frozen billing email', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    enqueue('billing_orders', 'select', {
+      data: fakeOrder({ purchase_snapshot_json: { kind: 'topup', beatAmount: 50, customer: { billingEmail: 'buyer@example.com' } } }),
+      error: null,
+    });
+    enqueue('beat_grants', 'insert', { data: null, error: null });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+    fetchRazorpayPaymentMock.mockResolvedValueOnce(fakePayment());
+    recordPaymentMock.mockResolvedValueOnce({ state: 'inserted', id: 'payment-1' });
+
+    await settleTopupOrder({ supabase, billingOrderId: 'order-1', paymentIdHint: 'pay_1', source: 'webhook' });
+
+    expect(enqueueBillingJobMock).toHaveBeenCalledWith({
+      kind: 'payment_receipt',
+      dedupeKey: 'payment:payment-1',
+      subjectRef: 'user-1',
+      userId: 'user-1',
+      paymentId: 'payment-1',
+      payload: { billingEmail: 'buyer@example.com' },
+    });
+  });
+
+  it('does not enqueue when recordPayment reports an already-recorded row (a verify/webhook race)', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    enqueue('billing_orders', 'select', { data: fakeOrder(), error: null });
+    enqueue('beat_grants', 'insert', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+    fetchRazorpayPaymentMock.mockResolvedValueOnce(fakePayment());
+    recordPaymentMock.mockResolvedValueOnce({ state: 'already_recorded', id: 'payment-1' });
+
+    await settleTopupOrder({ supabase, billingOrderId: 'order-1', paymentIdHint: 'pay_1', source: 'webhook' });
+
+    expect(enqueueBillingJobMock).not.toHaveBeenCalled();
+  });
+
+  it('passes billingEmail: null when the order snapshot carries no customer (predates Phase 5)', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    enqueue('billing_orders', 'select', { data: fakeOrder(), error: null }); // fakeOrder's snapshot has no `customer` key
+    enqueue('beat_grants', 'insert', { data: null, error: null });
+    enqueue('billing_orders', 'update', { data: null, error: null });
+    fetchRazorpayPaymentMock.mockResolvedValueOnce(fakePayment());
+    recordPaymentMock.mockResolvedValueOnce({ state: 'inserted', id: 'payment-2' });
+
+    await settleTopupOrder({ supabase, billingOrderId: 'order-1', paymentIdHint: 'pay_1', source: 'webhook' });
+
+    expect(enqueueBillingJobMock).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: { billingEmail: null } })
+    );
+  });
+});
+
 describe('syncSubscriptionFromProvider — ledger recording (Payments Phase 2, Unit B)', () => {
   it('records the first charge with kind subscription_first, using the checkout order snapshot', async () => {
     const { supabase, enqueue } = createFakeSupabase();
@@ -877,6 +936,188 @@ describe('syncSubscriptionFromProvider — ledger recording (Payments Phase 2, U
 
     const insertCall = calls.find((call) => call.table === 'billing_subscriptions' && call.op === 'insert');
     expect(insertCall?.payload).toMatchObject({ subject_ref: 'user-1' });
+  });
+});
+
+describe('syncSubscriptionFromProvider — payment_receipt hook (Payments Phase 6, Unit C2, hook 2)', () => {
+  it('enqueues a payment_receipt for a newly-recorded first charge, carrying billingSubscriptionId', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    fetchRazorpaySubscriptionMock.mockResolvedValueOnce(
+      fakeSubscription({ status: 'active', current_start: 1_700_000_000, current_end: 1_702_592_000 })
+    );
+    enqueue('billing_subscriptions', 'select', { data: null, error: null });
+    enqueue('billing_subscriptions', 'insert', { data: { id: 'billing-sub-1', first_charge_confirmed_at: null }, error: null });
+    fetchRazorpaySubscriptionInvoicesMock.mockResolvedValueOnce({
+      items: [fakeInvoice({ billing_start: 1_700_000_000, billing_end: 1_702_592_000, amount_paid: 23482 })],
+    });
+    enqueue('billing_subscriptions', 'update', { data: null, error: null }); // confirm first charge
+    enqueue('billing_payments', 'select', { data: { id: 'existing-payment' }, error: null }); // method lookup: skip fetch
+    enqueue('beat_grants', 'insert', { data: null, error: null });
+    recordPaymentMock.mockResolvedValueOnce({ state: 'inserted', id: 'payment-9' });
+
+    const checkoutOrder = {
+      purchase_snapshot_json: {
+        netMinor: 19900, taxMinor: 3582, grossMinor: 23482,
+        customer: { billingEmail: 'subscriber@example.com' },
+      },
+    } as any;
+
+    await syncSubscriptionFromProvider({
+      supabase,
+      userId: 'user-1',
+      planVersion: fakePlanVersion(),
+      providerSubscriptionId: 'sub_1',
+      checkoutOrder,
+      source: 'webhook',
+      rawPayload: {},
+    });
+
+    expect(enqueueBillingJobMock).toHaveBeenCalledWith({
+      kind: 'payment_receipt',
+      dedupeKey: 'payment:payment-9',
+      subjectRef: 'user-1',
+      userId: 'user-1',
+      paymentId: 'payment-9',
+      billingSubscriptionId: 'billing-sub-1',
+      payload: { billingEmail: 'subscriber@example.com' },
+    });
+  });
+
+  it('does not enqueue a renewal payment_receipt when recordPayment reports already_recorded', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    fetchRazorpaySubscriptionMock.mockResolvedValueOnce(
+      fakeSubscription({ status: 'active', current_start: 1_702_592_000, current_end: 1_705_270_400 })
+    );
+    enqueue('billing_subscriptions', 'select', {
+      data: { id: 'billing-sub-1', user_id: 'user-1', status: 'active', first_charge_confirmed_at: '2026-08-01T00:00:00.000Z' },
+      error: null,
+    });
+    enqueue('billing_subscriptions', 'update', { data: null, error: null });
+    fetchRazorpaySubscriptionInvoicesMock.mockResolvedValueOnce({
+      items: [fakeInvoice({ id: 'inv_2', billing_start: 1_702_592_000, billing_end: 1_705_270_400, amount_paid: 23482 })],
+    });
+    enqueue('billing_payments', 'select', { data: { id: 'existing-payment' }, error: null });
+    enqueue('beat_grants', 'insert', { data: null, error: null });
+    recordPaymentMock.mockResolvedValueOnce({ state: 'already_recorded', id: 'payment-10' });
+
+    await syncSubscriptionFromProvider({
+      supabase,
+      userId: 'user-1',
+      planVersion: fakePlanVersion(),
+      providerSubscriptionId: 'sub_1',
+      checkoutOrder: null,
+      source: 'reconcile',
+      rawPayload: {},
+    });
+
+    expect(enqueueBillingJobMock).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'payment_receipt' }));
+  });
+});
+
+describe('syncSubscriptionFromProvider — status transition hook (Payments Phase 6, Unit C2, hook 3)', () => {
+  it('enqueues subscription_payment_failed when an existing subscription goes into halted', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    fetchRazorpaySubscriptionMock.mockResolvedValueOnce(
+      fakeSubscription({ status: 'halted', current_start: 1_700_000_000, current_end: 1_702_592_000, short_url: 'https://rzp.io/i/abc' })
+    );
+    enqueue('billing_subscriptions', 'select', {
+      data: {
+        id: 'billing-sub-1', user_id: 'user-1', status: 'active',
+        first_charge_confirmed_at: '2026-08-01T00:00:00.000Z', grace_period_ends_at: null,
+      },
+      error: null,
+    });
+    enqueue('billing_subscriptions', 'update', { data: null, error: null });
+    fetchRazorpaySubscriptionInvoicesMock.mockResolvedValueOnce({ items: [] }); // halted -- no paid invoice to grant
+
+    await syncSubscriptionFromProvider({
+      supabase,
+      userId: 'user-1',
+      planVersion: fakePlanVersion(),
+      providerSubscriptionId: 'sub_1',
+      checkoutOrder: null,
+      source: 'webhook',
+      rawPayload: {},
+    });
+
+    expect(enqueueBillingJobMock).toHaveBeenCalledWith({
+      kind: 'subscription_payment_failed',
+      dedupeKey: expect.stringMatching(/^sub_failed:billing-sub-1:/),
+      subjectRef: 'user-1',
+      userId: 'user-1',
+      billingSubscriptionId: 'billing-sub-1',
+      payload: { graceEndsAt: expect.any(String), shortUrl: 'https://rzp.io/i/abc' },
+    });
+  });
+
+  it('enqueues subscription_ended when an existing subscription goes cancelled', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    fetchRazorpaySubscriptionMock.mockResolvedValueOnce(fakeSubscription({ status: 'cancelled' }));
+    enqueue('billing_subscriptions', 'select', {
+      data: { id: 'billing-sub-1', user_id: 'user-1', status: 'active', first_charge_confirmed_at: '2026-08-01T00:00:00.000Z' },
+      error: null,
+    });
+    enqueue('billing_subscriptions', 'update', { data: null, error: null });
+
+    await syncSubscriptionFromProvider({
+      supabase,
+      userId: 'user-1',
+      planVersion: fakePlanVersion(),
+      providerSubscriptionId: 'sub_1',
+      checkoutOrder: null,
+      source: 'webhook',
+      rawPayload: {},
+    });
+
+    expect(enqueueBillingJobMock).toHaveBeenCalledWith({
+      kind: 'subscription_ended',
+      dedupeKey: 'sub_ended:billing-sub-1',
+      subjectRef: 'user-1',
+      userId: 'user-1',
+      billingSubscriptionId: 'billing-sub-1',
+    });
+  });
+
+  it('does not enqueue anything when the status stays active', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    fetchRazorpaySubscriptionMock.mockResolvedValueOnce(fakeSubscription({ status: 'active' }));
+    enqueue('billing_subscriptions', 'select', {
+      data: { id: 'billing-sub-1', user_id: 'user-1', status: 'active', first_charge_confirmed_at: '2026-08-01T00:00:00.000Z' },
+      error: null,
+    });
+    enqueue('billing_subscriptions', 'update', { data: null, error: null });
+    fetchRazorpaySubscriptionInvoicesMock.mockResolvedValueOnce({ items: [] });
+
+    await syncSubscriptionFromProvider({
+      supabase,
+      userId: 'user-1',
+      planVersion: fakePlanVersion(),
+      providerSubscriptionId: 'sub_1',
+      checkoutOrder: null,
+      source: 'webhook',
+      rawPayload: {},
+    });
+
+    expect(enqueueBillingJobMock).not.toHaveBeenCalled();
+  });
+
+  it('never fires "ended" for a subscription inserted directly as terminal (no live prior state)', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    fetchRazorpaySubscriptionMock.mockResolvedValueOnce(fakeSubscription({ status: 'cancelled' }));
+    enqueue('billing_subscriptions', 'select', { data: null, error: null }); // brand new -- prev is null
+    enqueue('billing_subscriptions', 'insert', { data: { id: 'billing-sub-2', first_charge_confirmed_at: null }, error: null });
+
+    await syncSubscriptionFromProvider({
+      supabase,
+      userId: 'user-1',
+      planVersion: fakePlanVersion(),
+      providerSubscriptionId: 'sub_1',
+      checkoutOrder: null,
+      source: 'verify',
+      rawPayload: {},
+    });
+
+    expect(enqueueBillingJobMock).not.toHaveBeenCalled();
   });
 });
 
