@@ -96,7 +96,11 @@ everywhere it sells.
 | Client window | `components/pricing/checkout/useRazorpayCheckout.ts` |
 | Test or live mode | `getRazorpayMode()` → `provider_mode` |
 
-- **G1:** `prepareRazorpayCheckoutInternal` never reads the item's `provider`. The top-up insert writes
+- **G1 — corrected 2026-09-25 by unit AC's review. It was not a live defect.**
+  `loadPlanVersionForCheckout` and `loadTopupPackForCheckout` already filter `.eq('provider',
+  'razorpay')`, so a `stripe` item failed as "not found" and never reached Razorpay. AC's explicit
+  guard is a second layer with a clearer code. The original text follows.
+- `prepareRazorpayCheckoutInternal` never reads the item's `provider`. The top-up insert writes
   `'razorpay'` as a literal (`:438`). Only the market lock stops a `stripe`-tagged item going to Razorpay.
 
 ## 3. Open owner decisions
@@ -435,3 +439,84 @@ live in `resolveCheckoutTax`. **AC ∥ B**, with disjoint files. D follows.
      tests;
    - the save row for US (`state_code` 96, `region`) and for IN (`region` null);
    - the form's country switching.
+
+## 9. Execution spec, batch 2 (unit D) — anchored after AC (`f466522`) and B (`02bb926`)
+
+**Accepted from batch 1:**
+- AC and B were reviewed and accepted.
+- Combined gates: tsc clean, **2,601 tests / 198 files**.
+- Review notes, not changed:
+  - India's validation now reports a missing city before a missing phone. Only the first message
+    differs.
+  - The server accepts a US profile while the flag is off. The customer can only lock themselves out
+    of IN prices.
+
+**U3 default:** export invoices share the `KG/` series until the CA says otherwise.
+
+**The LUT ARN** is a constant, `LEGAL_LUT_ARN = ''`, in `lib/legal/business-config.ts`.
+- The invoice prints "LUT ARN: <value>" only when it is set.
+- Setting it is on the US switch-on checklist. Issuing never refuses over it.
+
+### D — documents, emails and copy (Sonnet)
+
+**Files:**
+- `lib/billing/documents/document-view.shared.ts` (+ test)
+- `lib/billing/documents/render-pdf.ts`
+- `lib/legal/business-config.ts`
+- `lib/billing/email/templates.shared.ts` and its callers in `lib/billing/notifications/`
+- `lib/billing/checkout-quote.shared.ts`
+- `components/pricing/checkout/CheckoutSummarySheet.tsx`
+- `components/pricing/WalletPage.tsx`
+- `components/pricing/PlansComparison.tsx`
+- `components/billing/BillingAccountPage.tsx` (the `+ GST` label only)
+- `components/admin/PricingStudio.tsx` (`defaultProviderForMarket` only)
+- tests
+
+1. **Documents** (`document-view.shared.ts`), when `tax_breakdown_json.supplyType === 'export'` (or
+   `taxRegime === 'in_export_lut'`):
+   - **Place of supply:** "Other Countries (96)". It is never looked up as an Indian state.
+   - **The endorsement:** a view field `exportEndorsement`, "Supply meant for export under LUT without
+     payment of IGST". Add "LUT ARN: …" when `LEGAL_LUT_ARN` is set. `render-pdf.ts` prints it under the
+     totals, above the amount in words, with `wrapLine`. Credit notes carry it too.
+   - **The buyer block:**
+     - its city line uses the snapshot's `region`, where India uses the state name: "Austin, TX,
+       78701";
+     - add a country line (`countryName`) for any non-IN customer.
+   - **The amount in words:**
+     - `amountInWordsUsd`: "US Dollars Twenty-Nine and Fifty Cents Only", in Western grouping
+       (thousand, million);
+     - choose by `currency_code`. INR keeps `amountInWordsIndian`, unchanged.
+   - **The tax rows:** for an export, a single row "IGST @ 0%" at 0.00, so the zero-rating is explicit
+     on the face of the invoice.
+   - India documents must render **byte-identical** to before. Add a test: render a current IN row
+     before and after, and compare.
+2. **Emails** (`templates.shared.ts`):
+   - `formatInr` becomes `formatMoney(amountMinor, currencyCode)`: en-IN for INR, en-US otherwise,
+     always two decimals.
+   - Update its callers to pass the payment or document's `currency_code`.
+   - Keep a `formatInr` wrapper only if a caller can't reach a currency, and say which.
+3. **The checkout quote and sheet:**
+   - `taxLinesFromBreakdown` returns `[]` for `'export'`.
+   - The sheet shows no tax line or "+ IGST" text for an export quote, just the total, plus the muted
+     line "No GST: export of services."
+   - The renewal line already formats by currency. Check it reads "at $29.00".
+4. **The wallet and the plans table:**
+   - "+ GST" only when the currency is INR: `PlansComparison.tsx:162` and the monthly label wherever it
+     is built, and `BillingAccountPage.tsx:319`.
+   - `yearlyCheckoutDeferred` (`WalletPage.tsx:266`) becomes `usingRazorpayMarket`, whatever the
+     market: the server refuses annual for every Razorpay item.
+   - The "Stripe comes next" copy (`:895`) becomes "Coming soon in your country".
+5. **Admin catalog:** `defaultProviderForMarket` (`PricingStudio.tsx:604`) returns `'razorpay'` for
+   every market. Existing rows are not touched. The walk re-tags them by hand.
+6. **The `'INR'` literals:** the other seven are locale or default choices and are correct. Leave
+   them.
+7. **Tests:**
+   - the view for an export row (place of supply, the endorsement with and without an ARN, the buyer
+     country, USD words);
+   - `amountInWordsUsd` edge cases (0, 1 cent, 1,000, 1,000,000);
+   - `formatMoney`;
+   - `taxLinesFromBreakdown` for an export;
+   - the IN-unchanged render test.
+
+**Rules:** as batch 1 (commit your files by name, the full gate before the final commit, no push, no
+Supabase CLI). Prefix: `feat(payments): Phase 8 D --`.
