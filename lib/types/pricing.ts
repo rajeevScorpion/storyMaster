@@ -717,8 +717,15 @@ export interface BillingProfileInput {
   profileType?: 'personal' | 'business';
   /** A code from lib/billing/india-states.shared.ts's INDIA_GST_STATE_CODES -- the checkout place of
    * supply. For a business profile this is derived from the GSTIN server-side; the client's value is
-   * ignored (Unit B). */
+   * ignored (Unit B). Ignored entirely for a foreign profile (Unit B, Phase 8). */
   stateCode: string;
+  /** Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): a code from
+   * lib/billing/international.shared.ts's SUPPORTED_BILLING_COUNTRIES. Absent means 'IN', so an old
+   * client that never sends this field still validates and saves as Indian. */
+  countryCode?: string;
+  /** A foreign customer's state/province, e.g. a US state code from lib/billing/us-states.shared.ts.
+   * Always null for an Indian profile. */
+  region?: string | null;
   addressLine1?: string | null;
   addressLine2?: string | null;
   city?: string | null;
@@ -737,6 +744,9 @@ export interface BillingProfileDTO {
   profileType: 'personal' | 'business';
   stateCode: string;
   countryCode: string;
+  /** Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): null on a database predating
+   * migration 138, and always null for an Indian profile. */
+  region: string | null;
   addressLine1: string | null;
   addressLine2: string | null;
   city: string | null;

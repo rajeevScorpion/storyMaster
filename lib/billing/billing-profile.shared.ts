@@ -1,4 +1,10 @@
-import { GSTIN_REGEX, isValidIndiaStateCode } from '@/lib/billing/india-states.shared';
+import { GSTIN_REGEX, isValidIndiaStateCode, indiaStateName } from '@/lib/billing/india-states.shared';
+import { isValidUsStateCode } from '@/lib/billing/us-states.shared';
+import {
+  INDIA_COUNTRY_CODE,
+  billingCountryName,
+  isForeignBillingCountry,
+} from '@/lib/billing/international.shared';
 import type { BillingProfileDTO, BillingProfileInput } from '@/lib/types/pricing';
 
 /**
@@ -9,6 +15,11 @@ import type { BillingProfileDTO, BillingProfileInput } from '@/lib/types/pricing
  * lib/billing/billing-profile.ts's validateBillingProfileInput and were far looser (legal name and a
  * state code were the only requirements, and the GSTIN check was shape-only). That function is now a
  * thin wrapper over validateBillingProfile below, kept for existing callers' sake.
+ *
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): validateBillingProfile now branches on
+ * the resolved country. India (or an absent countryCode, an old client) keeps exactly the rules
+ * below, unchanged; a foreign country gets its own field set. Only 'US' is a supported foreign
+ * country today (lib/billing/international.shared.ts's SUPPORTED_BILLING_COUNTRIES).
  */
 
 const GSTIN_CHECKSUM_CHARSET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -41,10 +52,59 @@ export function normalizeIndianPhone(raw: string | null | undefined): string | n
   return /^[6-9]\d{9}$/.test(digits) ? `+91${digits}` : null;
 }
 
+/**
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): the resolved country a profile input
+ * declares -- 'IN' when countryCode is absent or blank, matching BillingProfileInput's contract that
+ * an old client with no countryCode field is Indian. Upper-cased and trimmed, so 'us' and ' US '
+ * both resolve the same way as 'US'.
+ */
+export function resolveBillingCountryCode(countryCode: string | null | undefined): string {
+  const trimmed = countryCode?.trim().toUpperCase();
+  return trimmed || INDIA_COUNTRY_CODE;
+}
+
+/**
+ * Accepts a US phone number in the forms a customer is likely to type or paste -- spaces, dashes,
+ * dots and parentheses are stripped first -- and returns it normalised to '+1XXXXXXXXXX', or null
+ * when it doesn't parse as one. A bare 10-digit number, one with a leading '1' (11 digits total) or a
+ * leading '+1' are all accepted; the remaining 10 digits' area code can't start with 0 or 1 (NANP
+ * numbering never assigns those).
+ */
+export function normalizeUsPhone(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const cleaned = raw.replace(/[\s\-().]/g, '');
+  if (!/^\+?\d+$/.test(cleaned)) return null;
+
+  let digits: string;
+  if (cleaned.startsWith('+1')) {
+    digits = cleaned.slice(2);
+  } else if (cleaned.startsWith('+')) {
+    return null; // a non-'+1' country code
+  } else if (cleaned.length === 11 && cleaned.startsWith('1')) {
+    digits = cleaned.slice(1);
+  } else {
+    digits = cleaned;
+  }
+
+  return /^[2-9]\d{9}$/.test(digits) ? `+1${digits}` : null;
+}
+
+/** Dispatches to the right country-specific normaliser. Only 'US' is a supported foreign country
+ * today, so this is the one branch point -- a country added later needs its own case here. */
+export function normalizeBillingPhone(raw: string | null | undefined, countryCode: string | null | undefined): string | null {
+  return isForeignBillingCountry(countryCode) ? normalizeUsPhone(raw) : normalizeIndianPhone(raw);
+}
+
 /** A 6-digit Indian postal code: first digit 1-9 (no PIN region starts with 0). */
 export function isValidPin(pin: string | null | undefined): boolean {
   if (!pin) return false;
   return /^[1-9][0-9]{5}$/.test(pin.trim());
+}
+
+/** A US ZIP or ZIP+4 code. */
+export function isValidUsZip(zip: string | null | undefined): boolean {
+  if (!zip) return false;
+  return /^\d{5}(-\d{4})?$/.test(zip.trim());
 }
 
 /** A pragmatic single-'@' check -- not RFC 5322. Rejects whitespace, more or fewer than one '@', an
@@ -131,6 +191,35 @@ export function resolveBillingProfileType(
   return input.profileType ?? (gstinTrimmed ? 'business' : 'personal');
 }
 
+const US_BUSINESS_MESSAGE = 'Business billing is available for Indian GST registrations only.';
+
+/** The Unit-B (Phase 8) field set for a US billing profile: no state/GSTIN, a free-text region
+ * (validated against us-states.shared.ts), a ZIP-shaped postal code, and a US-normalised phone. Name,
+ * email and city are validated by the caller before this runs, exactly as India's. */
+function validateUsBillingFields(input: BillingProfileInput, errors: BillingProfileFieldError[]): void {
+  const gstinTrimmed = input.gstin?.trim() ?? '';
+  const companyNameTrimmed = input.companyName?.trim() ?? '';
+
+  if (gstinTrimmed) errors.push({ field: 'gstin', message: US_BUSINESS_MESSAGE });
+  if (companyNameTrimmed) errors.push({ field: 'companyName', message: US_BUSINESS_MESSAGE });
+
+  if (!isValidUsStateCode(input.region)) {
+    errors.push({ field: 'region', message: 'Please select a valid US state.' });
+  }
+
+  if (!input.postalCode || !input.postalCode.trim()) {
+    errors.push({ field: 'postalCode', message: 'Postal code is required.' });
+  } else if (!isValidUsZip(input.postalCode)) {
+    errors.push({ field: 'postalCode', message: 'Enter a valid ZIP code.' });
+  }
+
+  if (!input.phone || !input.phone.trim()) {
+    errors.push({ field: 'phone', message: 'Phone number is required.' });
+  } else if (!normalizeUsPhone(input.phone)) {
+    errors.push({ field: 'phone', message: 'Enter a valid 10-digit US phone number.' });
+  }
+}
+
 /**
  * The required-field set per owner decision P1 (phase-5-owner-requirements.md §1c, confirmed in
  * phase-5-plan.md §3). Returns one entry per failing field -- empty when the profile is complete and
@@ -142,10 +231,7 @@ export function resolveBillingProfileType(
  */
 export function validateBillingProfile(input: BillingProfileInput): BillingProfileFieldError[] {
   const errors: BillingProfileFieldError[] = [];
-
-  const gstinTrimmed = input.gstin?.trim() ?? '';
-  const companyNameTrimmed = input.companyName?.trim() ?? '';
-  const profileType = resolveBillingProfileType(input);
+  const countryCode = resolveBillingCountryCode(input.countryCode);
 
   if (!input.legalName || !input.legalName.trim()) {
     errors.push({ field: 'legalName', message: 'Full name is required.' });
@@ -157,14 +243,27 @@ export function validateBillingProfile(input: BillingProfileInput): BillingProfi
     errors.push({ field: 'billingEmail', message: "That email address doesn't look right." });
   }
 
+  if (!input.city || !input.city.trim()) {
+    errors.push({ field: 'city', message: 'City is required.' });
+  }
+
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): everything below this point is
+  // country-specific. India (or an absent countryCode -- an old client) keeps the exact rules this
+  // function had before this unit, unchanged in content and order.
+  if (countryCode === 'US') {
+    validateUsBillingFields(input, errors);
+    return errors;
+  }
+
+  if (countryCode !== INDIA_COUNTRY_CODE) {
+    errors.push({ field: 'countryCode', message: "We can't bill addresses in that country yet." });
+    return errors;
+  }
+
   if (!input.phone || !input.phone.trim()) {
     errors.push({ field: 'phone', message: 'Phone number is required.' });
   } else if (!normalizeIndianPhone(input.phone)) {
     errors.push({ field: 'phone', message: 'Enter a valid 10-digit Indian mobile number.' });
-  }
-
-  if (!input.city || !input.city.trim()) {
-    errors.push({ field: 'city', message: 'City is required.' });
   }
 
   if (!input.postalCode || !input.postalCode.trim()) {
@@ -172,6 +271,10 @@ export function validateBillingProfile(input: BillingProfileInput): BillingProfi
   } else if (!isValidPin(input.postalCode)) {
     errors.push({ field: 'postalCode', message: 'Enter a valid 6-digit PIN code.' });
   }
+
+  const gstinTrimmed = input.gstin?.trim() ?? '';
+  const companyNameTrimmed = input.companyName?.trim() ?? '';
+  const profileType = resolveBillingProfileType(input);
 
   if (profileType === 'business') {
     if (!input.addressLine1 || !input.addressLine1.trim()) {
@@ -214,11 +317,29 @@ function billingProfileDtoToInput(profile: BillingProfileDTO): BillingProfileInp
     gstin: profile.gstin,
     profileType: profile.profileType,
     stateCode: profile.stateCode,
+    countryCode: profile.countryCode,
+    region: profile.region,
     addressLine1: profile.addressLine1,
     addressLine2: profile.addressLine2,
     city: profile.city,
     postalCode: profile.postalCode,
   };
+}
+
+/** The one-line address summary shown on the billing-details card (components/billing/
+ * BillingAccountPage.tsx) and anywhere else a saved profile's address needs a compact display.
+ * India: the state name (falling back to the raw code if the lookup misses), plus the GSTIN for a
+ * business profile -- byte-identical to what that page rendered inline before this unit. A foreign
+ * profile: "city, region postalCode, countryName", e.g. "San Francisco, CA 94103, United States". */
+export function billingProfileAddressSummary(profile: BillingProfileDTO): string {
+  if (isForeignBillingCountry(profile.countryCode)) {
+    const stateZip = [profile.region, profile.postalCode].filter(Boolean).join(' ');
+    return [profile.city, stateZip, billingCountryName(profile.countryCode)].filter(Boolean).join(', ');
+  }
+
+  const stateLabel = indiaStateName(profile.stateCode) ?? profile.stateCode;
+  const gstinSuffix = profile.profileType === 'business' && profile.gstin ? ` · ${profile.gstin}` : '';
+  return `${stateLabel}${gstinSuffix}`;
 }
 
 /** The P7 gate: a saved profile is "complete" only once it satisfies validateBillingProfile for its

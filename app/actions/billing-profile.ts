@@ -3,6 +3,8 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { loadBillingProfile, saveBillingProfile, toBillingProfileDTO } from '@/lib/billing/billing-profile';
+import { getInternationalCheckoutCountries } from '@/lib/billing/international';
+import { INDIA_COUNTRY_CODE, type SupportedBillingCountryCode } from '@/lib/billing/international.shared';
 import type { BillingProfileInput, GetBillingProfileResult, SaveBillingProfileResult } from '@/lib/types/pricing';
 
 /**
@@ -10,6 +12,10 @@ import type { BillingProfileInput, GetBillingProfileResult, SaveBillingProfileRe
  * billing-details form calls. Kept thin -- all DB access and validation live in
  * lib/billing/billing-profile.ts so app/actions/pricing-checkout.ts can reuse the exact same code
  * path when it loads the profile at checkout time.
+ *
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): getBillingCountryOptions is the
+ * dialog's one read of which countries are open today -- India always, plus whatever
+ * getInternationalCheckoutCountries returns (empty while `billing_international_countries` is off).
  */
 
 async function getAuthenticatedUserId(): Promise<string> {
@@ -48,4 +54,10 @@ export async function saveMyBillingProfile(input: BillingProfileInput): Promise<
   }
 
   return { status: 'ok', profile: toBillingProfileDTO(result.profile) };
+}
+
+/** No sign-in required -- this only says which countries the billing dialog should offer, not
+ * anything about the caller's own profile. */
+export async function getBillingCountryOptions(): Promise<SupportedBillingCountryCode[]> {
+  return [INDIA_COUNTRY_CODE, ...(await getInternationalCheckoutCountries())];
 }

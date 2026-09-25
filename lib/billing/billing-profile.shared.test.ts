@@ -1,13 +1,18 @@
 import { describe, it, expect } from 'vitest';
 
 import {
+  billingProfileAddressSummary,
   gstinCheckDigit,
   isBillingProfileComplete,
   isValidEmail,
   isValidGstinWithChecksum,
   isValidPin,
+  isValidUsZip,
+  normalizeBillingPhone,
   normalizeIndianPhone,
+  normalizeUsPhone,
   pinStateHint,
+  resolveBillingCountryCode,
   stateCodeFromGstin,
   validateBillingProfile,
 } from './billing-profile.shared';
@@ -179,6 +184,93 @@ describe('pinStateHint', () => {
   });
 });
 
+describe('normalizeUsPhone', () => {
+  it('accepts a bare 10-digit number', () => {
+    expect(normalizeUsPhone('4155550100')).toBe('+14155550100');
+  });
+
+  it('accepts a leading 1 (11 digits total)', () => {
+    expect(normalizeUsPhone('14155550100')).toBe('+14155550100');
+  });
+
+  it('accepts a leading +1', () => {
+    expect(normalizeUsPhone('+14155550100')).toBe('+14155550100');
+  });
+
+  it('strips spaces, dashes, dots and parentheses', () => {
+    expect(normalizeUsPhone('(415) 555-0100')).toBe('+14155550100');
+    expect(normalizeUsPhone('415.555.0100')).toBe('+14155550100');
+  });
+
+  it('rejects an area code starting with 0 or 1', () => {
+    expect(normalizeUsPhone('0155550100')).toBeNull();
+    expect(normalizeUsPhone('1155550100')).toBeNull();
+  });
+
+  it('rejects the wrong digit count', () => {
+    expect(normalizeUsPhone('415555010')).toBeNull();
+    expect(normalizeUsPhone('41555501000')).toBeNull();
+  });
+
+  it('rejects a non-+1 country code', () => {
+    expect(normalizeUsPhone('+914155550100')).toBeNull();
+  });
+
+  it('rejects null, undefined and empty input', () => {
+    expect(normalizeUsPhone(null)).toBeNull();
+    expect(normalizeUsPhone(undefined)).toBeNull();
+    expect(normalizeUsPhone('')).toBeNull();
+  });
+});
+
+describe('normalizeBillingPhone', () => {
+  it('dispatches to the Indian normaliser for IN and an absent country', () => {
+    expect(normalizeBillingPhone('9876543210', 'IN')).toBe('+919876543210');
+    expect(normalizeBillingPhone('9876543210', null)).toBe('+919876543210');
+    expect(normalizeBillingPhone('9876543210', undefined)).toBe('+919876543210');
+  });
+
+  it('dispatches to the US normaliser for US', () => {
+    expect(normalizeBillingPhone('4155550100', 'US')).toBe('+14155550100');
+  });
+});
+
+describe('isValidUsZip', () => {
+  it('accepts a 5-digit ZIP', () => {
+    expect(isValidUsZip('94103')).toBe(true);
+  });
+
+  it('accepts a ZIP+4', () => {
+    expect(isValidUsZip('94103-1234')).toBe(true);
+  });
+
+  it('rejects the wrong shape', () => {
+    expect(isValidUsZip('9410')).toBe(false);
+    expect(isValidUsZip('941035')).toBe(false);
+    expect(isValidUsZip('94103-123')).toBe(false);
+  });
+
+  it('rejects null, undefined and empty input', () => {
+    expect(isValidUsZip(null)).toBe(false);
+    expect(isValidUsZip(undefined)).toBe(false);
+    expect(isValidUsZip('')).toBe(false);
+  });
+});
+
+describe('resolveBillingCountryCode', () => {
+  it('resolves an absent or blank country to IN', () => {
+    expect(resolveBillingCountryCode(null)).toBe('IN');
+    expect(resolveBillingCountryCode(undefined)).toBe('IN');
+    expect(resolveBillingCountryCode('')).toBe('IN');
+    expect(resolveBillingCountryCode('   ')).toBe('IN');
+  });
+
+  it('upper-cases and trims a real country code', () => {
+    expect(resolveBillingCountryCode(' us ')).toBe('US');
+    expect(resolveBillingCountryCode('US')).toBe('US');
+  });
+});
+
 describe('validateBillingProfile', () => {
   function personal(overrides: Partial<BillingProfileInput> = {}): BillingProfileInput {
     return {
@@ -302,28 +394,111 @@ describe('validateBillingProfile', () => {
   });
 });
 
-describe('isBillingProfileComplete', () => {
-  function dto(overrides: Partial<BillingProfileDTO> = {}): BillingProfileDTO {
+// Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): the country-branching half of
+// validateBillingProfile. The India-only tests above are untouched by this unit and keep validating
+// the exact same rules for an absent or 'IN' countryCode.
+describe('validateBillingProfile -- US and other countries', () => {
+  function us(overrides: Partial<BillingProfileInput> = {}): BillingProfileInput {
     return {
-      id: 'profile-1',
+      countryCode: 'US',
       legalName: 'Jane Doe',
       billingEmail: 'jane@example.com',
-      phone: '+919876543210',
-      companyName: null,
-      gstin: null,
-      profileType: 'personal',
-      stateCode: '24',
-      countryCode: 'IN',
-      addressLine1: null,
-      addressLine2: null,
-      city: 'Gandhinagar',
-      postalCode: '382016',
-      createdAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:00:00.000Z',
+      phone: '4155550100',
+      stateCode: '',
+      region: 'CA',
+      city: 'San Francisco',
+      postalCode: '94103',
       ...overrides,
     };
   }
 
+  it('accepts a complete US profile', () => {
+    expect(validateBillingProfile(us())).toEqual([]);
+  });
+
+  it('requires legalName, billingEmail, city, region, postalCode and phone for a US profile', () => {
+    expect(validateBillingProfile(us({ legalName: '' })).map((e) => e.field)).toContain('legalName');
+    expect(validateBillingProfile(us({ billingEmail: '' })).map((e) => e.field)).toContain('billingEmail');
+    expect(validateBillingProfile(us({ city: '' })).map((e) => e.field)).toContain('city');
+    expect(validateBillingProfile(us({ region: '' })).map((e) => e.field)).toContain('region');
+    expect(validateBillingProfile(us({ postalCode: '' })).map((e) => e.field)).toContain('postalCode');
+    expect(validateBillingProfile(us({ phone: '' })).map((e) => e.field)).toContain('phone');
+  });
+
+  it('rejects a region that is not a US state code', () => {
+    const errors = validateBillingProfile(us({ region: 'ZZ' }));
+    expect(errors).toEqual([{ field: 'region', message: expect.any(String) }]);
+  });
+
+  it('rejects a ZIP that does not match the US shape', () => {
+    const errors = validateBillingProfile(us({ postalCode: '941035' }));
+    expect(errors).toEqual([{ field: 'postalCode', message: expect.any(String) }]);
+  });
+
+  it('accepts a ZIP+4', () => {
+    expect(validateBillingProfile(us({ postalCode: '94103-1234' }))).toEqual([]);
+  });
+
+  it('rejects a phone that does not normalise as US', () => {
+    const errors = validateBillingProfile(us({ phone: '12345' }));
+    expect(errors).toEqual([{ field: 'phone', message: expect.any(String) }]);
+  });
+
+  it('rejects a GSTIN on a US profile -- business billing is India-only', () => {
+    const errors = validateBillingProfile(us({ gstin: LEGAL_GSTIN }));
+    expect(errors).toEqual([
+      { field: 'gstin', message: 'Business billing is available for Indian GST registrations only.' },
+    ]);
+  });
+
+  it('rejects a company name on a US profile -- business billing is India-only', () => {
+    const errors = validateBillingProfile(us({ companyName: 'Aavriti Design Studio' }));
+    expect(errors).toEqual([
+      { field: 'companyName', message: 'Business billing is available for Indian GST registrations only.' },
+    ]);
+  });
+
+  it('ignores stateCode for a US profile', () => {
+    expect(validateBillingProfile(us({ stateCode: '99' }))).toEqual([]);
+  });
+
+  it('refuses a country the code does not support', () => {
+    const errors = validateBillingProfile({
+      countryCode: 'FR',
+      legalName: 'Jane Doe',
+      billingEmail: 'jane@example.com',
+      stateCode: '',
+      city: 'Paris',
+    });
+    expect(errors).toContainEqual({ field: 'countryCode', message: "We can't bill addresses in that country yet." });
+  });
+});
+
+// Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): shared by isBillingProfileComplete
+// and billingProfileAddressSummary below.
+function dto(overrides: Partial<BillingProfileDTO> = {}): BillingProfileDTO {
+  return {
+    id: 'profile-1',
+    legalName: 'Jane Doe',
+    billingEmail: 'jane@example.com',
+    phone: '+919876543210',
+    companyName: null,
+    gstin: null,
+    profileType: 'personal',
+    stateCode: '24',
+    countryCode: 'IN',
+    region: null,
+    addressLine1: null,
+    addressLine2: null,
+    city: 'Gandhinagar',
+    postalCode: '382016',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('isBillingProfileComplete', () => {
   it('is false for null', () => {
     expect(isBillingProfileComplete(null)).toBe(false);
   });
@@ -357,5 +532,51 @@ describe('isBillingProfileComplete', () => {
         dto({ profileType: 'business', companyName: 'Aavriti Design Studio', gstin: LEGAL_GSTIN })
       )
     ).toBe(false);
+  });
+
+  it('is true for a complete US profile', () => {
+    expect(
+      isBillingProfileComplete(
+        dto({
+          countryCode: 'US',
+          phone: '+14155550100',
+          stateCode: '',
+          region: 'CA',
+          city: 'San Francisco',
+          postalCode: '94103',
+        })
+      )
+    ).toBe(true);
+  });
+
+  it('is false for a US profile with no region', () => {
+    expect(
+      isBillingProfileComplete(
+        dto({ countryCode: 'US', phone: '+14155550100', stateCode: '', city: 'San Francisco', postalCode: '94103' })
+      )
+    ).toBe(false);
+  });
+});
+
+describe('billingProfileAddressSummary', () => {
+  it('shows the India state name, unchanged from before this unit, for a personal profile', () => {
+    expect(billingProfileAddressSummary(dto())).toBe('Gujarat');
+  });
+
+  it('appends the GSTIN for a business profile', () => {
+    expect(billingProfileAddressSummary(dto({ profileType: 'business', gstin: LEGAL_GSTIN }))).toBe(
+      `Gujarat · ${LEGAL_GSTIN}`
+    );
+  });
+
+  it('falls back to the raw state code when the lookup misses', () => {
+    expect(billingProfileAddressSummary(dto({ stateCode: '99' }))).toBe('99');
+  });
+
+  it('formats a US profile as "city, region postalCode, countryName"', () => {
+    const summary = billingProfileAddressSummary(
+      dto({ countryCode: 'US', region: 'CA', city: 'San Francisco', postalCode: '94103' })
+    );
+    expect(summary).toBe('San Francisco, CA 94103, United States');
   });
 });

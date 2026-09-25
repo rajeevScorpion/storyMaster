@@ -8,10 +8,13 @@ import Modal from '@/components/ui/Modal';
 import DialogGlow from '@/components/ui/DialogGlow';
 import FilterDropdown, { type FilterDropdownOption } from '@/components/ui/FilterDropdown';
 import { useAuth } from '@/lib/hooks/useAuth';
-import { saveMyBillingProfile } from '@/app/actions/billing-profile';
+import { saveMyBillingProfile, getBillingCountryOptions } from '@/app/actions/billing-profile';
 import { INDIA_GST_STATE_CODES, indiaStateName } from '@/lib/billing/india-states.shared';
+import { US_STATES } from '@/lib/billing/us-states.shared';
+import { billingCountryName, isForeignBillingCountry } from '@/lib/billing/international.shared';
 import { pinStateHint, validateBillingProfile } from '@/lib/billing/billing-profile.shared';
 import {
+  billingDetailsFormForCountryChange,
   billingDetailsFormFromProfile,
   buildBillingProfileInput,
   isBusinessProfileType,
@@ -29,6 +32,11 @@ import type { BillingProfileDTO, BillingProfileInput } from '@/lib/types/pricing
  * replaces it with the owner's Personal/Business toggle and the required-field set from
  * phase-5-owner-requirements.md §1c (decision P1). Props are unchanged other than the new optional
  * `context`, so WalletPage (and Unit F's /account/billing) use it without modification.
+ *
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): a country picker, shown only once
+ * there is a real choice to make (getBillingCountryOptions returns more than just 'IN', or the saved
+ * profile is already foreign) -- with the `billing_international_countries` flag off, that list is
+ * always just ['IN'], so this dialog renders exactly as it did before this unit.
  */
 
 const LABEL_CLASS = 'text-xs font-sans uppercase tracking-wider text-neutral-500';
@@ -43,6 +51,12 @@ const SECTION_CLASS = 'space-y-3 rounded-2xl border border-white/10 bg-white/[0.
 // displaying the first real option's label. See Payments Phase 5 (docs/payments/phase-5-plan.md
 // §5, Unit C).
 const STATE_OPTIONS: FilterDropdownOption[] = INDIA_GST_STATE_CODES.map((entry) => ({
+  value: entry.code,
+  label: entry.name,
+}));
+
+// Same placeholder-over-fallback reasoning as STATE_OPTIONS above, for a foreign profile's region.
+const US_STATE_OPTIONS: FilterDropdownOption[] = US_STATES.map((entry) => ({
   value: entry.code,
   label: entry.name,
 }));
@@ -81,6 +95,9 @@ export default function BillingDetailsDialog({
   const [saving, setSaving] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
   const [isUnavailable, setIsUnavailable] = useState(false);
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): starts as just India, matching the
+  // flag-off state, until getBillingCountryOptions (below) resolves.
+  const [countryOptions, setCountryOptions] = useState<string[]>(['IN']);
   const tabRefs = useRef<Record<BillingProfileType, HTMLButtonElement | null>>({ personal: null, business: null });
 
   // The form resets from `profile` (and the signed-in user's email, as a fallback) every time the
@@ -97,9 +114,32 @@ export default function BillingDetailsDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const isBusiness = isBusinessProfileType(form.profileType);
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): which countries the country picker
+  // offers -- always just ['IN'] while `billing_international_countries` is off. Fetched fresh each
+  // time the dialog opens rather than once, so a flag flip between opens takes effect immediately.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void getBillingCountryOptions().then((codes) => {
+      if (!cancelled) setCountryOptions(codes);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const isForeign = isForeignBillingCountry(form.countryCode);
+  // Shown only once there's a real choice, or the saved profile is already foreign -- see the
+  // component doc comment above.
+  const showCountryPicker = countryOptions.length > 1 || isForeignBillingCountry(profile?.countryCode);
+  const countryDropdownOptions = useMemo<FilterDropdownOption[]>(
+    () => countryOptions.map((code) => ({ value: code, label: billingCountryName(code) ?? code })),
+    [countryOptions]
+  );
+
+  const isBusiness = !isForeign && isBusinessProfileType(form.profileType);
   const businessState = useMemo(() => resolveBusinessState(form.gstin), [form.gstin]);
-  const effectiveStateCode = isBusiness ? businessState.stateCode : form.stateCode || null;
+  const effectiveStateCode = isForeign ? form.region || null : isBusiness ? businessState.stateCode : form.stateCode || null;
 
   const currentInput = useMemo(() => buildBillingProfileInput(form), [form]);
   const fieldErrors = useMemo(() => validateBillingProfile(currentInput), [currentInput]);
@@ -142,6 +182,18 @@ export default function BillingDetailsDialog({
         return next;
       });
     }
+  };
+
+  const handleCountryChange = (nextCountryCode: string) => {
+    setForm((current) => billingDetailsFormForCountryChange(current, nextCountryCode));
+    setTouched((current) => {
+      if (!current.has('stateCode') && !current.has('region')) return current;
+      const next = new Set(current);
+      next.delete('stateCode');
+      next.delete('region');
+      return next;
+    });
+    markTouched('countryCode');
   };
 
   const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -215,37 +267,54 @@ export default function BillingDetailsDialog({
           </button>
         </div>
 
-        <div
-          role="tablist"
-          aria-label="Personal or business"
-          className="inline-flex rounded-2xl border border-white/10 bg-white/5 p-1"
-        >
-          {PROFILE_TYPE_TABS.map((tab) => {
-            const selected = form.profileType === tab.value;
-            return (
-              <button
-                key={tab.value}
-                ref={(el) => {
-                  tabRefs.current[tab.value] = el;
-                }}
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                tabIndex={selected ? 0 : -1}
-                onClick={() => handleProfileTypeChange(tab.value)}
-                onKeyDown={handleTabKeyDown}
-                disabled={saving}
-                className={`rounded-xl px-4 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_rgba(52,211,153,0.5)] disabled:cursor-not-allowed disabled:opacity-60 ${
-                  selected
-                    ? 'bg-emerald-500/15 text-emerald-200 shadow-[inset_0_0_0_1px_rgba(52,211,153,0.35)]'
-                    : 'text-neutral-400 hover:text-neutral-200'
-                }`}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
+        {showCountryPicker && (
+          <div className="space-y-1.5">
+            <p className={LABEL_CLASS}>Country</p>
+            <FilterDropdown
+              value={form.countryCode}
+              options={countryDropdownOptions}
+              onChange={handleCountryChange}
+              fullWidth
+              size="form"
+              mode="inline"
+              ariaLabel="Billing country"
+            />
+          </div>
+        )}
+
+        {!isForeign && (
+          <div
+            role="tablist"
+            aria-label="Personal or business"
+            className="inline-flex rounded-2xl border border-white/10 bg-white/5 p-1"
+          >
+            {PROFILE_TYPE_TABS.map((tab) => {
+              const selected = form.profileType === tab.value;
+              return (
+                <button
+                  key={tab.value}
+                  ref={(el) => {
+                    tabRefs.current[tab.value] = el;
+                  }}
+                  type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  tabIndex={selected ? 0 : -1}
+                  onClick={() => handleProfileTypeChange(tab.value)}
+                  onKeyDown={handleTabKeyDown}
+                  disabled={saving}
+                  className={`rounded-xl px-4 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_rgba(52,211,153,0.5)] disabled:cursor-not-allowed disabled:opacity-60 ${
+                    selected
+                      ? 'bg-emerald-500/15 text-emerald-200 shadow-[inset_0_0_0_1px_rgba(52,211,153,0.35)]'
+                      : 'text-neutral-400 hover:text-neutral-200'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {isUnavailable ? (
           <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
@@ -300,7 +369,7 @@ export default function BillingDetailsDialog({
                 </div>
                 <div className="space-y-1.5">
                   <label className={LABEL_CLASS} htmlFor={fieldId('phone')}>
-                    Phone
+                    {isForeign ? 'Mobile number (US)' : 'Phone'}
                   </label>
                   <input
                     id={fieldId('phone')}
@@ -309,7 +378,7 @@ export default function BillingDetailsDialog({
                     onChange={(event) => updateField('phone', event.target.value)}
                     onBlur={() => markTouched('phone')}
                     disabled={saving}
-                    placeholder="98765 43210"
+                    placeholder={isForeign ? '(415) 555-0100' : '98765 43210'}
                     className={INPUT_CLASS}
                     aria-invalid={Boolean(errorFor('phone'))}
                     aria-describedby={describedBy('phone')}
@@ -384,7 +453,22 @@ export default function BillingDetailsDialog({
 
               <div className="space-y-1.5">
                 <p className={LABEL_CLASS}>State</p>
-                {isBusiness ? (
+                {isForeign ? (
+                  <FilterDropdown
+                    value={form.region}
+                    options={US_STATE_OPTIONS}
+                    onChange={(value) => {
+                      updateField('region', value);
+                      markTouched('region');
+                    }}
+                    fullWidth
+                    size="form"
+                    mode="inline"
+                    ariaLabel="Billing state"
+                    placeholder="Select a state"
+                    searchable
+                  />
+                ) : isBusiness ? (
                   <>
                     <div className="flex min-h-12 items-center gap-2 rounded-2xl border border-white/10 bg-neutral-900/40 px-4 py-3 text-sm text-neutral-300">
                       <Lock className="h-3.5 w-3.5 shrink-0 text-neutral-500" aria-hidden="true" />
@@ -410,7 +494,9 @@ export default function BillingDetailsDialog({
                     searchable
                   />
                 )}
-                {errorFor('stateCode') && <p className={ERROR_CLASS}>{errorFor('stateCode')}</p>}
+                {errorFor(isForeign ? 'region' : 'stateCode') && (
+                  <p className={ERROR_CLASS}>{errorFor(isForeign ? 'region' : 'stateCode')}</p>
+                )}
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2">
@@ -436,7 +522,7 @@ export default function BillingDetailsDialog({
                 </div>
                 <div className="space-y-1.5">
                   <label className={LABEL_CLASS} htmlFor={fieldId('postalCode')}>
-                    PIN code
+                    {isForeign ? 'ZIP code' : 'PIN code'}
                   </label>
                   <input
                     id={fieldId('postalCode')}
@@ -444,7 +530,7 @@ export default function BillingDetailsDialog({
                     onChange={(event) => updateField('postalCode', event.target.value)}
                     onBlur={() => markTouched('postalCode')}
                     disabled={saving}
-                    inputMode="numeric"
+                    inputMode={isForeign ? 'text' : 'numeric'}
                     className={INPUT_CLASS}
                     aria-invalid={Boolean(errorFor('postalCode'))}
                     aria-describedby={describedBy('postalCode')}
@@ -454,7 +540,7 @@ export default function BillingDetailsDialog({
                       {errorFor('postalCode')}
                     </p>
                   )}
-                  {!errorFor('postalCode') && pinHint === 'mismatch' && (
+                  {!isForeign && !errorFor('postalCode') && pinHint === 'mismatch' && (
                     <p className={HINT_CLASS}>
                       This PIN doesn&apos;t look like it&apos;s in{' '}
                       {(effectiveStateCode && indiaStateName(effectiveStateCode)) ?? 'the selected state'}.

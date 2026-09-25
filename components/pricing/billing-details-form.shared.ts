@@ -1,5 +1,6 @@
 import { indiaStateName } from '@/lib/billing/india-states.shared';
 import { isValidGstinWithChecksum, stateCodeFromGstin } from '@/lib/billing/billing-profile.shared';
+import { INDIA_COUNTRY_CODE, isForeignBillingCountry } from '@/lib/billing/international.shared';
 import type { BillingProfileDTO, BillingProfileInput } from '@/lib/types/pricing';
 
 /**
@@ -8,11 +9,17 @@ import type { BillingProfileDTO, BillingProfileInput } from '@/lib/types/pricing
  * DOM. The repo has no @testing-library/react or jsdom/happy-dom environment (checked
  * package.json and vitest.config.ts), so BillingDetailsDialog.tsx stays a thin consumer of these
  * functions rather than carrying this logic inline.
+ *
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): countryCode and region join the form
+ * state. isUsBillingForm below is the one place that decides "does this form look like a US profile"
+ * -- only 'US' is a supported foreign country today, so it's equivalent to isForeignBillingCountry,
+ * but named for what the dialog actually renders differently.
  */
 
 export type BillingProfileType = 'personal' | 'business';
 
 export interface BillingDetailsFormState {
+  countryCode: string;
   profileType: BillingProfileType;
   legalName: string;
   billingEmail: string;
@@ -20,6 +27,8 @@ export interface BillingDetailsFormState {
   companyName: string;
   gstin: string;
   stateCode: string;
+  /** A foreign profile's state/province, e.g. a US state code. Unused (kept '') for India. */
+  region: string;
   addressLine1: string;
   addressLine2: string;
   city: string;
@@ -28,6 +37,7 @@ export interface BillingDetailsFormState {
 
 export function emptyBillingDetailsForm(): BillingDetailsFormState {
   return {
+    countryCode: INDIA_COUNTRY_CODE,
     profileType: 'personal',
     legalName: '',
     billingEmail: '',
@@ -35,11 +45,18 @@ export function emptyBillingDetailsForm(): BillingDetailsFormState {
     companyName: '',
     gstin: '',
     stateCode: '',
+    region: '',
     addressLine1: '',
     addressLine2: '',
     city: '',
     postalCode: '',
   };
+}
+
+/** Whether the form should render the US-shaped fields (no Personal/Business toggle, a US-state
+ * picker, "ZIP code", "Mobile number (US)"). */
+export function isUsBillingForm(countryCode: string): boolean {
+  return isForeignBillingCountry(countryCode);
 }
 
 /**
@@ -57,6 +74,7 @@ export function billingDetailsFormFromProfile(
   }
 
   return {
+    countryCode: profile.countryCode || INDIA_COUNTRY_CODE,
     profileType: profile.profileType,
     legalName: profile.legalName ?? '',
     billingEmail: profile.billingEmail ?? fallbackEmail?.trim() ?? '',
@@ -64,10 +82,33 @@ export function billingDetailsFormFromProfile(
     companyName: profile.companyName ?? '',
     gstin: profile.gstin ?? '',
     stateCode: profile.stateCode ?? '',
+    region: profile.region ?? '',
     addressLine1: profile.addressLine1 ?? '',
     addressLine2: profile.addressLine2 ?? '',
     city: profile.city ?? '',
     postalCode: profile.postalCode ?? '',
+  };
+}
+
+/**
+ * Applied when the country dropdown changes: clears the fields that belong to the other country's
+ * shape, so a stale Indian state code or a leftover US state never resurfaces if the customer
+ * switches back. Moving to a foreign country also forces Personal and clears the business-only
+ * fields, mirroring handleProfileTypeChange's own clearing rule in the dialog. A no-op when the
+ * country doesn't actually change.
+ */
+export function billingDetailsFormForCountryChange(
+  form: BillingDetailsFormState,
+  nextCountryCode: string
+): BillingDetailsFormState {
+  if (nextCountryCode === form.countryCode) return form;
+
+  return {
+    ...form,
+    countryCode: nextCountryCode,
+    stateCode: '',
+    region: '',
+    ...(isForeignBillingCountry(nextCountryCode) ? { profileType: 'personal' as const, companyName: '', gstin: '' } : {}),
   };
 }
 
@@ -104,17 +145,20 @@ export function resolveBusinessState(gstin: string): BusinessStateResult {
  * stateCode for a business profile anyway, but sending the derived value keeps the request honest.
  */
 export function buildBillingProfileInput(form: BillingDetailsFormState): BillingProfileInput {
-  const isBusiness = isBusinessProfileType(form.profileType);
+  const isForeign = isForeignBillingCountry(form.countryCode);
+  const isBusiness = !isForeign && isBusinessProfileType(form.profileType);
   const trimmedGstin = form.gstin.trim().toUpperCase();
   const derivedStateCode = isBusiness ? resolveBusinessState(trimmedGstin).stateCode : null;
 
   return {
+    countryCode: form.countryCode,
     legalName: form.legalName.trim(),
     billingEmail: form.billingEmail.trim() || null,
     phone: form.phone.trim() || null,
     companyName: isBusiness ? form.companyName.trim() || null : null,
     gstin: isBusiness ? trimmedGstin || null : null,
-    profileType: form.profileType,
+    profileType: isForeign ? 'personal' : form.profileType,
+    region: isForeign ? form.region.trim().toUpperCase() || null : null,
     stateCode: isBusiness ? derivedStateCode ?? '' : form.stateCode.trim(),
     addressLine1: form.addressLine1.trim() || null,
     addressLine2: form.addressLine2.trim() || null,

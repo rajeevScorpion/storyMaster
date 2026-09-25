@@ -2,12 +2,19 @@ import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
-  normalizeIndianPhone,
+  normalizeBillingPhone,
+  resolveBillingCountryCode,
   resolveBillingProfileType,
   stateCodeFromGstin,
   validateBillingProfile,
 } from '@/lib/billing/billing-profile.shared';
 import { indiaStateName } from '@/lib/billing/india-states.shared';
+import { usStateName } from '@/lib/billing/us-states.shared';
+import {
+  FOREIGN_PLACE_OF_SUPPLY_CODE,
+  billingCountryName,
+  isForeignBillingCountry,
+} from '@/lib/billing/international.shared';
 import type { DbBillingProfile } from '@/lib/types/database';
 import type { BillingProfileDTO, BillingProfileInput } from '@/lib/types/pricing';
 
@@ -37,6 +44,10 @@ export function toBillingProfileDTO(row: DbBillingProfile): BillingProfileDTO {
     profileType: row.gstin ? 'business' : 'personal',
     stateCode: row.state_code,
     countryCode: row.country_code,
+    // Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): `row.region` is simply absent
+    // (undefined) on a database predating migration 138 -- select('*') doesn't error on a missing
+    // column the way an explicit column list would, so this never needs the schema latch below.
+    region: row.region ?? null,
     addressLine1: row.address_line_1,
     addressLine2: row.address_line_2,
     city: row.city,
@@ -56,6 +67,10 @@ export interface BillingCustomerSnapshot {
   stateCode: string;
   stateName: string | null;
   countryCode: string;
+  /** Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): billingCountryName(countryCode). */
+  countryName: string | null;
+  /** A foreign customer's state/province, e.g. a US state code. Always null for an Indian profile. */
+  region: string | null;
   addressLine1: string | null;
   addressLine2: string | null;
   city: string | null;
@@ -71,9 +86,15 @@ export interface BillingCustomerSnapshot {
  * Stored inside billing_payments.customer_snapshot_json (checkout writes it into
  * purchase_snapshot_json.customer first; the ledger's recordPayment then fills it in, once, via its
  * write-once guard -- see ledger.ts). `profileType` is derived the same way toBillingProfileDTO
- * derives it: 'business' iff a GSTIN is present. */
+ * derives it: 'business' iff a GSTIN is present.
+ *
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): stateName is the US state's name for a
+ * foreign profile (its GST place-of-supply state_code is the fixed '96', which names nothing). */
 export function buildCustomerSnapshot(profile: DbBillingProfile | null): BillingCustomerSnapshot | null {
   if (!profile) return null;
+
+  const region = profile.region ?? null;
+  const isForeign = isForeignBillingCountry(profile.country_code);
 
   return {
     profileType: profile.gstin ? 'business' : 'personal',
@@ -83,8 +104,10 @@ export function buildCustomerSnapshot(profile: DbBillingProfile | null): Billing
     billingEmail: profile.billing_email,
     phone: profile.phone,
     stateCode: profile.state_code,
-    stateName: indiaStateName(profile.state_code),
+    stateName: isForeign ? usStateName(region) : indiaStateName(profile.state_code),
     countryCode: profile.country_code,
+    countryName: billingCountryName(profile.country_code),
+    region,
     addressLine1: profile.address_line_1,
     addressLine2: profile.address_line_2,
     city: profile.city,
@@ -109,10 +132,19 @@ function isMissingBillingProfileSchemaError(error: { code?: string; message?: st
 
 let billingProfileSchemaUnavailable = false;
 
-/** Test-only escape hatch -- the latch above is otherwise permanent for the process, matching every
- * other missing-schema latch in this codebase (a hand-applied migration needs a restart). */
+/** Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): true once a save has proven
+ * billing_profiles.region doesn't exist (migration 138 absent). Separate from the latch above on
+ * purpose -- 42703/PGRST200/PGRST204 can't tell "the whole table is missing" from "one new column is
+ * missing" (GOTCHAS.md "classify by the query, not by the error"), and conflating the two would mark
+ * every Indian save unavailable on a database that has 125 but not yet 138. saveBillingProfile tells
+ * them apart by retrying without region and seeing which one actually fails. */
+let regionColumnUnavailable = false;
+
+/** Test-only escape hatch -- the latches above are otherwise permanent for the process, matching
+ * every other missing-schema latch in this codebase (a hand-applied migration needs a restart). */
 export function resetBillingProfileSchemaLatchForTests(): void {
   billingProfileSchemaUnavailable = false;
+  regionColumnUnavailable = false;
 }
 
 export type BillingProfileLookupResult =
@@ -158,7 +190,12 @@ export type SaveBillingProfileResult =
  * GSTIN, not taken from the client -- validateBillingProfile already guarantees a business GSTIN's
  * state code is current, so the client's stateCode is only a fallback that should never be reached.
  * Switching to personal (or never having been business) always writes company_name/gstin as null,
- * even if the client still echoed stale values back. */
+ * even if the client still echoed stale values back.
+ *
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): country_code and region now come from
+ * the (validated) input instead of the old hardcoded 'IN'. A foreign profile is never business
+ * (validateBillingProfile already refuses a GSTIN/company name outside India) and stores GST's fixed
+ * place-of-supply code '96' rather than a state. */
 export async function saveBillingProfile(
   supabase: AdminClient,
   userId: string,
@@ -169,19 +206,27 @@ export async function saveBillingProfile(
   const validationErrors = validateBillingProfile(input);
   if (validationErrors.length > 0) return { status: 'invalid', message: validationErrors[0].message };
 
-  const gstinTrimmed = input.gstin?.trim().toUpperCase() || null;
-  const isBusiness = resolveBillingProfileType(input) === 'business';
-  const normalizedPhone = normalizeIndianPhone(input.phone);
+  const countryCode = resolveBillingCountryCode(input.countryCode);
+  const isForeign = isForeignBillingCountry(countryCode);
 
-  const row = {
+  const gstinTrimmed = input.gstin?.trim().toUpperCase() || null;
+  const isBusiness = !isForeign && resolveBillingProfileType(input) === 'business';
+  const normalizedPhone = normalizeBillingPhone(input.phone, countryCode);
+  const region = isForeign ? input.region?.trim().toUpperCase() || null : null;
+
+  const baseRow = {
     user_id: userId,
     legal_name: input.legalName.trim(),
     billing_email: input.billingEmail?.trim() || null,
     phone: normalizedPhone,
     company_name: isBusiness ? input.companyName?.trim() || null : null,
     gstin: isBusiness ? gstinTrimmed : null,
-    state_code: isBusiness ? stateCodeFromGstin(gstinTrimmed) ?? input.stateCode : input.stateCode,
-    country_code: 'IN',
+    state_code: isForeign
+      ? FOREIGN_PLACE_OF_SUPPLY_CODE
+      : isBusiness
+        ? stateCodeFromGstin(gstinTrimmed) ?? input.stateCode
+        : input.stateCode,
+    country_code: countryCode,
     address_line_1: input.addressLine1?.trim() || null,
     address_line_2: input.addressLine2?.trim() || null,
     city: input.city?.trim() || null,
@@ -189,11 +234,22 @@ export async function saveBillingProfile(
     updated_at: new Date().toISOString(),
   };
 
-  const upsertResult = await supabase
-    .from('billing_profiles')
-    .upsert(row, { onConflict: 'user_id' })
-    .select('*')
-    .single();
+  const runUpsert = (includeRegion: boolean) =>
+    supabase
+      .from('billing_profiles')
+      .upsert(includeRegion ? { ...baseRow, region } : baseRow, { onConflict: 'user_id' })
+      .select('*')
+      .single();
+
+  let upsertResult = await runUpsert(!regionColumnUnavailable);
+
+  if (upsertResult.error && !regionColumnUnavailable && isMissingBillingProfileSchemaError(upsertResult.error)) {
+    // Could be the whole table (125 absent) or just the region column (138 absent) -- retry without
+    // region before concluding the whole table is unavailable, per the latch comment above.
+    const retryResult = await runUpsert(false);
+    if (!retryResult.error) regionColumnUnavailable = true;
+    upsertResult = retryResult;
+  }
 
   if (upsertResult.error) {
     if (isMissingBillingProfileSchemaError(upsertResult.error)) {

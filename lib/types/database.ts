@@ -819,6 +819,10 @@ export interface DbBillingProfile {
   gstin: string | null;
   state_code: string;
   country_code: string;
+  /** Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B, migration 138): a foreign customer's
+   * state/province. Null for an Indian profile, and absent from the row entirely on a database that
+   * hasn't applied 138 -- callers read it as `row.region ?? null`, never assume the key exists. */
+  region: string | null;
   address_line_1: string | null;
   address_line_2: string | null;
   city: string | null;

@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 
 import {
+  billingDetailsFormForCountryChange,
   billingDetailsFormFromProfile,
   buildBillingProfileInput,
   emptyBillingDetailsForm,
   isBusinessProfileType,
+  isUsBillingForm,
   resolveBusinessState,
 } from './billing-details-form.shared';
 import { LEGAL_GSTIN } from '@/lib/legal/business-config';
@@ -26,6 +28,7 @@ const BASE_PROFILE: BillingProfileDTO = {
   profileType: 'personal',
   stateCode: '27',
   countryCode: 'IN',
+  region: null,
   addressLine1: null,
   addressLine2: null,
   city: 'Pune',
@@ -77,11 +80,66 @@ describe('billingDetailsFormFromProfile', () => {
     expect(form.billingEmail).toBe('asha@example.com');
     expect(form.legalName).toBe('Asha Rao');
     expect(form.profileType).toBe('personal');
+    expect(form.countryCode).toBe('IN');
   });
 
   it('falls back to the account email when the saved profile has none', () => {
     const form = billingDetailsFormFromProfile({ ...BASE_PROFILE, billingEmail: null }, 'signed-in@example.com');
     expect(form.billingEmail).toBe('signed-in@example.com');
+  });
+
+  it('mirrors a saved US profile, including its region', () => {
+    const form = billingDetailsFormFromProfile(
+      { ...BASE_PROFILE, countryCode: 'US', stateCode: '96', region: 'CA' },
+      'signed-in@example.com'
+    );
+    expect(form.countryCode).toBe('US');
+    expect(form.region).toBe('CA');
+  });
+});
+
+// Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B)
+describe('isUsBillingForm', () => {
+  it('is true only for a foreign country -- US is the only one supported today', () => {
+    expect(isUsBillingForm('US')).toBe(true);
+    expect(isUsBillingForm('IN')).toBe(false);
+    expect(isUsBillingForm('FR')).toBe(false);
+  });
+});
+
+describe('billingDetailsFormForCountryChange', () => {
+  it('is a no-op when the country does not actually change', () => {
+    const form = { ...emptyBillingDetailsForm(), stateCode: '24' };
+    expect(billingDetailsFormForCountryChange(form, 'IN')).toBe(form);
+  });
+
+  it('clears stateCode/region, forces Personal and clears business fields when moving to a foreign country', () => {
+    const form = {
+      ...emptyBillingDetailsForm(),
+      stateCode: '24',
+      profileType: 'business' as const,
+      companyName: 'Aavriti Design Studio',
+      gstin: LEGAL_GSTIN,
+    };
+
+    const next = billingDetailsFormForCountryChange(form, 'US');
+
+    expect(next.countryCode).toBe('US');
+    expect(next.stateCode).toBe('');
+    expect(next.region).toBe('');
+    expect(next.profileType).toBe('personal');
+    expect(next.companyName).toBe('');
+    expect(next.gstin).toBe('');
+  });
+
+  it('clears region (and leaves Personal alone) when moving back to India', () => {
+    const form = { ...emptyBillingDetailsForm(), countryCode: 'US', region: 'CA' };
+
+    const next = billingDetailsFormForCountryChange(form, 'IN');
+
+    expect(next.countryCode).toBe('IN');
+    expect(next.region).toBe('');
+    expect(next.profileType).toBe('personal');
   });
 });
 
@@ -147,5 +205,35 @@ describe('buildBillingProfileInput', () => {
     expect(input.addressLine2).toBeNull();
     expect(input.city).toBeNull();
     expect(input.postalCode).toBeNull();
+  });
+
+  it('sends region (trimmed/upper-cased), forces Personal and nulls company/gstin for a US form -- even if profileType or stateCode still carried a stale Business value', () => {
+    const form = {
+      ...emptyBillingDetailsForm(),
+      countryCode: 'US',
+      profileType: 'business' as const,
+      legalName: 'Asha Rao',
+      billingEmail: 'asha@example.com',
+      phone: '4155550100',
+      stateCode: '24',
+      region: ' ca ',
+      companyName: 'Old Co Pvt Ltd',
+      gstin: LEGAL_GSTIN,
+      city: 'San Francisco',
+      postalCode: '94103',
+    };
+
+    const input = buildBillingProfileInput(form);
+    expect(input.countryCode).toBe('US');
+    expect(input.profileType).toBe('personal');
+    expect(input.companyName).toBeNull();
+    expect(input.gstin).toBeNull();
+    expect(input.region).toBe('CA');
+    expect(input.stateCode).toBe('24'); // ignored server-side for a foreign profile (Unit B)
+  });
+
+  it('sends region null for an Indian form', () => {
+    const input = buildBillingProfileInput({ ...emptyBillingDetailsForm(), region: 'CA' });
+    expect(input.region).toBeNull();
   });
 });

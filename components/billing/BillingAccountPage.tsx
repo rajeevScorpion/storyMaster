@@ -33,7 +33,7 @@ import { documentTypeLabel, subscriptionBanner } from '@/lib/billing/billing-acc
 import type { BillingPaymentOverview, GetMyBillingOverviewResult } from '@/lib/billing/billing-account.shared';
 import { buildPlanFeatures } from '@/lib/pricing/plan-copy.shared';
 import { formatCurrencyMinor } from '@/lib/billing/wallet-tax.shared';
-import { indiaStateName } from '@/lib/billing/india-states.shared';
+import { billingProfileAddressSummary } from '@/lib/billing/billing-profile.shared';
 import { COINS_PER_BEAT } from '@/lib/types/pricing';
 import type { BillingProfileDTO, PricingWalletPageData } from '@/lib/types/pricing';
 
@@ -507,12 +507,7 @@ export default function BillingAccountPage() {
                     {walletData.billingProfile.profileType === 'business' ? 'Business' : 'Personal'} ·{' '}
                     {walletData.billingProfile.legalName}
                   </p>
-                  <p className="mt-1 text-neutral-500">
-                    {indiaStateName(walletData.billingProfile.stateCode) ?? walletData.billingProfile.stateCode}
-                    {walletData.billingProfile.profileType === 'business' && walletData.billingProfile.gstin
-                      ? ` · ${walletData.billingProfile.gstin}`
-                      : ''}
-                  </p>
+                  <p className="mt-1 text-neutral-500">{billingProfileAddressSummary(walletData.billingProfile)}</p>
                 </div>
               ) : (
                 <p className="mt-3 text-sm text-neutral-400">You haven&apos;t added billing details yet.</p>

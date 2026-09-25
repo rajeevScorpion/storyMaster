@@ -22,15 +22,24 @@ vi.mock('@/lib/billing/billing-profile', async (importOriginal) => {
   };
 });
 
+// Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): getBillingCountryOptions's own
+// dependency, stubbed the same way lib/billing/international.test.ts stubs the flag read one layer
+// further down.
+vi.mock('@/lib/billing/international', () => ({
+  getInternationalCheckoutCountries: vi.fn(),
+}));
+
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { loadBillingProfile, saveBillingProfile } from '@/lib/billing/billing-profile';
-import { getMyBillingProfile, saveMyBillingProfile } from './billing-profile';
+import { getInternationalCheckoutCountries } from '@/lib/billing/international';
+import { getBillingCountryOptions, getMyBillingProfile, saveMyBillingProfile } from './billing-profile';
 
 const createClientMock = vi.mocked(createClient);
 const createAdminClientMock = vi.mocked(createAdminClient);
 const loadBillingProfileMock = vi.mocked(loadBillingProfile);
 const saveBillingProfileMock = vi.mocked(saveBillingProfile);
+const internationalCountriesMock = vi.mocked(getInternationalCheckoutCountries);
 
 function signedIn(userId = 'user-1') {
   createClientMock.mockResolvedValue({
@@ -98,6 +107,7 @@ describe('getMyBillingProfile', () => {
         profileType: 'personal',
         stateCode: '24',
         countryCode: 'IN',
+        region: null,
         addressLine1: null,
         addressLine2: null,
         city: null,
@@ -160,5 +170,26 @@ describe('saveMyBillingProfile', () => {
     const result = await saveMyBillingProfile({ legalName: 'Jane Doe', stateCode: '24' });
 
     expect(result).toEqual({ status: 'unavailable' });
+  });
+});
+
+describe('getBillingCountryOptions', () => {
+  it('is just India while the international-countries flag is off', async () => {
+    internationalCountriesMock.mockResolvedValueOnce([]);
+
+    await expect(getBillingCountryOptions()).resolves.toEqual(['IN']);
+  });
+
+  it('appends the flag-allowed countries after India', async () => {
+    internationalCountriesMock.mockResolvedValueOnce(['US']);
+
+    await expect(getBillingCountryOptions()).resolves.toEqual(['IN', 'US']);
+  });
+
+  it('needs no sign-in', async () => {
+    signedOut();
+    internationalCountriesMock.mockResolvedValueOnce([]);
+
+    await expect(getBillingCountryOptions()).resolves.toEqual(['IN']);
   });
 });

@@ -70,6 +70,21 @@ function validBusinessInput(overrides: Partial<BillingProfileInput> = {}): Billi
   });
 }
 
+// Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): a complete US profile.
+function validUsInput(overrides: Partial<BillingProfileInput> = {}): BillingProfileInput {
+  return {
+    countryCode: 'US',
+    legalName: 'Jane Doe',
+    billingEmail: 'jane@example.com',
+    phone: '4155550100',
+    stateCode: '',
+    region: 'CA',
+    city: 'San Francisco',
+    postalCode: '94103',
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   resetBillingProfileSchemaLatchForTests();
 });
@@ -213,6 +228,75 @@ describe('saveBillingProfile', () => {
     expect(supabase.builder.upsertedRow?.company_name).toBeNull();
     expect(supabase.builder.upsertedRow?.gstin).toBeNull();
   });
+
+  it('writes country_code IN and region null for an Indian profile', async () => {
+    const supabase = fakeSupabase({ data: { id: 'profile-1' }, error: null });
+
+    await saveBillingProfile(supabase, 'user-1', validInput());
+
+    expect(supabase.builder.upsertedRow?.country_code).toBe('IN');
+    expect(supabase.builder.upsertedRow?.region).toBeNull();
+  });
+
+  it('writes the foreign place-of-supply code, the region and a normalised US phone for a US profile', async () => {
+    const supabase = fakeSupabase({ data: { id: 'profile-1' }, error: null });
+
+    await saveBillingProfile(supabase, 'user-1', validUsInput({ phone: '(415) 555-0100' }));
+
+    expect(supabase.builder.upsertedRow?.country_code).toBe('US');
+    expect(supabase.builder.upsertedRow?.state_code).toBe('96');
+    expect(supabase.builder.upsertedRow?.region).toBe('CA');
+    expect(supabase.builder.upsertedRow?.phone).toBe('+14155550100');
+  });
+
+  it('ignores profileType for a US profile -- never writes company_name/gstin regardless', async () => {
+    // validateBillingProfile's US branch doesn't look at profileType at all (only IN has a
+    // Personal/Business split), so this pins down saveBillingProfile's own isForeign guard rather
+    // than relying on validation to have already stripped a stray 'business' value.
+    const supabase = fakeSupabase({ data: { id: 'profile-1' }, error: null });
+
+    await saveBillingProfile(supabase, 'user-1', validUsInput({ profileType: 'business' }));
+
+    expect(supabase.builder.upsertedRow?.company_name).toBeNull();
+    expect(supabase.builder.upsertedRow?.gstin).toBeNull();
+  });
+
+  it('saves an Indian profile without region when the column is missing (migration 138 absent), and does not mark the whole table unavailable', async () => {
+    // A builder that fails whichever upsert includes `region` with a column-shaped error, and
+    // succeeds otherwise -- modelling a database with 125 applied but not 138, regardless of which
+    // call (first attempt or retry) happens to carry the column.
+    const savedRow = { id: 'profile-1', user_id: 'user-1', state_code: '24' };
+    const builder = {
+      upsertedRows: [] as Record<string, unknown>[],
+      select() { return this; },
+      upsert(row: Record<string, unknown>) {
+        this.upsertedRows.push(row);
+        return this;
+      },
+      single() {
+        const lastRow = this.upsertedRows[this.upsertedRows.length - 1];
+        return Promise.resolve(
+          lastRow && 'region' in lastRow
+            ? { data: null, error: { code: '42703', message: 'column "region" of relation "billing_profiles" does not exist' } }
+            : { data: savedRow, error: null }
+        );
+      },
+    };
+    const supabase = { from: () => builder } as any;
+
+    const result = await saveBillingProfile(supabase, 'user-1', validInput());
+
+    expect(result).toEqual({ status: 'ok', profile: savedRow });
+    expect(builder.upsertedRows).toHaveLength(2);
+    expect(builder.upsertedRows[0]).toHaveProperty('region');
+    expect(builder.upsertedRows[1]).not.toHaveProperty('region');
+
+    // The latch is per-process: a later save in the same run skips straight to the no-region upsert.
+    const secondResult = await saveBillingProfile(supabase, 'user-1', validInput());
+    expect(secondResult).toEqual({ status: 'ok', profile: savedRow });
+    expect(builder.upsertedRows).toHaveLength(3);
+    expect(builder.upsertedRows[2]).not.toHaveProperty('region');
+  });
 });
 
 // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit A): the frozen snapshot recorded against
@@ -228,6 +312,7 @@ function dbProfileRow(overrides: Partial<DbBillingProfile> = {}): DbBillingProfi
     gstin: null,
     state_code: '24',
     country_code: 'IN',
+    region: null,
     address_line_1: null,
     address_line_2: null,
     city: 'Gandhinagar',
@@ -271,5 +356,26 @@ describe('buildCustomerSnapshot', () => {
     const snapshot = buildCustomerSnapshot(dbProfileRow({ state_code: '99' }));
 
     expect(snapshot?.stateName).toBeNull();
+  });
+
+  it('names the US state and country for a foreign profile, ignoring the GST place-of-supply code', () => {
+    const snapshot = buildCustomerSnapshot(
+      dbProfileRow({ country_code: 'US', state_code: '96', region: 'CA' })
+    );
+
+    expect(snapshot).toMatchObject({
+      countryCode: 'US',
+      countryName: 'United States',
+      region: 'CA',
+      stateCode: '96',
+      stateName: 'California',
+    });
+  });
+
+  it('defaults region to null on a row from before migration 138', () => {
+    const { region, ...rowWithoutRegion } = dbProfileRow();
+    const snapshot = buildCustomerSnapshot(rowWithoutRegion as DbBillingProfile);
+
+    expect(snapshot?.region).toBeNull();
   });
 });
