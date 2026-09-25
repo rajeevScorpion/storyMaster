@@ -76,6 +76,19 @@ export const OPERATIONAL_FLAG_DEFINITIONS: readonly OperationalFlagDefinition[] 
     group: 'billing',
   },
   {
+    key: 'billing_checkout_allowlist',
+    label: 'Checkout allowlist (named-account rollout)',
+    description: 'Restricts who can start a checkout to a fixed list of account ids, ahead of opening it to everyone.',
+    enabledHelp:
+      'On means restricted, not available — the opposite of every other switch on this page. Only the account ids in this flag\'s value column can start a checkout; everyone else sees "Payments aren\'t open yet" and the wallet\'s coming-soon state. There is no list editor yet: add or remove an id from the SQL editor — update public.feature_flags set value = \'<comma-separated user ids>\' where flag_key = \'billing_checkout_allowlist\'. The global kill switch (pricing_checkout_enabled) still governs everyone regardless of this list.',
+    disabledHelp:
+      'Off means unrestricted — any signed-in account can start a checkout, same as before this flag existed. The id list is not read at all while this is off.',
+    beforeEnabling:
+      'Set the id list in SQL before turning this on — an empty value locks out every signed-in account, including the owner\'s own. A missing row behaves the same as off, so this switch is meaningless until migration 137 has run here.',
+    defaultEnabled: false,
+    group: 'billing',
+  },
+  {
     key: 'billing_document_issuing_enabled',
     label: 'Issue tax documents',
     description: 'Allocates a gapless number and writes a receipt or tax invoice for each payment.',

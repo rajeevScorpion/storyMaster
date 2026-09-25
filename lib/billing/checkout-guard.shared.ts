@@ -8,7 +8,7 @@
  * caller in the repo, so a route-only gate would have been bypassable through it).
  */
 
-export type CheckoutRefusalCode = 'kids_profile' | 'not_attested';
+export type CheckoutRefusalCode = 'kids_profile' | 'not_attested' | 'not_in_rollout';
 
 export interface CheckoutRefusal {
   code: CheckoutRefusalCode;
@@ -41,6 +41,26 @@ export function assertCheckoutAllowed(input: CheckoutAllowedInput): CheckoutRefu
  * raised, or left as a plain `Error` and shown only as the route's generic sentence -- never its own
  * `.message`.
  */
+/**
+ * Payments Phase 7 (docs/payments/phase-7-plan.md §8, Unit B2, decision R3): turns the
+ * `billing_checkout_allowlist` flag's `value` column into a normalized list of user ids for
+ * membership checks. The column is a plain comma-separated list, but tolerates whitespace too (a
+ * newline-separated paste from a spreadsheet, stray spaces after a comma); ids are lowercased since
+ * Postgres uuids compare case-insensitively by convention and this is a plain string `.includes()`,
+ * not a database comparison. A blank, missing, or all-separator value parses to `[]` -- exactly what
+ * migration 137 seeds (`value = ''`), which must mean "no one listed", not "everyone".
+ */
+export function parseCheckoutAllowlist(value: string | null | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(/[\s,]+/)
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0);
+}
+
 export class CheckoutRefusalError extends Error {
   readonly code: string;
   readonly httpStatus: number;

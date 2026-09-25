@@ -76,6 +76,7 @@ describe('operational flag registry', () => {
     expect(OPERATIONAL_FLAG_DEFINITIONS.map((flag) => flag.key).sort()).toEqual([
       'account_deletion_enabled',
       'billing_admin_actions_enabled',
+      'billing_checkout_allowlist',
       'billing_document_issuing_enabled',
       'billing_emails_enabled',
       'billing_reconcile_enabled',

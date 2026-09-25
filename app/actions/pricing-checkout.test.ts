@@ -4,6 +4,7 @@ vi.mock('server-only', () => ({}));
 
 vi.mock('@/lib/ai/model-config', () => ({
   getFeatureFlag: vi.fn(),
+  getFeatureFlagValue: vi.fn(),
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -42,7 +43,7 @@ vi.mock('@/lib/billing/billing-profile', async (importOriginal) => {
   };
 });
 
-import { getFeatureFlag } from '@/lib/ai/model-config';
+import { getFeatureFlag, getFeatureFlagValue } from '@/lib/ai/model-config';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
@@ -59,6 +60,7 @@ import { prepareRazorpayCheckoutInternal } from './pricing-checkout';
 import type { DbPricingPlan, DbPricingPlanVersion } from '@/lib/types/database';
 
 const getFeatureFlagMock = vi.mocked(getFeatureFlag);
+const getFeatureFlagValueMock = vi.mocked(getFeatureFlagValue);
 const createClientMock = vi.mocked(createClient);
 const createAdminClientMock = vi.mocked(createAdminClient);
 const createRazorpayPlanMock = vi.mocked(createRazorpayPlan);
@@ -364,6 +366,74 @@ describe('prepareRazorpayCheckoutInternal — kids and attestation gate (owner d
         { adultAttested: true, audienceMode: 'all' }
       )
     ).resolves.toMatchObject({ kind: 'topup', internalOrderId: 'order-1' });
+  });
+});
+
+// Payments Phase 7 (docs/payments/phase-7-plan.md §8, Unit B2, decision R3): the named-account
+// rollout, checked right after auth resolves. isCheckoutOpenForUser's own unit tests
+// (checkout-allowlist.test.ts) pin the parsing/matching logic in isolation; these prove the refusal
+// is wired into prepareRazorpayCheckoutInternal itself, after auth and before any catalogue read.
+describe('prepareRazorpayCheckoutInternal — named-account rollout (R3)', () => {
+  it('proceeds when the allowlist flag is off (today\'s behaviour)', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true); // pricing_checkout_enabled
+    getFeatureFlagMock.mockResolvedValueOnce(false); // billing_checkout_allowlist: off
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_topup_packs', 'select', { data: fakeTopupPackRow(), error: null });
+    createRazorpayOrderMock.mockResolvedValueOnce({ id: 'order_rzp_1', amount: 500, currency: 'INR', receipt: null, status: 'created', notes: {} });
+    enqueue('billing_orders', 'insert', { data: { id: 'order-1' }, error: null });
+
+    await expect(
+      prepareRazorpayCheckoutInternal({ kind: 'topup', topupPackId: 'pack-1' }, { adultAttested: true, audienceMode: 'all' })
+    ).resolves.toMatchObject({ kind: 'topup', internalOrderId: 'order-1' });
+    expect(getFeatureFlagValueMock).not.toHaveBeenCalled();
+  });
+
+  it('proceeds when the allowlist flag row is missing entirely (getFeatureFlag falls back to false, same as off)', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true); // pricing_checkout_enabled
+    getFeatureFlagMock.mockResolvedValueOnce(false); // billing_checkout_allowlist: no row -> getFeatureFlag's own fallback
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_topup_packs', 'select', { data: fakeTopupPackRow(), error: null });
+    createRazorpayOrderMock.mockResolvedValueOnce({ id: 'order_rzp_1', amount: 500, currency: 'INR', receipt: null, status: 'created', notes: {} });
+    enqueue('billing_orders', 'insert', { data: { id: 'order-1' }, error: null });
+
+    await expect(
+      prepareRazorpayCheckoutInternal({ kind: 'topup', topupPackId: 'pack-1' }, { adultAttested: true, audienceMode: 'all' })
+    ).resolves.toMatchObject({ kind: 'topup', internalOrderId: 'order-1' });
+  });
+
+  it('proceeds when the flag is on and the signed-in user is listed', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true); // pricing_checkout_enabled
+    getFeatureFlagMock.mockResolvedValueOnce(true); // billing_checkout_allowlist: on
+    getFeatureFlagValueMock.mockResolvedValueOnce('user-1,someone-else');
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_topup_packs', 'select', { data: fakeTopupPackRow(), error: null });
+    createRazorpayOrderMock.mockResolvedValueOnce({ id: 'order_rzp_1', amount: 500, currency: 'INR', receipt: null, status: 'created', notes: {} });
+    enqueue('billing_orders', 'insert', { data: { id: 'order-1' }, error: null });
+
+    await expect(
+      prepareRazorpayCheckoutInternal({ kind: 'topup', topupPackId: 'pack-1' }, { adultAttested: true, audienceMode: 'all' })
+    ).resolves.toMatchObject({ kind: 'topup', internalOrderId: 'order-1' });
+  });
+
+  it('refuses with not_in_rollout when the flag is on and the signed-in user is not listed', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true); // pricing_checkout_enabled
+    getFeatureFlagMock.mockResolvedValueOnce(true); // billing_checkout_allowlist: on
+    getFeatureFlagValueMock.mockResolvedValueOnce('someone-else');
+
+    const error = await prepareRazorpayCheckoutInternal(
+      { kind: 'topup', topupPackId: 'pack-1' },
+      { adultAttested: true, audienceMode: 'all' }
+    ).catch((err) => err);
+
+    expect(error).toMatchObject({
+      message: "Payments aren't open yet. We'll let you know when they are.",
+      code: 'not_in_rollout',
+      httpStatus: 403,
+    });
+    expect(createAdminClientMock).not.toHaveBeenCalled();
   });
 });
 
@@ -907,6 +977,7 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax'
 
     it('is true (Razorpay sends its own emails) when billing_emails_enabled is off', async () => {
       getFeatureFlagMock.mockResolvedValueOnce(true); // pricing_checkout_enabled
+      getFeatureFlagMock.mockResolvedValueOnce(false); // billing_checkout_allowlist (not restricted)
       getFeatureFlagMock.mockResolvedValueOnce(false); // billing_emails_enabled
       const { supabase, enqueue, enqueueRpc } = createFakeSupabase();
       createAdminClientMock.mockReturnValue(supabase);
@@ -922,6 +993,7 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax'
 
     it('is false (Kissago sends its own emails) when billing_emails_enabled is on', async () => {
       getFeatureFlagMock.mockResolvedValueOnce(true); // pricing_checkout_enabled
+      getFeatureFlagMock.mockResolvedValueOnce(false); // billing_checkout_allowlist (not restricted)
       getFeatureFlagMock.mockResolvedValueOnce(true); // billing_emails_enabled
       const { supabase, enqueue, enqueueRpc } = createFakeSupabase();
       createAdminClientMock.mockReturnValue(supabase);

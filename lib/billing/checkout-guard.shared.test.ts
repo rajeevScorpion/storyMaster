@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { assertCheckoutAllowed, CheckoutRefusalError } from './checkout-guard.shared';
+import { assertCheckoutAllowed, CheckoutRefusalError, parseCheckoutAllowlist } from './checkout-guard.shared';
 
 /**
  * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1): owner decision P6's kids/attestation
@@ -28,6 +28,41 @@ describe('assertCheckoutAllowed', () => {
   it('reports kids_profile, not not_attested, for an unattested kids profile', () => {
     const refusal = assertCheckoutAllowed({ audienceMode: 'kids', adultAttested: false });
     expect(refusal?.code).toBe('kids_profile');
+  });
+});
+
+// Payments Phase 7 (docs/payments/phase-7-plan.md §8, Unit B2, decision R3): the pure parser behind
+// the named-account rollout -- isCheckoutOpenForUser (lib/billing/checkout-allowlist.ts) trusts this
+// for every membership check, so its edge cases (blank, mixed separators, casing) are pinned here.
+describe('parseCheckoutAllowlist', () => {
+  it('splits a comma-separated value and lowercases each id', () => {
+    expect(parseCheckoutAllowlist('User-1,User-2')).toEqual(['user-1', 'user-2']);
+  });
+
+  it('also splits on whitespace, and trims stray spaces around commas', () => {
+    expect(parseCheckoutAllowlist('user-1, user-2 ,  user-3\nuser-4')).toEqual([
+      'user-1',
+      'user-2',
+      'user-3',
+      'user-4',
+    ]);
+  });
+
+  it('drops empty entries from doubled separators', () => {
+    expect(parseCheckoutAllowlist('user-1,,  ,user-2')).toEqual(['user-1', 'user-2']);
+  });
+
+  it('parses migration 137\'s seeded empty value to an empty list', () => {
+    expect(parseCheckoutAllowlist('')).toEqual([]);
+  });
+
+  it('parses null and undefined to an empty list', () => {
+    expect(parseCheckoutAllowlist(null)).toEqual([]);
+    expect(parseCheckoutAllowlist(undefined)).toEqual([]);
+  });
+
+  it('parses a value that is only whitespace/commas to an empty list', () => {
+    expect(parseCheckoutAllowlist('  ,  ,\n')).toEqual([]);
   });
 });
 

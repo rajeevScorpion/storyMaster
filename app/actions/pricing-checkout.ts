@@ -17,6 +17,7 @@ import { computeTax, type TaxBreakdown } from '@/lib/billing/tax.shared';
 import { buildCustomerSnapshot, loadBillingProfile, toBillingProfileDTO } from '@/lib/billing/billing-profile';
 import { isBillingProfileComplete } from '@/lib/billing/billing-profile.shared';
 import { assertCheckoutAllowed, CheckoutRefusalError } from '@/lib/billing/checkout-guard.shared';
+import { isCheckoutOpenForUser } from '@/lib/billing/checkout-allowlist';
 import type { CheckoutTimer } from '@/lib/billing/checkout-timing.shared';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
@@ -195,6 +196,14 @@ export async function prepareRazorpayCheckoutInternal(
   const timer = options.timer;
   const auth = await getAuthenticatedUser();
   timer?.mark('auth');
+
+  // Payments Phase 7 (docs/payments/phase-7-plan.md §8, Unit B2, decision R3): the named-account
+  // rollout, right after auth resolves (it needs a userId) and before any catalogue or provider
+  // work. A missing/off flag row means no restriction -- see isCheckoutOpenForUser's own comment.
+  if (!(await isCheckoutOpenForUser(auth.userId))) {
+    throw new CheckoutRefusalError("Payments aren't open yet. We'll let you know when they are.", 'not_in_rollout', 403);
+  }
+
   const supabase = createAdminClient();
 
   if (input.kind === 'subscription') {
