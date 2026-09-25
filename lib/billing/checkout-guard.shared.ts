@@ -83,6 +83,12 @@ export function assertMarketMatchesCountry(input: AssertMarketMatchesCountryInpu
     return null;
   }
 
+  if (profileCountryCode === INDIA_COUNTRY_CODE) {
+    return {
+      code: 'market_country_mismatch',
+      message: 'Your billing address is in India, so please choose the India price.',
+    };
+  }
   if (!input.internationalCountries.includes(profileCountryCode)) {
     return { code: 'country_not_supported', message: "Payments from your country aren't open yet." };
   }

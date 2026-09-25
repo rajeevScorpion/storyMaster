@@ -122,7 +122,10 @@ describe('assertMarketMatchesCountry', () => {
 
   it('refuses a ROW item for an IN profile (no buying the zero-rated price from India)', () => {
     const refusal = assertMarketMatchesCountry({ itemMarketKey: 'ROW', profileCountryCode: 'IN', internationalCountries: ['US'] });
-    expect(refusal?.code).toBe('country_not_supported');
+    expect(refusal).toEqual({
+      code: 'market_country_mismatch',
+      message: 'Your billing address is in India, so please choose the India price.',
+    });
   });
 
   it('refuses a ROW item when the countries flag has not opened that country', () => {
@@ -135,7 +138,7 @@ describe('assertMarketMatchesCountry', () => {
 
   it('treats a null profile country as IN, refusing a ROW item', () => {
     const refusal = assertMarketMatchesCountry({ itemMarketKey: 'ROW', profileCountryCode: null, internationalCountries: ['US'] });
-    expect(refusal?.code).toBe('country_not_supported');
+    expect(refusal?.code).toBe('market_country_mismatch');
   });
 });
 

@@ -1110,7 +1110,7 @@ describe('prepareRazorpayCheckoutInternal — provider and country guard (Paymen
       { adultAttested: true, audienceMode: 'all' }
     ).catch((err) => err);
 
-    expect(error).toMatchObject({ code: 'country_not_supported' });
+    expect(error).toMatchObject({ code: 'market_country_mismatch' });
     expect(createRazorpayOrderMock).not.toHaveBeenCalled();
   });
 
