@@ -75,6 +75,24 @@ export function resolveRefundCapPerAccount(rawFlagValue: string | null | undefin
   return DEFAULT_REFUND_CAP_PER_ACCOUNT;
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * Decision R1 (docs/payments/phase-7-plan.md §1, §8 B1): the 7-day refund window is warn-and-
+ * override, not a hard refusal -- past 7 days from capture, the admin dialog must show the warning
+ * and require a ticked confirmation, and the server refuses without it (see refundBillingPayment).
+ * A null or unparsable capturedAt counts as outside the window: with no known capture time there is
+ * nothing to prove the payment is still inside one, so the confirmation is required rather than
+ * assumed. Exactly `days` days out is still inside the window -- only strictly past it is outside,
+ * matching the refund policy's "within 7 days" wording.
+ */
+export function isOutsideRefundWindow(capturedAt: string | null, now: Date, days = 7): boolean {
+  if (!capturedAt) return true;
+  const capturedMs = new Date(capturedAt).getTime();
+  if (!Number.isFinite(capturedMs)) return true;
+  return now.getTime() - capturedMs > days * MS_PER_DAY;
+}
+
 export type PurchaseGrantSourceType = 'topup' | 'subscription';
 
 export interface PurchaseGrantSourceRef {

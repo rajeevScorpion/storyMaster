@@ -221,7 +221,12 @@ describe('admin billing panel: raw row mappers', () => {
       captured_at: '2026-01-01T00:00:00.000Z',
       created_at: '2026-01-01T00:00:00.000Z',
     });
-    expect(payment).toMatchObject({ netMinor: 16864, taxMinor: 3036, grossMinor: 19900 });
+    expect(payment).toMatchObject({
+      netMinor: 16864,
+      taxMinor: 3036,
+      grossMinor: 19900,
+      capturedAt: '2026-01-01T00:00:00.000Z',
+    });
   });
 
   it('flags a refund with initiated_by "dispute" as a dispute', () => {

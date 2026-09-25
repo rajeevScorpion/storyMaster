@@ -39,6 +39,7 @@ import { cancelRazorpaySubscription, refundRazorpayPayment } from '@/lib/billing
 import { recordRefund } from '@/lib/billing/ledger';
 import {
   evaluateRefundClawbackEligibility,
+  isOutsideRefundWindow,
   isRefundCapReached,
   resolvePurchaseGrantSourceRef,
   resolveRefundAttemptOutcome,
@@ -150,6 +151,9 @@ export async function refundBillingPayment(input: {
   paymentId: string;
   reason: string;
   requestKey: string;
+  /** Decision R1: past the 7-day refund window, the admin dialog must show the warning and this
+   * must be explicitly true (a ticked checkbox), or the refund is refused below. */
+  confirmOutsideWindow?: boolean;
 }): Promise<RefundBillingPaymentResult> {
   const { user: actor } = await verifyAdmin();
   await ensureBillingAdminActionsEnabled();
@@ -176,7 +180,7 @@ export async function refundBillingPayment(input: {
   const paymentResult = await admin
     .from('billing_payments')
     .select(
-      'id, user_id, provider_payment_id, provider_mode, status, gross_minor, currency_code, kind, billing_order_id, provider_subscription_id, cycle_start, cycle_end, plan_version_id, customer_snapshot_json'
+      'id, user_id, provider_payment_id, provider_mode, status, gross_minor, currency_code, kind, billing_order_id, provider_subscription_id, cycle_start, cycle_end, plan_version_id, customer_snapshot_json, captured_at'
     )
     .eq('id', paymentId)
     .maybeSingle();
@@ -190,6 +194,14 @@ export async function refundBillingPayment(input: {
     throw new Error(
       'This payment has no live account attached (the account was deleted), so there is no wallet to claw back from. Refusing rather than refunding blind.'
     );
+  }
+
+  // Decision R1 (docs/payments/phase-7-plan.md §1, §8 B1): warn-and-override, not a hard refusal --
+  // past 7 days from capture, the admin must explicitly confirm. Checked here, before any grant
+  // lookup or mutation, using only the payment row already in hand.
+  const outsideWindow = isOutsideRefundWindow(payment.captured_at, new Date());
+  if (outsideWindow && !input.confirmOutsideWindow) {
+    throw new Error('This payment is outside the 7-day refund window. Confirm to refund anyway.');
   }
 
   // 2. Resolve and load the purchase's own grant (migration 124's uq_beat_grants_purchase_source).
@@ -279,6 +291,7 @@ export async function refundBillingPayment(input: {
         currencyCode: payment.currency_code,
         grantId: grant?.id ?? null,
         usedFraction: eligibility.usedFraction,
+        outsideWindow,
       },
       after_json: { outcome: 'attempting' },
       metadata_json: { grantId: grant?.id ?? null },

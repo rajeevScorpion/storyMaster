@@ -149,9 +149,15 @@ function fakePayment(overrides: Record<string, unknown> = {}) {
     cycle_start: null,
     cycle_end: null,
     plan_version_id: null,
+    // Inside the 7-day refund window by default -- decision R1's tests below override this to move
+    // a payment outside it. Every pre-existing test in this file relies on this default so it never
+    // has to pass confirmOutsideWindow.
+    captured_at: new Date().toISOString(),
     ...overrides,
   };
 }
+
+const OUTSIDE_WINDOW_CAPTURED_AT = '2020-01-01T00:00:00.000Z';
 
 const PAYMENT_ID = '11111111-1111-4111-8111-111111111111';
 const SUBSCRIPTION_ID = '22222222-2222-4222-8222-222222222222';
@@ -196,6 +202,78 @@ describe('refundBillingPayment', () => {
       refundBillingPayment({ paymentId: PAYMENT_ID, reason: REASON, requestKey: REQUEST_KEY })
     ).rejects.toThrow(/turned off/);
     expect(fake.calls).toHaveLength(0);
+  });
+
+  describe('decision R1 -- the 7-day refund window', () => {
+    it('refuses outside the window without confirmOutsideWindow, before any audit row or mutation', async () => {
+      const payment = fakePayment({ captured_at: OUTSIDE_WINDOW_CAPTURED_AT });
+      const fake = withStandardSetup(payment);
+      createAdminClientMock.mockReturnValue(fake.supabase);
+
+      await expect(
+        refundBillingPayment({ paymentId: PAYMENT_ID, reason: REASON, requestKey: REQUEST_KEY })
+      ).rejects.toThrow(/outside the 7-day refund window/);
+
+      expect(fake.calls.some((c) => c.table === 'admin_user_audit_events' && c.op === 'insert')).toBe(false);
+      expect(fake.rpc).not.toHaveBeenCalled();
+      expect(refundRazorpayPaymentMock).not.toHaveBeenCalled();
+    });
+
+    it('proceeds outside the window once confirmOutsideWindow is true, recording outsideWindow: true', async () => {
+      const payment = fakePayment({ captured_at: OUTSIDE_WINDOW_CAPTURED_AT });
+      const fake = withStandardSetup(payment);
+      fake.enqueue('beat_grants', 'select', { data: { id: 'grant-20', beats_total: 100, beats_remaining: 100 }, error: null });
+      queueThroughClawback(fake, { hasGrant: true });
+      fake.enqueue('admin_user_audit_events', 'update', { data: null, error: null });
+      createAdminClientMock.mockReturnValue(fake.supabase);
+      refundRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'rfnd_20', payment_id: 'pay_1', amount: 1180, currency: 'INR', status: 'processed',
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-20' });
+
+      const result = await refundBillingPayment({
+        paymentId: PAYMENT_ID,
+        reason: REASON,
+        requestKey: REQUEST_KEY,
+        confirmOutsideWindow: true,
+      });
+
+      expect(result.providerRefundId).toBe('rfnd_20');
+      const auditInsert = fake.calls.find((c) => c.table === 'admin_user_audit_events' && c.op === 'insert');
+      expect((auditInsert?.payload as Record<string, unknown> | undefined)?.before_json).toMatchObject({
+        outsideWindow: true,
+      });
+    });
+
+    it('records outsideWindow: false for a payment still inside the window', async () => {
+      const payment = fakePayment(); // default captured_at is "now"
+      const fake = withStandardSetup(payment);
+      fake.enqueue('beat_grants', 'select', { data: { id: 'grant-21', beats_total: 100, beats_remaining: 100 }, error: null });
+      queueThroughClawback(fake, { hasGrant: true });
+      fake.enqueue('admin_user_audit_events', 'update', { data: null, error: null });
+      createAdminClientMock.mockReturnValue(fake.supabase);
+      refundRazorpayPaymentMock.mockResolvedValueOnce({
+        id: 'rfnd_21', payment_id: 'pay_1', amount: 1180, currency: 'INR', status: 'processed',
+      });
+      recordRefundMock.mockResolvedValueOnce({ state: 'inserted', id: 'refund-21' });
+
+      await refundBillingPayment({ paymentId: PAYMENT_ID, reason: REASON, requestKey: REQUEST_KEY });
+
+      const auditInsert = fake.calls.find((c) => c.table === 'admin_user_audit_events' && c.op === 'insert');
+      expect((auditInsert?.payload as Record<string, unknown> | undefined)?.before_json).toMatchObject({
+        outsideWindow: false,
+      });
+    });
+
+    it('treats a null captured_at as outside the window', async () => {
+      const payment = fakePayment({ captured_at: null });
+      const fake = withStandardSetup(payment);
+      createAdminClientMock.mockReturnValue(fake.supabase);
+
+      await expect(
+        refundBillingPayment({ paymentId: PAYMENT_ID, reason: REASON, requestKey: REQUEST_KEY })
+      ).rejects.toThrow(/outside the 7-day refund window/);
+    });
   });
 
   describe('decision 16 -- zero-coin subscription plans', () => {

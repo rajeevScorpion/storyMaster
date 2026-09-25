@@ -54,6 +54,7 @@ import {
 } from '@/app/actions/admin-billing-jobs';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { isCurrentCycleSubscriptionPayment } from '@/lib/billing/subscription-refund-end.shared';
+import { isOutsideRefundWindow } from '@/lib/billing/refund-eligibility.shared';
 import RowActionsMenu, { type RowAction } from '@/components/ui/RowActionsMenu';
 import { formatCurrencyMinor } from '@/lib/billing/wallet-tax.shared';
 import {
@@ -145,6 +146,9 @@ export default function AdminUserDetail({
   const [billingReason, setBillingReason] = useState('');
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingDialogError, setBillingDialogError] = useState<string | null>(null);
+  // Decision R1 (docs/payments/phase-7-plan.md §1, §8 B1): ticked explicitly for a refund outside
+  // the 7-day window, and reset on every dialog open/close so it never survives into a later action.
+  const [refundOutsideWindowConfirmed, setRefundOutsideWindowConfirmed] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -162,6 +166,7 @@ export default function AdminUserDetail({
     setBillingRequestKey(`manual:${crypto.randomUUID()}`);
     setBillingReason('');
     setBillingDialogError(null);
+    setRefundOutsideWindowConfirmed(false);
   }
 
   function closeBillingDialog() {
@@ -170,6 +175,7 @@ export default function AdminUserDetail({
     setBillingRequestKey('');
     setBillingReason('');
     setBillingDialogError(null);
+    setRefundOutsideWindowConfirmed(false);
   }
 
   async function executeBillingDialog() {
@@ -185,6 +191,7 @@ export default function AdminUserDetail({
             paymentId: payment.id,
             reason: billingReason,
             requestKey: billingRequestKey,
+            confirmOutsideWindow: refundOutsideWindowConfirmed,
           }));
           const amount = formatMoneyMinorForConfirmation(payment.currencyCode, result.refundedAmountMinor);
           // Decision 15: a full refund of the current cycle ends the subscription -- separate from
@@ -350,11 +357,15 @@ export default function AdminUserDetail({
         { kind: payment.kind, billingOrderId: payment.billingOrderId },
         data.walletActivity
       );
+      // Decision R1: past 7 days from capture, the dialog must show the warning and require an
+      // explicit tick before Confirm is enabled -- see the ConfirmDialog usage below.
+      const outsideRefundWindow = isOutsideRefundWindow(payment.capturedAt, new Date());
       return {
         title: 'Refund payment',
         tone: 'danger' as const,
         confirmLabel: 'Refund',
         requiresReason: true,
+        outsideRefundWindow,
         lines: [
           `Refunding ${formatMoneyMinorForConfirmation(payment.currencyCode, payment.grossMinor)} in full -- this action only issues full refunds.`,
           grantMatch
@@ -374,6 +385,7 @@ export default function AdminUserDetail({
         tone: 'danger' as const,
         confirmLabel: 'Cancel at cycle end',
         requiresReason: true,
+        outsideRefundWindow: false,
         lines: ['Renewal stops; the user keeps access until the end of the current billing period.'],
       };
     }
@@ -383,6 +395,7 @@ export default function AdminUserDetail({
         tone: 'default' as const,
         confirmLabel: 'Re-sync',
         requiresReason: false,
+        outsideRefundWindow: false,
         lines: ["Re-runs the same idempotent reconcile the daily cron uses for this subscription."],
       };
     }
@@ -392,6 +405,7 @@ export default function AdminUserDetail({
         tone: 'default' as const,
         confirmLabel: 'Re-sync',
         requiresReason: false,
+        outsideRefundWindow: false,
         lines: ['Re-runs the same idempotent reconcile the daily cron uses for this order.'],
       };
     }
@@ -401,6 +415,7 @@ export default function AdminUserDetail({
         tone: 'default' as const,
         confirmLabel: 'Reprocess',
         requiresReason: false,
+        outsideRefundWindow: false,
         lines: [
           'Re-runs this webhook event through the same handler live traffic uses.',
           'Safe to repeat: a payment, grant or refund already recorded is not recorded again. A full refund of a current-cycle subscription payment ends that subscription.',
@@ -413,6 +428,7 @@ export default function AdminUserDetail({
         tone: 'default' as const,
         confirmLabel: 'Retry',
         requiresReason: false,
+        outsideRefundWindow: false,
         lines: [
           `Resets this "${describeBillingJobKind(billingDialog.job.kind)}" job to pending and kicks the worker to run it again now.`,
         ],
@@ -421,6 +437,7 @@ export default function AdminUserDetail({
     return {
       title: 'Resend document email',
       tone: 'default' as const,
+      outsideRefundWindow: false,
       confirmLabel: 'Resend',
       requiresReason: false,
       lines: ['Queues a fresh email for this document, with the PDF attached again.'],
@@ -1162,15 +1179,29 @@ export default function AdminUserDetail({
         confirmLabel={billingDialogMeta?.confirmLabel ?? 'Confirm'}
         busy={billingBusy}
         confirmDisabled={
-          billingDialogMeta?.requiresReason
+          (billingDialogMeta?.requiresReason
             ? billingReason.trim().length < 3 || billingReason.trim().length > 500
-            : false
+            : false) || Boolean(billingDialogMeta?.outsideRefundWindow && !refundOutsideWindowConfirmed)
         }
         onCancel={closeBillingDialog}
         onConfirm={executeBillingDialog}
         message={
           <div className="space-y-3">
             {billingDialogMeta?.lines.map((line) => <p key={line}>{line}</p>)}
+            {billingDialogMeta?.outsideRefundWindow && (
+              <div className="space-y-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+                <p>This payment is outside the 7-day refund window. Confirm to refund anyway.</p>
+                <label className="flex cursor-pointer items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={refundOutsideWindowConfirmed}
+                    onChange={(event) => setRefundOutsideWindowConfirmed(event.target.checked)}
+                    className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-amber-500"
+                  />
+                  <span>I understand -- refund anyway.</span>
+                </label>
+              </div>
+            )}
             {billingDialogMeta?.requiresReason && (
               <label className="block">
                 <span className="mb-1.5 block text-xs uppercase tracking-[0.12em] text-neutral-500">Reason</span>

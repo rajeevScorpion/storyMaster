@@ -3,6 +3,7 @@ import {
   DEFAULT_REFUND_CAP_PER_ACCOUNT,
   REFUND_CLAWBACK_MAX_USED_FRACTION,
   evaluateRefundClawbackEligibility,
+  isOutsideRefundWindow,
   isRefundCapReached,
   resolvePurchaseGrantSourceRef,
   resolveRefundAttemptOutcome,
@@ -151,6 +152,41 @@ describe('resolvePurchaseGrantSourceRef', () => {
         cycleStart: null,
       })
     ).toBeNull();
+  });
+});
+
+describe('isOutsideRefundWindow', () => {
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+  const CAPTURED_AT = '2026-09-01T00:00:00.000Z';
+  const CAPTURED_MS = new Date(CAPTURED_AT).getTime();
+
+  it('is not outside well within the window', () => {
+    const now = new Date(CAPTURED_MS + MS_PER_DAY);
+    expect(isOutsideRefundWindow(CAPTURED_AT, now)).toBe(false);
+  });
+
+  it('is not outside exactly at the 7-day boundary', () => {
+    const now = new Date(CAPTURED_MS + 7 * MS_PER_DAY);
+    expect(isOutsideRefundWindow(CAPTURED_AT, now)).toBe(false);
+  });
+
+  it('is outside just past the 7-day boundary', () => {
+    const now = new Date(CAPTURED_MS + 7 * MS_PER_DAY + 1);
+    expect(isOutsideRefundWindow(CAPTURED_AT, now)).toBe(true);
+  });
+
+  it('treats a null capturedAt as outside the window', () => {
+    expect(isOutsideRefundWindow(null, new Date())).toBe(true);
+  });
+
+  it('treats an unparsable capturedAt as outside the window', () => {
+    expect(isOutsideRefundWindow('not-a-date', new Date())).toBe(true);
+  });
+
+  it('respects a custom window size', () => {
+    const now = new Date(CAPTURED_MS + 3 * MS_PER_DAY);
+    expect(isOutsideRefundWindow(CAPTURED_AT, now, 2)).toBe(true);
+    expect(isOutsideRefundWindow(CAPTURED_AT, now, 3)).toBe(false);
   });
 });
 
