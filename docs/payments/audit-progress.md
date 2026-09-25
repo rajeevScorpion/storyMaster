@@ -3,7 +3,26 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-25 night — Phase 7 walked on the Preview; passes)
+## Next session starts here (updated 2026-09-25 night — Phase 8 batch 1 building)
+
+**Phase 8 (the US on Razorpay International) is in execution.** The spec is `phase-8-plan.md` §8.
+- **M done (`adc2eed`):**
+  - migration 138 is written. **Applied nowhere yet.** The owner applies it on dev before the P8-E walk.
+  - `lib/billing/international(.shared).ts` holds the supported countries (IN, US) and the fail-closed
+    reader for `billing_international_countries`.
+- **Batch 1 was launched as two Sonnet agents:**
+  - **AC:** the checkout provider and country guard, export tax, the renewal fallback, the capture
+    evidence, and a new incidents card.
+  - **B:** international billing details.
+  - **First thing next session:** `git log --oneline -15` for `Phase 8 AC --` / `Phase 8 B --` commits,
+    and `git status` for leftovers. Then review each diff against §8.
+- **Then:** unit D (documents, copy and emails; plan §4), E (the walk), and F (the readiness doc).
+- **Invoice PDF fix (`fec0caa`):** long addresses and descriptions now wrap. The CA has the clean
+  sample set (made with `.agent/ca-render.ts`). **Waiting on the CA's answers** (runbook §1.2, plus plan
+  §6 for the US).
+- **Owner, still to do:** restore the Phase 7 walk's test data (the SQL in the block below).
+
+## Previous block (2026-09-25 night — Phase 7 walked on the Preview; passes)
 
 **The Phase 7 walk ran on the Preview** (`5662a3e`, dev DB, Razorpay test). Opus ran it with Playwright,
 using `.agent/sheet-walk/p7.pw.ts` and `p7.config.ts` (gitignored). Credentials came from the shell.
