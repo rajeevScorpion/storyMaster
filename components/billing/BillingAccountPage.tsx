@@ -34,6 +34,7 @@ import type { BillingPaymentOverview, GetMyBillingOverviewResult } from '@/lib/b
 import { buildPlanFeatures } from '@/lib/pricing/plan-copy.shared';
 import { formatCurrencyMinor } from '@/lib/billing/wallet-tax.shared';
 import { billingProfileAddressSummary } from '@/lib/billing/billing-profile.shared';
+import { formatBillingDateLong } from '@/lib/billing/billing-dates.shared';
 import { COINS_PER_BEAT } from '@/lib/types/pricing';
 import type { BillingProfileDTO, PricingWalletPageData } from '@/lib/types/pricing';
 
@@ -50,10 +51,7 @@ function beatsToCoins(value: number): number {
 }
 
 function formatLongDate(value: string | null): string {
-  if (!value) return 'an unknown date';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'an unknown date';
-  return date.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+  return formatBillingDateLong(value) ?? 'an unknown date';
 }
 
 const UNAVAILABLE_TEXT = "This isn't available right now.";

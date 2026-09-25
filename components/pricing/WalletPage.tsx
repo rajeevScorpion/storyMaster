@@ -26,6 +26,7 @@ import type {
 } from '@/lib/types/pricing';
 import { COINS_PER_BEAT } from '@/lib/types/pricing';
 import { buildPlanFeatures, getPlanDescription } from '@/lib/pricing/plan-copy.shared';
+import { formatBillingDateLong } from '@/lib/billing/billing-dates.shared';
 
 function formatPrice(currencyCode: string, amountMinor: number | null) {
   if (amountMinor == null) {
@@ -41,12 +42,7 @@ function formatPrice(currencyCode: string, amountMinor: number | null) {
 }
 
 function formatDate(value: string | null) {
-  if (!value) return 'Not scheduled yet';
-  return new Date(value).toLocaleDateString(undefined, {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  });
+  return formatBillingDateLong(value) ?? 'Not scheduled yet';
 }
 
 function formatActivityTime(value: string) {

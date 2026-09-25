@@ -1,6 +1,7 @@
 import type { TaxBreakdown } from '@/lib/billing/tax.shared';
 import type { BillingInterval } from '@/lib/types/pricing';
 import { formatCurrencyMinor } from '@/lib/billing/wallet-tax.shared';
+import { addBillingMonths, billingDayOfMonth, formatBillingDateLong } from '@/lib/billing/billing-dates.shared';
 
 /**
  * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E2): what `quoteCheckout`
@@ -48,17 +49,10 @@ export function taxLinesFromBreakdown(breakdown: TaxBreakdown | null): CheckoutQ
   return [];
 }
 
-/** One month or one year later, clamped to the target month's last day -- 31 Jan + 1 month is
- * 28/29 Feb, never 3 Mar. Works in UTC calendar terms so it is independent of the caller's timezone. */
+/** One month or one year later on the IST calendar, clamped to the target month's last day -- see
+ * billing-dates.shared.ts for why billing dates are IST. */
 export function addBillingInterval(date: Date, interval: BillingInterval): Date {
-  const monthsToAdd = interval === 'annual' ? 12 : 1;
-  const targetMonthIndex = date.getUTCMonth() + monthsToAdd;
-  const targetYear = date.getUTCFullYear() + Math.floor(targetMonthIndex / 12);
-  const targetMonth = ((targetMonthIndex % 12) + 12) % 12;
-  const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
-  const targetDay = Math.min(date.getUTCDate(), daysInTargetMonth);
-
-  return new Date(Date.UTC(targetYear, targetMonth, targetDay, date.getUTCHours(), date.getUTCMinutes(), date.getUTCSeconds()));
+  return addBillingMonths(date, interval === 'annual' ? 12 : 1);
 }
 
 /** Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): formatRenewalLine's own amount --
@@ -107,9 +101,8 @@ export function formatRenewalLine(
   const amount = formatRenewalAmount(currencyCode, grossMinor);
 
   if (interval === 'annual') {
-    const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
-    return `Renews yearly on ${formatted} at ${amount}.`;
+    return `Renews yearly on ${formatBillingDateLong(date)} at ${amount}.`;
   }
 
-  return `Renews monthly on the ${ordinal(date.getUTCDate())} at ${amount}.`;
+  return `Renews monthly on the ${ordinal(billingDayOfMonth(date)!)} at ${amount}.`;
 }

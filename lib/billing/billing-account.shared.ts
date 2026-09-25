@@ -1,5 +1,6 @@
 import type { BillingInterval, BillingMethodCategory, BillingPaymentKind } from '@/lib/types/pricing';
 import type { CheckoutQuoteTaxLine } from '@/lib/billing/checkout-quote.shared';
+import { formatBillingDateShort } from '@/lib/billing/billing-dates.shared';
 
 /**
  * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit F): pure DTOs and formatting/selection
@@ -94,11 +95,7 @@ export interface SubscriptionBanner {
 }
 
 function formatBannerDate(value: string | null): string {
-  if (!value) return 'an unknown date';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'an unknown date';
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return `${date.getUTCDate()} ${months[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+  return formatBillingDateShort(value) ?? 'an unknown date';
 }
 
 /**
