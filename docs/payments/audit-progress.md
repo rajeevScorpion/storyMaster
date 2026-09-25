@@ -3,7 +3,7 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-25 — Phase 6 walked on dev; four defects found and fixed)
+## Next session starts here (updated 2026-09-25 — Phase 6 walk steps 1-6 pass on dev; four defects fixed)
 
 **Phase 6 is built, reviewed and walked on dev (plan §5 steps 1-6).** Step 7 (the subscription kinds) waits
 on the OTP session, with the deferred Phase 5 subscribe walk.
@@ -33,8 +33,12 @@ on the OTP session, with the deferred Phase 5 subscribe walk.
   - Another user's document was not tried live, because every dev document is `testuser`'s. The route
     tests cover it.
 - **5 pass:** with both switches off, a top-up created no job and no document.
-- **6:** a bad `RESEND_API_KEY` gives attempt 1 "API key is invalid", then a 2-minute backoff. Resend
-  queued and audited (136 works). The walk continues below.
+- **6 pass:**
+  - With a bad `RESEND_API_KEY`, an admin Resend of 000007 was queued and audited, and the kick ran it at
+    once from the server action.
+  - It failed "API key is invalid" 5 times on the 2/4/8/16-minute backoff, then went `failed`.
+  - After a restart with the real key, the admin **Retry** was audited, the job went `done`, and the email
+    was `sent` with a message id.
 
 **Defects the walk found, all fixed:**
 1. **The enqueue kick never ran the worker on a Preview.** It POSTed to `APP_URL`, which on Preview names
@@ -61,10 +65,11 @@ on the OTP session, with the deferred Phase 5 subscribe walk.
 - The dev series has gaps in meaning, not in numbers: 000002-000005 belong to pre-switch payments. Test
   series only.
 
-**Dev state left by the walk:**
-- **All three switches are ON** (`billing_admin_actions_enabled` too).
-- `testuser`'s billing email is `delivered@resend.dev`, with state Gujarat.
-- Restore these at the end of the walk; the next session should check them.
+**Dev state after the walk (verified by query):**
+- all three billing switches are **off**;
+- `testuser`'s billing email is back to `testuser@test.com`, with state 27 (Maharashtra);
+- no open jobs;
+- the agent server is stopped.
 
 **Next:**
 1. **Push `payments`**, so the Preview gets the in-process kick.
