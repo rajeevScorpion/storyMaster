@@ -6,6 +6,8 @@ import {
   STALE_SUBSCRIPTION_WEBHOOK_MS,
   STALE_WEBHOOK_EVENT_MS,
   WEBHOOK_MAX_FAILED_ATTEMPTS,
+  PENDING_BILLING_JOB_STALE_MS,
+  PENDING_REFUND_STALE_MS,
   webhookIncidentOrFilter,
   subscriptionBoundaryOrFilter,
   isFailedWebhookIncident,
@@ -15,6 +17,10 @@ import {
   hasUnconfirmedFirstCharge,
   isPastCurrentPeriodEnd,
   hasStaleWebhook,
+  isFailedBillingJobIncident,
+  isStalePendingBillingJobIncident,
+  isStalePendingRefundIncident,
+  paymentIdsMissingInvoice,
   formatIncidentAge,
 } from './billing-incidents.shared';
 
@@ -155,6 +161,72 @@ describe('isSubscriptionPastBoundaryIncident', () => {
   it('generates the same OR filter string on repeat calls with the same clock', () => {
     expect(subscriptionBoundaryOrFilter(NOW)).toBe(subscriptionBoundaryOrFilter(NOW));
     expect(subscriptionBoundaryOrFilter(NOW)).toContain('first_charge_confirmed_at.is.null');
+  });
+});
+
+// Payments Phase 7 (docs/payments/phase-7-plan.md §8, Unit B2, "Phase 6 health"): the four
+// count-card predicates behind the new billing-incidents sections.
+describe('isFailedBillingJobIncident', () => {
+  it('flags a failed job', () => {
+    expect(isFailedBillingJobIncident({ status: 'failed' })).toBe(true);
+  });
+
+  it('does not flag pending, processing or done jobs', () => {
+    expect(isFailedBillingJobIncident({ status: 'pending' })).toBe(false);
+    expect(isFailedBillingJobIncident({ status: 'processing' })).toBe(false);
+    expect(isFailedBillingJobIncident({ status: 'done' })).toBe(false);
+  });
+});
+
+describe('isStalePendingBillingJobIncident', () => {
+  it('flags a pending job older than the stale threshold', () => {
+    const row = { status: 'pending', created_at: new Date(NOW - PENDING_BILLING_JOB_STALE_MS - 1000).toISOString() };
+    expect(isStalePendingBillingJobIncident(row, NOW)).toBe(true);
+  });
+
+  it('does not flag a pending job younger than the threshold', () => {
+    const row = { status: 'pending', created_at: new Date(NOW - PENDING_BILLING_JOB_STALE_MS + 1000).toISOString() };
+    expect(isStalePendingBillingJobIncident(row, NOW)).toBe(false);
+  });
+
+  it('does not flag a stale job in any other status', () => {
+    const row = { status: 'failed', created_at: new Date(NOW - PENDING_BILLING_JOB_STALE_MS - 1000).toISOString() };
+    expect(isStalePendingBillingJobIncident(row, NOW)).toBe(false);
+  });
+});
+
+describe('isStalePendingRefundIncident', () => {
+  it('flags a pending refund older than 24h', () => {
+    const row = { status: 'pending', created_at: new Date(NOW - PENDING_REFUND_STALE_MS - 1000).toISOString() };
+    expect(isStalePendingRefundIncident(row, NOW)).toBe(true);
+  });
+
+  it('does not flag a pending refund younger than 24h', () => {
+    const row = { status: 'pending', created_at: new Date(NOW - PENDING_REFUND_STALE_MS + 1000).toISOString() };
+    expect(isStalePendingRefundIncident(row, NOW)).toBe(false);
+  });
+
+  it('does not flag a processed or failed refund no matter how old', () => {
+    const row = { status: 'processed', created_at: new Date(NOW - PENDING_REFUND_STALE_MS - 1000).toISOString() };
+    expect(isStalePendingRefundIncident(row, NOW)).toBe(false);
+  });
+});
+
+describe('paymentIdsMissingInvoice', () => {
+  it('returns payment ids with no matching issued invoice', () => {
+    expect(paymentIdsMissingInvoice(['p1', 'p2', 'p3'], ['p2'])).toEqual(['p1', 'p3']);
+  });
+
+  it('returns an empty list when every payment has an issued invoice', () => {
+    expect(paymentIdsMissingInvoice(['p1', 'p2'], ['p1', 'p2'])).toEqual([]);
+  });
+
+  it('returns every payment id when nothing has an issued invoice', () => {
+    expect(paymentIdsMissingInvoice(['p1', 'p2'], [])).toEqual(['p1', 'p2']);
+  });
+
+  it('returns an empty list for an empty batch regardless of what was issued', () => {
+    expect(paymentIdsMissingInvoice([], ['p1'])).toEqual([]);
   });
 });
 

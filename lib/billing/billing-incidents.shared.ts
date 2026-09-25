@@ -18,6 +18,14 @@ export const CHECKOUT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const TOPUP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const STALE_SUBSCRIPTION_WEBHOOK_MS = 2 * 24 * 60 * 60 * 1000;
 export const STALE_WEBHOOK_EVENT_MS = 15 * 60 * 1000;
+/** Payments Phase 7 (docs/payments/phase-7-plan.md §8, Unit B2, "Phase 6 health"): a billing
+ * notification job (migration 135) sitting in `pending` this long is stuck -- the worker kicks
+ * itself after every enqueue and the daily cron is a backstop, so an hour with neither having
+ * claimed it points at a worker that isn't running. */
+export const PENDING_BILLING_JOB_STALE_MS = 60 * 60 * 1000;
+/** A refund Razorpay hasn't confirmed within a day is worth a human look; the provider's own refund
+ * webhook or the daily reconcile should have settled it well before then. */
+export const PENDING_REFUND_STALE_MS = 24 * 60 * 60 * 1000;
 /** Was an inline `10` in razorpay-reconcile.ts's webhook `.or()` filter; named here so the
  * dashboard cites the same number instead of a second hardcoded `10`. */
 export const WEBHOOK_MAX_FAILED_ATTEMPTS = 10;
@@ -137,6 +145,46 @@ export function hasStaleWebhook(row: Pick<SubscriptionBoundaryRowShape, 'last_we
 export function isSubscriptionPastBoundaryIncident(row: SubscriptionBoundaryRowShape, nowMs: number): boolean {
   if (!RECONCILABLE_SUBSCRIPTION_STATUSES.includes(row.status)) return false;
   return hasUnconfirmedFirstCharge(row) || isPastCurrentPeriodEnd(row, nowMs) || hasStaleWebhook(row, nowMs);
+}
+
+// ── Phase 6 health (Payments Phase 7, docs/payments/phase-7-plan.md §8, Unit B2) ───────────────────
+// Four more count cards on the same dashboard, reading the notification queue and document-issuing
+// tables migration 135 added: a failed job, a pending job stuck past the worker's own retry window,
+// a refund Razorpay hasn't confirmed in a day, and a captured payment with no issued invoice. Same
+// pure-predicate style as the Phase 4 section above -- billing-incidents.ts builds the equivalent
+// `.eq()`/`.lt()` query for each and these pin the logic without a database.
+
+export interface BillingJobRowShape {
+  status: string;
+  created_at: string;
+}
+
+export function isFailedBillingJobIncident(row: Pick<BillingJobRowShape, 'status'>): boolean {
+  return row.status === 'failed';
+}
+
+export function isStalePendingBillingJobIncident(row: BillingJobRowShape, nowMs: number): boolean {
+  if (row.status !== 'pending') return false;
+  return new Date(row.created_at).getTime() < nowMs - PENDING_BILLING_JOB_STALE_MS;
+}
+
+export interface BillingRefundRowShape {
+  status: string;
+  created_at: string;
+}
+
+export function isStalePendingRefundIncident(row: BillingRefundRowShape, nowMs: number): boolean {
+  if (row.status !== 'pending') return false;
+  return new Date(row.created_at).getTime() < nowMs - PENDING_REFUND_STALE_MS;
+}
+
+/** The set-difference at the heart of the "no issued invoice" card: which of a batch of captured
+ * payment ids has no matching row in `issuedPaymentIds` (payment ids with an `issued` `tax_invoice`
+ * document). Pure so the join -- done as two separate PostgREST queries, since PostgREST has no
+ * `NOT EXISTS` -- is tested without either query actually running. */
+export function paymentIdsMissingInvoice(paymentIds: readonly string[], issuedPaymentIds: Iterable<string>): string[] {
+  const issued = new Set(issuedPaymentIds);
+  return paymentIds.filter((id) => !issued.has(id));
 }
 
 // ── Display helpers ─────────────────────────────────────────────────────────────────────────────

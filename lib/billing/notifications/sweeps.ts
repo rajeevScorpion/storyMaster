@@ -38,7 +38,14 @@ type AdminClient = ReturnType<typeof createAdminClient>;
  * 2026-09-25). `updated_at` moves on any edit, so this can only narrow the window, never widen it.
  * Null when unreadable, and the sweep then does nothing.
  */
-async function loadQueueSwitchedOnSince(admin: AdminClient): Promise<number | null> {
+/**
+ * Payments Phase 7 (docs/payments/phase-7-plan.md §8, Unit B2): exported so the billing-incidents
+ * health cards (app/actions/billing-incidents.ts) can scope their "captured payments with no issued
+ * invoice" count to the same switch-on time this sweep already uses -- otherwise every payment
+ * captured before the switches went on (the four pre-switch dev payments; every pre-go-live payment
+ * on prod) would show as a defect forever. No behaviour change here beyond the export.
+ */
+export async function loadQueueSwitchedOnSince(admin: AdminClient): Promise<number | null> {
   const result = await admin.from('feature_flags').select('enabled, updated_at').in('flag_key', QUEUE_SWITCH_FLAG_KEYS);
   if (result.error) {
     console.error('[billing sweeps] failed to read when the billing switches went on:', result.error.message);

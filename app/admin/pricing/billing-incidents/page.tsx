@@ -1,13 +1,15 @@
 import type { ComponentType, ReactNode } from 'react';
-import { CalendarClock, Hourglass, PackageX, Webhook } from 'lucide-react';
+import { CalendarClock, FileWarning, Hourglass, MailWarning, PackageX, Webhook } from 'lucide-react';
 import AdminPageHeader from '@/components/admin/AdminPageHeader';
 import { getBillingIncidentsDashboard, type BillingIncidentSection } from '@/app/actions/billing-incidents';
 import { formatIncidentAge } from '@/lib/billing/billing-incidents.shared';
 
 // Payments Phase 4, Unit F (docs/payments/phase-4-plan.md §9 "Unit F"): read-only incident
-// dashboard. Renders the same four failure classes lib/billing/razorpay-reconcile.ts's daily cron
-// scans for -- see app/actions/billing-incidents.ts for why the counts can't drift apart from it.
-// This page never mutates anything; there is nothing here to confirm or undo.
+// dashboard. Renders the four failure classes lib/billing/razorpay-reconcile.ts's daily cron scans
+// for -- see app/actions/billing-incidents.ts for why the counts can't drift apart from it -- plus
+// four Phase 6 notification/document health cards added in Payments Phase 7
+// (docs/payments/phase-7-plan.md §8, Unit B2). This page never mutates anything; there is nothing
+// here to confirm or undo.
 export const dynamic = 'force-dynamic';
 
 function formatAmount(amountMinor: number, currencyCode: string): string {
@@ -64,7 +66,13 @@ function SectionShell({
           </div>
         </div>
         <StatusPill tone={tone}>
-          {tone === 'unavailable' ? 'Unavailable' : tone === 'healthy' ? 'Healthy' : `${section.totalCount} to review`}
+          {tone === 'unavailable'
+            ? section.unavailableReason === 'issuing_disabled'
+              ? 'Issuing off'
+              : 'Unavailable'
+            : tone === 'healthy'
+              ? 'Healthy'
+              : `${section.totalCount} to review`}
         </StatusPill>
       </div>
 
@@ -72,7 +80,11 @@ function SectionShell({
         <p className="rounded-xl border border-white/10 bg-neutral-900/60 p-4 text-sm text-neutral-500">
           {section.unavailableReason === 'provider_config'
             ? 'Unavailable on this environment — Razorpay is not configured here, so there is no provider mode to scope this section to. Set the Razorpay keys to read it. This is not an error.'
-            : 'Unavailable on this environment — the table or column this section reads isn’t present here yet. This is expected on a database that hasn’t had every migration applied; it is not an error.'}
+            : section.unavailableReason === 'issuing_disabled'
+              ? 'Issuing off — billing_document_issuing_enabled is off, so no invoice is ever issued and this count would just be every captured payment. Turn the switch on in Operational flags to read this.'
+              : section.unavailableReason === 'switch_unreadable'
+                ? 'Unavailable — couldn’t read when the billing switches went on, so this can’t be scoped safely. Try again shortly.'
+                : 'Unavailable on this environment — the table or column this section reads isn’t present here yet. This is expected on a database that hasn’t had every migration applied; it is not an error.'}
         </p>
       ) : section.totalCount === 0 ? (
         <p className="rounded-xl border border-white/10 bg-neutral-900/60 p-4 text-sm text-emerald-200/80">{healthyLabel}</p>
@@ -232,6 +244,109 @@ export default async function BillingIncidentsPage() {
                 </>
               )}
             </p>
+          </RowCard>
+        ))}
+      </SectionShell>
+
+      <SectionShell
+        title="Failed billing jobs"
+        description="Notification jobs (receipts, invoices, refund/cancellation emails) that exhausted their retries."
+        icon={MailWarning}
+        section={data.failedBillingJobs}
+        healthyLabel="No failed billing jobs."
+      >
+        {data.failedBillingJobs.rows.map((row) => (
+          <RowCard key={row.id}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-neutral-100">
+                  {row.kind} <span className="text-neutral-500">({shortId(row.id)})</span>
+                </p>
+                <p className="mt-1 text-xs text-neutral-500">
+                  {row.userId ? <>User {shortId(row.userId)} · </> : 'No owner (deleted account) · '}
+                  attempt {row.attemptCount}/{row.maxAttempts} · created {formatIncidentAge(nowMs, row.createdAt)} ago
+                </p>
+              </div>
+              <StatusPill tone="attention">failed</StatusPill>
+            </div>
+            {row.lastError && <p className="mt-2 text-xs text-rose-300/90">Error: {row.lastError}</p>}
+          </RowCard>
+        ))}
+      </SectionShell>
+
+      <SectionShell
+        title="Pending billing jobs stuck over an hour"
+        description="Still 'pending' more than an hour after being enqueued — the worker isn't claiming it."
+        icon={Hourglass}
+        section={data.stalePendingBillingJobs}
+        healthyLabel="No billing jobs stuck pending."
+      >
+        {data.stalePendingBillingJobs.rows.map((row) => (
+          <RowCard key={row.id}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-neutral-100">
+                  {row.kind} <span className="text-neutral-500">({shortId(row.id)})</span>
+                </p>
+                <p className="mt-1 text-xs text-neutral-500">
+                  {row.userId ? <>User {shortId(row.userId)} · </> : 'No owner (deleted account) · '}
+                  attempt {row.attemptCount} · created {formatIncidentAge(nowMs, row.createdAt)} ago
+                </p>
+              </div>
+              <StatusPill tone="attention">pending</StatusPill>
+            </div>
+          </RowCard>
+        ))}
+      </SectionShell>
+
+      <SectionShell
+        title="Refunds pending over 24h"
+        description="Refunds Razorpay hasn't confirmed processed or failed within a day of being initiated."
+        icon={FileWarning}
+        section={data.stalePendingRefunds}
+        healthyLabel="No refunds stuck pending."
+      >
+        {data.stalePendingRefunds.rows.map((row) => (
+          <RowCard key={row.id}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-neutral-100">Refund {shortId(row.id)}</p>
+                <p className="mt-1 text-xs text-neutral-500">
+                  {row.subjectRef ? <>Account {shortId(row.subjectRef)} · </> : ''}
+                  {formatAmount(row.amountMinor, row.currencyCode)} · initiated {row.initiatedBy ?? 'unknown'} · created{' '}
+                  {formatIncidentAge(nowMs, row.createdAt)} ago
+                </p>
+              </div>
+              <StatusPill tone="attention">pending</StatusPill>
+            </div>
+            {row.paymentId && (
+              <p className="mt-2 text-xs text-neutral-500">
+                <FieldLabel>Payment</FieldLabel> {shortId(row.paymentId)}
+              </p>
+            )}
+          </RowCard>
+        ))}
+      </SectionShell>
+
+      <SectionShell
+        title="Captured payments with no issued invoice"
+        description="Captured since the billing switches went on, with no issued tax invoice for that payment."
+        icon={FileWarning}
+        section={data.paymentsMissingInvoice}
+        healthyLabel="Every captured payment since the switches went on has an issued invoice."
+      >
+        {data.paymentsMissingInvoice.rows.map((row) => (
+          <RowCard key={row.id}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-neutral-100">Payment {shortId(row.id)}</p>
+                <p className="mt-1 text-xs text-neutral-500">
+                  {row.userId ? <>User {shortId(row.userId)} · </> : 'No owner (deleted account) · '}
+                  {formatAmount(row.amountMinor, row.currencyCode)} · captured {formatIncidentAge(nowMs, row.capturedAt)} ago
+                </p>
+              </div>
+              <StatusPill tone="attention">no invoice</StatusPill>
+            </div>
           </RowCard>
         ))}
       </SectionShell>
