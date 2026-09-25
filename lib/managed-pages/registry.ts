@@ -261,7 +261,7 @@ You must not use Kissago to create or distribute illegal, abusive, harassing, ha
 
 ## 7. Subscriptions, Payments, and Usage Limits
 
-Kissago offers free and paid creator plans, coin-based usage, and — where the Service is being used to read or watch rather than create — may offer viewer plans with usage limits communicated within the Service (for example, a daily limit on free story viewing). Kissago does not fix these limits in these Terms because they may change as the product evolves; the limits, features, and pricing applicable to a plan will be shown to you at the time of subscription or use. Payments for India checkout are processed through Razorpay. ${LEGAL_ENTITY_NAME} is GST-registered (GSTIN ${LEGAL_GSTIN}). Prices are shown before GST, and the total including GST is shown before you pay. **Subscriptions renew automatically** at the end of each billing period until you cancel.
+Kissago offers free and paid creator plans, coin-based usage, and — where the Service is being used to read or watch rather than create — may offer viewer plans with usage limits communicated within the Service (for example, a daily limit on free story viewing). Kissago does not fix these limits in these Terms because they may change as the product evolves; the limits, features, and pricing applicable to a plan will be shown to you at the time of subscription or use. Payments are processed through Razorpay. ${LEGAL_ENTITY_NAME} is GST-registered (GSTIN ${LEGAL_GSTIN}). In India, prices are shown before GST, and the total including GST is shown before you pay. Where checkout is offered to customers outside India, prices are charged in the currency shown at checkout, no Indian GST is charged, and the "Customers outside India" section of the **Refund / Cancellation Policy** applies. **Subscriptions renew automatically** at the end of each billing period until you cancel.
 
 ## 8. Cancellation and Refunds
 
@@ -317,7 +317,7 @@ ${LEGAL_FULL_ADDRESS}
     excerpt: 'How cancelling works, when a payment can be refunded, and what happens to your coins.',
     metadata: { requiresLegalReview: false },
     content: seed(`
-This policy covers Kissago plans and coin top-ups bought through Razorpay in India. It is part of the **Terms of Service**.
+This policy covers Kissago plans and coin top-ups bought through Razorpay, in India and, where checkout offers it, from outside India. It is part of the **Terms of Service**.
 
 ## Cancelling a plan
 
@@ -364,6 +364,16 @@ Switching directly from one plan to another is not available yet. Email {{SUPPOR
 ## Chargebacks
 
 If a payment is reversed through your bank (a chargeback), it is treated as refunded. Kissago may review the account, and may restrict it where chargebacks are used to keep coins or access that were not paid for.
+
+## Customers outside India
+
+Checkout outside India is offered only in the countries it lists. If you buy from one of them:
+
+- **Currency.** You pay in the currency shown at checkout (US dollars for the United States). If the payment window offers to charge you in your card's own currency instead, that conversion and its rate come from Razorpay and your bank, not from Kissago. Paying in the currency shown avoids it. Your bank may still add its own foreign-transaction fee.
+- **Tax.** The price shown is the total. Kissago supplies its service from India as an export under a Letter of Undertaking (LUT), so no Indian GST is charged, and Kissago does not charge US sales tax. Your invoice says this.
+- **Your billing address.** The price and the tax treatment depend on the billing address you give, which must be where you live.
+- **Refunds.** The same rules as above apply: within 7 days, in full, while no more than 20% of the purchase's coins are used, and at most two per account. The refund goes back to the card you paid with, in the currency you paid, and a credit note is issued against the invoice. A refund to a card issued outside India can take longer to appear than a domestic one, depending on your bank.
+- **Dates.** Billing dates on Kissago, your invoices and your emails are in India Standard Time (IST). A plan renews at midnight IST, which can fall on the previous day where you are.
 
 ## Questions and complaints
 

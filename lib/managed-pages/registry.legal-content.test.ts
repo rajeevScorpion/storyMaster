@@ -54,6 +54,12 @@ describe('refund / cancellation policy seed (Payments Phase 7)', () => {
     expect(refundPolicy.content).toContain('two refunds per account');
   });
 
+  it('covers customers outside India (Payments Phase 8): currency, LUT, refunds and IST dates', () => {
+    expect(refundPolicy.content).toContain('## Customers outside India');
+    expect(refundPolicy.content).toContain('Letter of Undertaking (LUT)');
+    expect(refundPolicy.content).toContain('India Standard Time (IST)');
+  });
+
   it('renders without leftover placeholders or raw markdown', () => {
     expect(refundPolicy.content).not.toMatch(/\[[A-Z][A-Z0-9 _/-]*\]/);
     const html = renderToStaticMarkup(createElement('div', null, ...renderManagedPageBlocksFromContent(refundPolicy.content)));
