@@ -332,6 +332,10 @@ export async function prepareRazorpayCheckoutInternal(
         throw new CheckoutRefusalError('Pricing changed while preparing checkout. Please try again.', 'pricing_changed', 409);
       }
 
+      // Payments Phase 6 (docs/payments/phase-6-plan.md §10, Unit C2, hook 7): once Kissago's own
+      // billing emails are live, Razorpay's own subscription notifications are switched off so the
+      // customer isn't emailed twice for the same charge.
+      const customerNotify = !(await getFeatureFlag('billing_emails_enabled', false));
       subscription = await createRazorpaySubscription({
         planId: planRef.razorpayPlanId,
         interval: version.billing_interval,
@@ -341,6 +345,7 @@ export async function prepareRazorpayCheckoutInternal(
           plan_version_id: version.id,
           pricing_market_key: version.pricing_market_key,
         },
+        customerNotify,
       });
       timer?.mark('provider_create');
     } catch (err) {

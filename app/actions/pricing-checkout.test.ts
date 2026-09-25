@@ -893,6 +893,49 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax'
     expect(snapshot?.customer).toMatchObject({ profileType: 'personal', legalName: 'Jane Doe', stateCode: '24' });
   });
 
+  describe('customerNotify (Payments Phase 6, Unit C2, hook 7)', () => {
+    function setUpFreshSubscriptionCheckout(enqueueRpc: ReturnType<typeof createFakeSupabase>['enqueueRpc'], enqueue: ReturnType<typeof createFakeSupabase>['enqueue']) {
+      enqueue('pricing_plan_versions', 'select', { data: fakePlanVersion(), error: null }); // matching mode ref: no plan creation
+      enqueue('pricing_plans', 'select', { data: fakePlan(), error: null });
+      enqueueRpc({
+        data: [{ order_id: 'order-new', reused: false, provider_checkout_session_id: null, superseded_session_ids: [], blocked_reason: null }],
+        error: null,
+      });
+      createRazorpaySubscriptionMock.mockResolvedValueOnce(fakeRazorpaySubscription());
+      enqueue('billing_orders', 'update', { data: null, error: null });
+    }
+
+    it('is true (Razorpay sends its own emails) when billing_emails_enabled is off', async () => {
+      getFeatureFlagMock.mockResolvedValueOnce(true); // pricing_checkout_enabled
+      getFeatureFlagMock.mockResolvedValueOnce(false); // billing_emails_enabled
+      const { supabase, enqueue, enqueueRpc } = createFakeSupabase();
+      createAdminClientMock.mockReturnValue(supabase);
+      setUpFreshSubscriptionCheckout(enqueueRpc, enqueue);
+
+      await prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      );
+
+      expect(createRazorpaySubscriptionMock).toHaveBeenCalledWith(expect.objectContaining({ customerNotify: true }));
+    });
+
+    it('is false (Kissago sends its own emails) when billing_emails_enabled is on', async () => {
+      getFeatureFlagMock.mockResolvedValueOnce(true); // pricing_checkout_enabled
+      getFeatureFlagMock.mockResolvedValueOnce(true); // billing_emails_enabled
+      const { supabase, enqueue, enqueueRpc } = createFakeSupabase();
+      createAdminClientMock.mockReturnValue(supabase);
+      setUpFreshSubscriptionCheckout(enqueueRpc, enqueue);
+
+      await prepareRazorpayCheckoutInternal(
+        { kind: 'subscription', planVersionId: 'plan-version-1' },
+        { adultAttested: true, audienceMode: 'all' }
+      );
+
+      expect(createRazorpaySubscriptionMock).toHaveBeenCalledWith(expect.objectContaining({ customerNotify: false }));
+    });
+  });
+
   it('refuses subscription checkout without a declared billing-profile state', async () => {
     getFeatureFlagMock.mockResolvedValueOnce(true);
     const { supabase, enqueue } = createFakeSupabase();

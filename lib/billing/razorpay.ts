@@ -50,6 +50,10 @@ export interface RazorpaySubscription {
    * the fallback rawMethod for a renewal when fetching the actual payment is skipped (a row already
    * exists) or fails. */
   payment_method?: string | null;
+  /** Payments Phase 6 (docs/payments/phase-6-plan.md §10, Unit C2, hook 3): Razorpay's own hosted-page
+   * link for this subscription. Carried into a `subscription_payment_failed` job's payload so the
+   * "Update payment" button can go straight there instead of Kissago's own billing page. */
+  short_url?: string | null;
 }
 
 export interface RazorpayOrder {
@@ -168,6 +172,12 @@ export async function createRazorpaySubscription(input: {
   /** Unix seconds. Owner-approved D5: an unpaid checkout can't be resumed and paid after the modal is abandoned. */
   expireByUnix?: number;
   notes?: Record<string, string>;
+  /** Payments Phase 6 (docs/payments/phase-6-plan.md §10, Unit C2, hook 7): when Kissago's own billing
+   * emails are live, Razorpay's parallel notifications for this subscription are switched off so a
+   * customer doesn't get two different receipts for the same charge. `pricing-checkout.ts` passes
+   * `!billing_emails_enabled` -- **existing** subscriptions keep whatever Razorpay was already sending
+   * them, since the API has no way to change `customer_notify` after creation. */
+  customerNotify: boolean;
 }): Promise<RazorpaySubscription> {
   return razorpayRequest<RazorpaySubscription>('/subscriptions', {
     method: 'POST',
@@ -175,7 +185,7 @@ export async function createRazorpaySubscription(input: {
       plan_id: input.planId,
       total_count: input.interval === 'annual' ? 100 : 1200,
       quantity: 1,
-      customer_notify: 1,
+      customer_notify: input.customerNotify ? 1 : 0,
       ...(input.expireByUnix ? { expire_by: input.expireByUnix } : {}),
       notes: input.notes ?? {},
     }),
