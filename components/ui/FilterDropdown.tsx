@@ -342,7 +342,9 @@ export default function FilterDropdown({
     isOpen ? (opensUp ? 'rounded-t-none' : 'rounded-b-none') : '',
   ].join(' ');
   const menuWrapperClassName = [
-    'fixed z-[1000] overflow-hidden',
+    // Portaled to <body>, so it must sit above every dialog that can hold it: Modal is 1100, the
+    // story dialogs 1200. At 1000 the list opened behind the billing dialog, invisible and unclickable.
+    'fixed z-[1300] overflow-hidden',
     mode === 'inline' || fullWidth ? 'w-full' : '',
   ].join(' ');
   const menuCardClassName = [
