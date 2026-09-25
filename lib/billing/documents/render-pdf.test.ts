@@ -3,7 +3,7 @@ import { PDFDocument } from 'pdf-lib';
 
 vi.mock('server-only', () => ({}));
 
-import { renderDocumentPdf } from '@/lib/billing/documents/render-pdf';
+import { renderDocumentPdf, wrapLine } from '@/lib/billing/documents/render-pdf';
 import type { BillingDocumentRow, DocumentBusinessSnapshot } from '@/lib/billing/documents/types.shared';
 import type { TaxBreakdown } from '@/lib/billing/tax.shared';
 
@@ -136,5 +136,30 @@ describe('renderDocumentPdf -- determinism', () => {
       { documentNumber: 'KG/26-27/000001', issuedAt: '2026-09-20T08:00:00.000Z' }
     );
     expect(Buffer.from(invoiceBytes).equals(Buffer.from(creditNoteBytes))).toBe(false);
+  });
+});
+
+describe('wrapLine', () => {
+  // One point per character keeps the arithmetic readable.
+  const measure = (s: string) => s.length;
+
+  it('keeps a line that fits as one line', () => {
+    expect(wrapLine('Gandhinagar, Gujarat', 40, measure)).toEqual(['Gandhinagar, Gujarat']);
+  });
+
+  it('breaks at word boundaries', () => {
+    expect(wrapLine('104, building 15, sector 17, Kharghar', 18, measure)).toEqual([
+      '104, building 15,',
+      'sector 17,',
+      'Kharghar',
+    ]);
+  });
+
+  it('breaks a single word wider than the column by character', () => {
+    expect(wrapLine('abcdefghij', 4, measure)).toEqual(['abcd', 'efgh', 'ij']);
+  });
+
+  it('returns no lines for blank input', () => {
+    expect(wrapLine('   ', 10, measure)).toEqual([]);
   });
 });

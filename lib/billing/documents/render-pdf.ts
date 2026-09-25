@@ -88,6 +88,39 @@ function text(
   cursor.y -= opts.dy ?? size + 4;
 }
 
+/**
+ * Word-wraps one line to `maxWidth` points. pdf-lib's drawText never wraps, so an unwrapped long address
+ * ran off the page and a long line-item description printed over the SAC and Qty columns. A single word
+ * wider than the column is broken by character. Exported for render-pdf.test.ts.
+ */
+export function wrapLine(value: string, maxWidth: number, measure: (s: string) => number): string[] {
+  const words = value.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [];
+  const lines: string[] = [];
+  let current = '';
+  const pushWord = (word: string) => {
+    let rest = word;
+    while (measure(rest) > maxWidth && rest.length > 1) {
+      let cut = rest.length - 1;
+      while (cut > 1 && measure(rest.slice(0, cut)) > maxWidth) cut -= 1;
+      lines.push(rest.slice(0, cut));
+      rest = rest.slice(cut);
+    }
+    current = rest;
+  };
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (measure(candidate) <= maxWidth) {
+      current = candidate;
+    } else {
+      if (current) lines.push(current);
+      pushWord(word);
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
 function rightAlignedText(
   cursor: Cursor,
   fonts: Fonts,
@@ -155,7 +188,9 @@ export async function renderDocumentPdf(
       borderColor: TEST_RED,
       borderWidth: 1,
     });
-    text(cursor, fonts, view.testBanner, { bold: true, color: TEST_RED, size: 11, dy: 30 });
+    // The baseline sits inside the 22pt box (cursor.y - 18 .. cursor.y + 4), not on its top edge.
+    text({ page, y: cursor.y - 11 }, fonts, view.testBanner, { x: MARGIN + 8, bold: true, color: TEST_RED, size: 11 });
+    cursor.y -= 42;
   }
 
   text(cursor, fonts, view.title.toUpperCase(), { bold: true, size: 18, dy: 22 });
@@ -183,8 +218,11 @@ export async function renderDocumentPdf(
     view.seller.country ?? '',
   ].filter((line) => line.trim().length > 0);
   for (const [i, line] of sellerLines.entries()) {
-    text({ page, y: sellerY }, fonts, line, { x: sellerX, size: 10, bold: i === 0, dy: 13 });
-    sellerY -= 13;
+    const font = i === 0 ? fonts.bold : fonts.regular;
+    for (const part of wrapLine(line, columnWidth, (s) => font.widthOfTextAtSize(s, 10))) {
+      text({ page, y: sellerY }, fonts, part, { x: sellerX, size: 10, bold: i === 0, dy: 13 });
+      sellerY -= 13;
+    }
   }
 
   let buyerY = blockTop;
@@ -198,8 +236,11 @@ export async function renderDocumentPdf(
   if (cityLine) buyerLines.push(cityLine);
   if (buyerLines.length === 0) buyerLines.push('Unregistered recipient');
   for (const [i, line] of buyerLines.entries()) {
-    text({ page, y: buyerY }, fonts, line, { x: buyerX, size: 10, bold: i === 0, dy: 13 });
-    buyerY -= 13;
+    const font = i === 0 ? fonts.bold : fonts.regular;
+    for (const part of wrapLine(line, columnWidth, (s) => font.widthOfTextAtSize(s, 10))) {
+      text({ page, y: buyerY }, fonts, part, { x: buyerX, size: 10, bold: i === 0, dy: 13 });
+      buyerY -= 13;
+    }
   }
 
   cursor.y = Math.min(sellerY, buyerY) - 8;
@@ -240,12 +281,16 @@ export async function renderDocumentPdf(
   cursor.y -= 16;
   hr(cursor, rightEdge);
 
+  const descWidth = colSac - colDesc - 12;
   for (const item of view.lineItems) {
-    text(cursor, fonts, item.description, { x: colDesc, size: 10, dy: 0 });
+    const descLines = wrapLine(item.description, descWidth, (s) => fonts.regular.widthOfTextAtSize(s, 10));
     text(cursor, fonts, item.sac ?? '—', { x: colSac, size: 10, dy: 0 });
     text(cursor, fonts, `${item.quantity} ${item.unit}`, { x: colQty, size: 10, dy: 0 });
     rightAlignedText(cursor, fonts, money(view, item.taxableValueMinor), colValue, { size: 10 });
-    cursor.y -= 18;
+    for (const part of descLines) {
+      text(cursor, fonts, part, { x: colDesc, size: 10, dy: 13 });
+    }
+    cursor.y -= descLines.length > 0 ? 5 : 18;
   }
   hr(cursor, rightEdge);
 
