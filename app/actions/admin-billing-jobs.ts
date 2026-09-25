@@ -11,12 +11,8 @@
  * admin-billing-actions.ts's auditResyncBestEffort already uses), and kick the worker so the effect
  * is visible without waiting for the next daily reconcile.
  *
- * NOTE for the reviewer -- the one thing the plan did not settle: admin_user_audit_events.action_type
- * carries a hardcoded CHECK (migration 131) that does not list 'billing_job_retried' or
- * 'billing_document_resent'. Unit D's scope excludes migrations, so the audit insert below uses
- * those two new values anyway and is deliberately best-effort: until a future migration widens the
- * CHECK, the insert fails with 23514, gets logged, and the retry/resend itself still succeeds. A
- * migration adding those two values to the CHECK is the natural follow-up.
+ * The two audit action types need migration 137. Where it has not run, the audit insert fails with
+ * 23514 and is logged, and the retry/resend itself still succeeds.
  */
 
 import { revalidatePath } from 'next/cache';
