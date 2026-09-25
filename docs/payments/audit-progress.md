@@ -49,7 +49,13 @@ where id = '7105eec1-95e0-4081-835b-9f649dd53967';
 **Next:**
 1. The deferred items in runbook §1.1: the OTP session (subscribe, cancel and reconcile, plus the
    Phase 6 step 7 emails), the Unit 0 probe, the phone look, and the CA answers.
-2. Phase 8 (the international review doc). Not started.
+2. **Phase 8 is planned: `phase-8-plan.md`** (2026-09-25).
+   - Two units: **P8-A** (Sonnet) is a checkout guard for a latent defect, G1. **P8-B** (Opus) is
+     `international-readiness.md`.
+   - Decisions I1 (code scope) and I2 (research timing) gate it.
+   - **G1:** checkout never checks an item's provider. Only the market lock stops a `stripe`-tagged ROW
+     item from being sent to Razorpay.
+   - No deferred item blocks Phase 8, or the other way round.
 
 **Earlier block (2026-09-25 late, Phase 7 build) follows.**
 
