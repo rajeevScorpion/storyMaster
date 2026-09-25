@@ -1,5 +1,6 @@
 import type { TaxBreakdown } from '@/lib/billing/tax.shared';
 import type { BillingInterval } from '@/lib/types/pricing';
+import { formatCurrencyMinor } from '@/lib/billing/wallet-tax.shared';
 
 /**
  * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E2): what `quoteCheckout`
@@ -72,18 +73,26 @@ function ordinal(day: number): string {
   }
 }
 
-/** "Renews monthly on the 24th." for a monthly plan; annual shows the full date, since "the 24th"
- * alone would drop the year a customer actually cares about for a once-a-year charge. Returns '' when
- * there is no interval or date to show (a top-up), so a caller can render `{line && <p>{line}</p>}`. */
-export function formatRenewalLine(interval: BillingInterval | null, nextChargeDate: string | null): string {
+/** "Renews monthly on the 24th at ₹531." for a monthly plan; annual shows the full date, since "the
+ * 24th" alone would drop the year a customer actually cares about for a once-a-year charge. Payments
+ * Phase 7 (docs/payments/phase-7-plan.md §8, B1): the amount that renews is part of the disclosure --
+ * the line never states a date without the price attached to it. Returns '' when there is no interval
+ * or date to show (a top-up), so a caller can render `{line && <p>{line}</p>}`. */
+export function formatRenewalLine(
+  interval: BillingInterval | null,
+  nextChargeDate: string | null,
+  grossMinor: number,
+  currencyCode: string
+): string {
   if (!interval || !nextChargeDate) return '';
   const date = new Date(nextChargeDate);
   if (Number.isNaN(date.getTime())) return '';
+  const amount = formatCurrencyMinor(currencyCode, grossMinor);
 
   if (interval === 'annual') {
     const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
-    return `Renews yearly on ${formatted}.`;
+    return `Renews yearly on ${formatted} at ${amount}.`;
   }
 
-  return `Renews monthly on the ${ordinal(date.getUTCDate())}.`;
+  return `Renews monthly on the ${ordinal(date.getUTCDate())} at ${amount}.`;
 }

@@ -271,7 +271,7 @@ export default function CheckoutSummarySheet({
               )}
               {quote.interval === 'annual' && (
                 <p className="text-xs text-neutral-500">
-                  ≈ {formatCurrencyMinor(quote.currencyCode, Math.round(quote.grossMinor / 12))} / month
+                  Billed once a year (≈ {formatCurrencyMinor(quote.currencyCode, Math.round(quote.grossMinor / 12))} / month)
                 </p>
               )}
             </div>
@@ -280,8 +280,8 @@ export default function CheckoutSummarySheet({
               {quote.kind === 'subscription' ? (
                 <>
                   <p>
-                    {formatRenewalLine(quote.interval, quote.nextChargeDate)} Cancel anytime; you keep access until
-                    the period ends.
+                    {formatRenewalLine(quote.interval, quote.nextChargeDate, quote.grossMinor, quote.currencyCode)} Cancel
+                    anytime; you keep access until the period ends.
                   </p>
                   {quote.coins > 0 && (
                     <p>{quote.coins.toLocaleString()} coins each month. They reset every cycle and don&apos;t roll over.</p>

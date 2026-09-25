@@ -80,25 +80,35 @@ describe('addBillingInterval', () => {
 });
 
 describe('formatRenewalLine', () => {
-  it('formats a monthly renewal with an ordinal day', () => {
-    expect(formatRenewalLine('monthly', '2026-09-24T00:00:00.000Z')).toBe('Renews monthly on the 24th.');
+  it('formats a monthly renewal with an ordinal day and the amount', () => {
+    expect(formatRenewalLine('monthly', '2026-09-24T00:00:00.000Z', 53100, 'INR')).toBe(
+      'Renews monthly on the 24th at ₹531.'
+    );
   });
 
   it('formats an ordinal correctly for 1st, 2nd, 3rd and the 11-13 exception', () => {
-    expect(formatRenewalLine('monthly', '2026-09-01T00:00:00.000Z')).toContain('1st');
-    expect(formatRenewalLine('monthly', '2026-09-02T00:00:00.000Z')).toContain('2nd');
-    expect(formatRenewalLine('monthly', '2026-09-03T00:00:00.000Z')).toContain('3rd');
-    expect(formatRenewalLine('monthly', '2026-09-11T00:00:00.000Z')).toContain('11th');
-    expect(formatRenewalLine('monthly', '2026-09-12T00:00:00.000Z')).toContain('12th');
-    expect(formatRenewalLine('monthly', '2026-09-13T00:00:00.000Z')).toContain('13th');
+    expect(formatRenewalLine('monthly', '2026-09-01T00:00:00.000Z', 53100, 'INR')).toContain('1st');
+    expect(formatRenewalLine('monthly', '2026-09-02T00:00:00.000Z', 53100, 'INR')).toContain('2nd');
+    expect(formatRenewalLine('monthly', '2026-09-03T00:00:00.000Z', 53100, 'INR')).toContain('3rd');
+    expect(formatRenewalLine('monthly', '2026-09-11T00:00:00.000Z', 53100, 'INR')).toContain('11th');
+    expect(formatRenewalLine('monthly', '2026-09-12T00:00:00.000Z', 53100, 'INR')).toContain('12th');
+    expect(formatRenewalLine('monthly', '2026-09-13T00:00:00.000Z', 53100, 'INR')).toContain('13th');
   });
 
-  it('formats an annual renewal with the full date', () => {
-    expect(formatRenewalLine('annual', '2027-09-24T00:00:00.000Z')).toBe('Renews yearly on September 24, 2027.');
+  it('formats an annual renewal with the full date and the amount', () => {
+    expect(formatRenewalLine('annual', '2027-09-24T00:00:00.000Z', 531000, 'INR')).toBe(
+      'Renews yearly on September 24, 2027 at ₹5,310.'
+    );
+  });
+
+  it('formats a non-round amount with paise shown', () => {
+    expect(formatRenewalLine('monthly', '2026-09-24T00:00:00.000Z', 53182, 'INR')).toBe(
+      'Renews monthly on the 24th at ₹531.82.'
+    );
   });
 
   it('returns an empty string with no interval or no date', () => {
-    expect(formatRenewalLine(null, '2026-09-24T00:00:00.000Z')).toBe('');
-    expect(formatRenewalLine('monthly', null)).toBe('');
+    expect(formatRenewalLine(null, '2026-09-24T00:00:00.000Z', 53100, 'INR')).toBe('');
+    expect(formatRenewalLine('monthly', null, 53100, 'INR')).toBe('');
   });
 });
