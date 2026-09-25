@@ -539,3 +539,45 @@ export interface StorySession {
   enableReferenceImages?: boolean;
   episodeContext?: EpisodeSessionContext;
 }
+
+/** The storyline metadata half of a successful `loadStorylineWithBeats` result. */
+export interface LoadedStorylineMeta {
+  id: string;
+  story_id: string;
+  title: string;
+  beat_count: number;
+  cover_image_url: string | null;
+  is_vertical_story: boolean;
+  aspect_ratio: string;
+  author_name: string | null;
+  is_public: boolean;
+  created_at: string;
+  source_updated_at: string;
+  story_transition: StoryTransitionSettings;
+}
+
+/**
+ * Payments Phase 3, Unit B (docs/payments/phase-3-plan.md §5, B4/B5): what
+ * `loadStorylineWithBeats` (app/actions/exploration.ts) resolves to. A watch-quota refusal is
+ * returned as **data**, never thrown -- a production build redacts a thrown server action's
+ * message to a generic string plus a digest, so a marker matched on `Error.message` works only on
+ * a local dev server and silently fails on every deployed environment, the Vercel preview
+ * included (GOTCHAS.md, "Browser callers get gateway failures as data"). Silently, because the
+ * caller's generic catch keeps a cached copy on screen -- so a refused reader would still be shown
+ * the story.
+ *
+ * Genuine failures (not authenticated, storyline not found, a network fault) still throw, and must:
+ * the caller's cached-copy fallback is the right behaviour for those and the wrong behaviour for a
+ * refusal, which is precisely why the two cannot share a channel.
+ *
+ * Lives here rather than in the `'use server'` module because a client component needs it
+ * (CLAUDE.md, "Put shared constants and types in a plain module").
+ */
+export type LoadStorylineWithBeatsResult =
+  | {
+      status: 'ok';
+      storyline: LoadedStorylineMeta;
+      beats: StoryBeat[];
+      choices: { fromBeat: number; optionLabel: string }[];
+    }
+  | { status: 'watch_quota_exhausted' };

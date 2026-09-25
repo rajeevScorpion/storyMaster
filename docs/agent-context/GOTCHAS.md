@@ -79,6 +79,25 @@ packaging.
 `EBADENGINE` warning and no observed runtime failure, but a fresh machine should install **Node 22.13+ or 24**
 and sidestep the question.
 
+### Cross-origin isolation blocks Razorpay Checkout — the wallet is exempt
+
+Every route sends `Cross-Origin-Embedder-Policy: credentialless` and `Cross-Origin-Opener-Policy: same-origin`
+so ffmpeg.wasm video export gets `SharedArrayBuffer`. Under COEP, Chrome and Firefox refuse any cross-origin
+frame that doesn't send COEP itself, and Razorpay's checkout frame doesn't. The symptom is a Razorpay window
+reading "api.razorpay.com refused to connect", `net::ERR_BLOCKED_BY_RESPONSE` on `api.razorpay.com/v1/checkout/public`,
+and nothing in the page console. Checkout was blocked like this from April to 2026-09-17, production included.
+
+**The fix has three parts; keep all three:**
+- `next.config.ts` leaves `/wallet` out of the header rule. The pattern must match
+  `lib/navigation/cross-origin-isolation.shared.ts`.
+- Headers belong to the document, so a client-side hop into or out of the wallet keeps the wrong ones. A boundary
+  component in `Providers` reloads when that happens.
+- That reload would drop an in-memory story session, so story surfaces open the wallet in a **new tab** (the
+  account menu's `openWalletInNewTab`, the "Open Wallet" error action, and StoryScreen's own links).
+
+Any new third-party frame (another payment provider, an embed) hits the same wall on isolated routes. The e2e
+smoke suite checks both sides of the boundary.
+
 ---
 
 ## Next.js server/client boundary
@@ -505,6 +524,17 @@ Related traps from the same build:
   `snapshot.entitlementPlanKey` is what feature gates read. Resolution is promote-only
   (`max(billing, override)`). A promoted user still pays catalog price and can still hit
   `insufficient_balance`.
+- **Every billing lookup that reaches across a user's rows must be scoped by `provider_mode`.** Test and live
+  Razorpay data share the same tables. 124's checkout RPC matched an existing subscription on
+  `(user_id, provider)` alone, so a tester's test-mode subscription refused their own first live purchase
+  with `subscription_exists` — the people who test are the people who buy first. Migration 130 scopes it.
+  `provider_mode` is on `billing_orders` and `billing_subscriptions`; treat an unscoped one as a bug.
+- **A `payment.dispute.closed` event carries no money outcome — never collapse it into won or lost.** Razorpay
+  debits the merchant *only* when a dispute is lost, and `closed` normally arrives **after** the `won`/`lost`
+  event that settled it. Treating all `payment.dispute.*` alike left won disputes marked `disputed` with a
+  `pending` reversal row for good, in a record kept eight years. Read the outcome from the dispute entity's
+  own `status` (`lib/billing/dispute-status.shared.ts`), and remember webhooks retry out of order: a
+  still-`pending` event must never overwrite a settlement already recorded.
 
 ---
 

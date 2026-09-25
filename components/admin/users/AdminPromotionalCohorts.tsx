@@ -31,6 +31,7 @@ import { formatCoins, formatDate, formatDateTime } from './AdminUserDirectory';
 const PLAN_OPTIONS = [
   { value: 'all', label: 'All plans' },
   { value: 'free', label: 'Free' },
+  { value: 'audience', label: 'Audience' },
   { value: 'plus', label: 'Plus' },
   { value: 'studio', label: 'Studio' },
 ];

@@ -27,6 +27,7 @@ const EXPECTED_SETTINGS_HREFS = [
   '/admin/settings/video-export',
   '/admin/settings/generation',
   '/admin/settings/pages',
+  '/admin/settings/billing-operations',
 ];
 
 const EXPECTED_PRICING_HREFS = [
@@ -34,9 +35,12 @@ const EXPECTED_PRICING_HREFS = [
   '/admin/pricing/plans',
   '/admin/pricing/top-up-packs',
   '/admin/pricing/promotions',
+  '/admin/pricing/tax-rules',
   '/admin/pricing/action-costs',
   '/admin/pricing/runtime-controls',
   '/admin/pricing/recovery-tools',
+  '/admin/pricing/payments',
+  '/admin/pricing/billing-incidents',
   '/admin/pricing/audit',
 ];
 
@@ -147,6 +151,13 @@ describe('admin nav config', () => {
     const childItems = authors?.childGroups?.flatMap((group) => group.items) ?? [];
     expect(childItems.find((item) => item.id === 'review-queue')?.href).toBe('/admin/authors');
     expect(childItems.find((item) => item.id === 'reviewers')?.href).toBe('/admin/authors/reviewers');
+  });
+
+  it('places billing incidents after recovery tools and before the audit history', () => {
+    const ids = PRICING_NAV_ITEMS.map((item) => item.id);
+    expect(ids.indexOf('billing-incidents')).toBeGreaterThan(ids.indexOf('recovery-tools'));
+    expect(ids.indexOf('billing-incidents')).toBeLessThan(ids.indexOf('audit'));
+    expect(findPricingNavItem('billing-incidents')?.href).toBe('/admin/pricing/billing-incidents');
   });
 
   it('resolves items by id', () => {

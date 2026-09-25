@@ -73,6 +73,7 @@ export function buildPricingRuntimeControls(
     routingProviderIn: getProviderControl(rows, 'pricing_routing_provider_in'),
     routingProviderRow: getProviderControl(rows, 'pricing_routing_provider_row'),
     indiaOnlyBetaEnabled: getBooleanControl(rows, 'pricing_india_only_beta_enabled'),
+    freeDailyWatchQuota: getIntegerControl(rows, 'pricing_free_daily_watch_quota'),
   };
 }
 
@@ -173,6 +174,8 @@ function buildEffectivePricingSnapshotWithControls(
     canAccessDownloads: Boolean(selectedPlan.feature_flags_json?.canAccessDownloads ?? false),
     canAccessUnbrandedExports: Boolean(selectedPlan.feature_flags_json?.canAccessUnbrandedExports ?? false),
     creatorControls: Boolean(selectedPlan.feature_flags_json?.creatorControls ?? false),
+    // Defaults true, not false -- see PricingPlanFeatureFlags.unlimitedWatching.
+    unlimitedWatching: Boolean(selectedPlan.feature_flags_json?.unlimitedWatching ?? true),
     videoExportPreset: normalizeVideoExportPreset(selectedPlan.feature_flags_json?.videoExportPreset),
     availablePromoBeats: walletAvailability.promo,
     availableSubscriptionBeats: walletAvailability.subscription,
@@ -210,6 +213,9 @@ function buildFallbackFreeSnapshot(
     canAccessDownloads: false,
     canAccessUnbrandedExports: false,
     creatorControls: false,
+    // This is the degraded-pricing-system fallback (no resolvable plan/version), not a real
+    // Free plan row -- still true, same reasoning as everywhere else this flag appears.
+    unlimitedWatching: true,
     videoExportPreset: normalizeVideoExportPreset(null),
     availablePromoBeats: 0,
     availableSubscriptionBeats: 0,
@@ -343,7 +349,11 @@ function selectEntitledSubscription(
   return sorted.find((subscription) => isSubscriptionEntitled(subscription, now)) ?? null;
 }
 
-function isSubscriptionEntitled(
+/**
+ * `authenticated` is Razorpay's pre-first-charge subscription state (e.g. UPI Autopay/eNACH mandate set up,
+ * no money moved yet). Exported for lib/pricing/snapshot.test.ts.
+ */
+export function isSubscriptionEntitled(
   subscription: DbBillingSubscription,
   now: Date
 ): boolean {
@@ -356,6 +366,10 @@ function isSubscriptionEntitled(
     return false;
   }
 
+  if (normalizedStatus === 'authenticated' && !subscription.first_charge_confirmed_at) {
+    return false;
+  }
+
   if (!subscription.current_period_end) {
     return true;
   }
@@ -363,12 +377,17 @@ function isSubscriptionEntitled(
   return new Date(subscription.current_period_end).getTime() > now.getTime();
 }
 
-function isSubscriptionInGracePeriod(
+/** Grace only ever follows a confirmed first charge — an unconfirmed `pending`/`halted` subscription never had money move. */
+export function isSubscriptionInGracePeriod(
   subscription: DbBillingSubscription,
   now: Date
 ): boolean {
   const normalizedStatus = subscription.status.trim().toLowerCase();
   if (!GRACE_PERIOD_SUBSCRIPTION_STATUSES.has(normalizedStatus)) {
+    return false;
+  }
+
+  if (!subscription.first_charge_confirmed_at) {
     return false;
   }
 

@@ -9,13 +9,21 @@ import { PLAN_KEYS, type PlanKey } from '@/lib/types/pricing';
  *
  * Billing truth stays on `snapshot.planKey`; anything that reports what a user
  * pays for (wallet page, plan offers, admin directory) must keep reading that.
+ *
+ * `free < audience < plus < studio` is safe only while Plus stays a superset of
+ * Audience on every axis. Audience's one advantage over Free is unlimited
+ * watching, and Plus has that too, so the promote-only rule below behaves
+ * correctly at every pair. The moment a capability belongs to Audience that
+ * Plus lacks, this scale stops being a scale — capabilities must keep being
+ * read from the plan's feature flags, never derived from this rank.
  */
 
 /** Ascending. A higher rank is a superset of every rank below it. */
 const PLAN_TIER_RANK: Record<PlanKey, number> = {
   free: 0,
-  plus: 1,
-  studio: 2,
+  audience: 1,
+  plus: 2,
+  studio: 3,
 };
 
 export function isPlanKey(value: unknown): value is PlanKey {

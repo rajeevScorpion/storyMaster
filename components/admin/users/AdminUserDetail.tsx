@@ -1,9 +1,11 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   Activity,
+  AlertTriangle,
   ArrowLeft,
   Ban,
   BookOpen,
@@ -11,24 +13,75 @@ import {
   CircleDollarSign,
   Clock3,
   Coins,
+  CreditCard,
+  Download,
+  Eye,
   ExternalLink,
+  FileText,
   Film,
   Gift,
   GitBranch,
+  Landmark,
   Loader2,
+  Mail,
+  MoreVertical,
+  RefreshCw,
+  Repeat,
   RotateCcw,
+  RotateCw,
+  Send,
   ShieldAlert,
+  ShoppingCart,
+  Undo2,
   WalletCards,
+  Webhook,
+  XCircle,
 } from 'lucide-react';
 import {
   grantAdminUserCoins,
   updateAdminUserModeration,
 } from '@/app/actions/admin-users';
-import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import {
+  cancelBillingSubscriptionAtCycleEndSettled,
+  refundBillingPaymentSettled,
+  reprocessBillingWebhookEventByIdSettled,
+  resyncBillingSubscriptionFromProviderSettled,
+  resyncBillingTopupFromProviderSettled,
+} from '@/app/actions/admin-billing-ui-actions';
+import {
+  resendBillingDocumentSettled,
+  retryBillingJobSettled,
+} from '@/app/actions/admin-billing-jobs';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { isCurrentCycleSubscriptionPayment } from '@/lib/billing/subscription-refund-end.shared';
+import { isOutsideRefundWindow } from '@/lib/billing/refund-eligibility.shared';
+import RowActionsMenu, { type RowAction } from '@/components/ui/RowActionsMenu';
+import { formatCurrencyMinor } from '@/lib/billing/wallet-tax.shared';
+import {
+  formatMoneyMinorForConfirmation,
+  matchTopupGrantForRefund,
+  unwrapAdminBillingActionResult as unwrap,
+} from '@/lib/admin/billing-admin-ui.shared';
+import { paginateAdminTableRows } from '@/lib/admin/table-pagination.shared';
+import {
+  describeBillingEmailStatus,
+  describeBillingJobKind,
+  describeBillingSectionState,
   type AdminAccountStatus,
+  type AdminBillingDocument,
+  type AdminBillingNotificationJob,
+  type AdminBillingOrder,
+  type AdminBillingPayment,
+  type AdminBillingProfile,
+  type AdminBillingRefund,
+  beatsToCoins,
+  type AdminBillingSectionKey,
+  type AdminBillingSectionStatus,
+  type AdminBillingSubscription,
+  type AdminBillingWebhookEvent,
   type AdminUserDetailData,
 } from '@/lib/admin/user-management.shared';
+import type { AdminWatchQuotaWhy } from '@/lib/pricing/watch-quota-admin.shared';
 import UserAvatar from './UserAvatar';
 import {
   StatusBadge,
@@ -39,12 +92,42 @@ import {
 
 type ModerationMode = 'suspend' | 'block' | 'activate';
 
+const JUMP_LINKS: { href: string; label: string }[] = [
+  { href: '#account', label: 'Account & coins' },
+  { href: '#activity', label: 'Activity' },
+  { href: '#stories', label: 'Stories & reels' },
+  { href: '#watch-quota', label: 'Watch quota' },
+  { href: '#billing', label: 'Billing' },
+];
+
+/** One dialog state doubles for all five Unit C actions -- ConfirmDialog is generic enough that the
+ * only per-kind differences are the copy and whether a reason/request key applies (refund, cancel). */
+type BillingDialogState =
+  | { kind: 'refund'; payment: AdminBillingPayment }
+  | { kind: 'cancel'; subscription: AdminBillingSubscription }
+  | { kind: 'resyncSubscription'; subscription: AdminBillingSubscription }
+  | { kind: 'resyncTopup'; order: AdminBillingOrder }
+  | { kind: 'reprocess'; event: AdminBillingWebhookEvent }
+  | { kind: 'retryJob'; job: AdminBillingNotificationJob }
+  | { kind: 'resendDocument'; document: AdminBillingDocument };
+
 export default function AdminUserDetail({
   initialData,
+  billingActionsEnabled,
 }: {
   initialData: AdminUserDetailData;
+  billingActionsEnabled: boolean;
 }) {
+  const router = useRouter();
   const [data, setData] = useState(initialData);
+  // The moderation/grant flows below update `data` directly from their own action's return value
+  // (the full detail), so they never touch this. The billing actions' server responses are narrow
+  // (a refund amount, a resync count) -- not the full record -- so those instead call
+  // router.refresh(). A useState's initial value is only read once at mount, so without this effect
+  // a refresh would re-run the server component but leave this row data stale on screen.
+  useEffect(() => {
+    setData(initialData);
+  }, [initialData]);
   const [moderationMode, setModerationMode] = useState<ModerationMode | null>(null);
   const [moderationReason, setModerationReason] = useState('');
   const [suspendedUntil, setSuspendedUntil] = useState(defaultSuspensionEnd);
@@ -58,6 +141,15 @@ export default function AdminUserDetail({
   const [confirmGrant, setConfirmGrant] = useState(false);
   const [grantBusy, setGrantBusy] = useState(false);
 
+  const [billingDialog, setBillingDialog] = useState<BillingDialogState | null>(null);
+  const [billingRequestKey, setBillingRequestKey] = useState('');
+  const [billingReason, setBillingReason] = useState('');
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [billingDialogError, setBillingDialogError] = useState<string | null>(null);
+  // Decision R1 (docs/payments/phase-7-plan.md §1, §8 B1): ticked explicitly for a refund outside
+  // the 7-day window, and reset on every dialog open/close so it never survives into a later action.
+  const [refundOutsideWindowConfirmed, setRefundOutsideWindowConfirmed] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const user = data.user;
@@ -65,6 +157,113 @@ export default function AdminUserDetail({
   const projectedBalance = Number.isFinite(parsedGrantCoins)
     ? user.availableCoins + parsedGrantCoins
     : user.availableCoins;
+
+  function openBillingDialog(dialog: BillingDialogState) {
+    setBillingDialog(dialog);
+    // Generated once per open, then reused for every retry of this same dialog -- a double click or
+    // a retry after a transient failure replays the same attempt instead of refunding/cancelling
+    // twice. Opening the dialog again (even for the same row) gets a fresh key.
+    setBillingRequestKey(`manual:${crypto.randomUUID()}`);
+    setBillingReason('');
+    setBillingDialogError(null);
+    setRefundOutsideWindowConfirmed(false);
+  }
+
+  function closeBillingDialog() {
+    if (billingBusy) return;
+    setBillingDialog(null);
+    setBillingRequestKey('');
+    setBillingReason('');
+    setBillingDialogError(null);
+    setRefundOutsideWindowConfirmed(false);
+  }
+
+  async function executeBillingDialog() {
+    if (!billingDialog) return;
+    setBillingBusy(true);
+    setBillingDialogError(null);
+    try {
+      let successMessage: string;
+      switch (billingDialog.kind) {
+        case 'refund': {
+          const payment = billingDialog.payment;
+          const result = unwrap(await refundBillingPaymentSettled({
+            paymentId: payment.id,
+            reason: billingReason,
+            requestKey: billingRequestKey,
+            confirmOutsideWindow: refundOutsideWindowConfirmed,
+          }));
+          const amount = formatMoneyMinorForConfirmation(payment.currencyCode, result.refundedAmountMinor);
+          // Decision 15: a full refund of the current cycle ends the subscription -- separate from
+          // whether the refund itself succeeded, so a cancel failure here is never reported as the
+          // refund failing.
+          const subscriptionNote = result.subscriptionEnded
+            ? ' The subscription was also ended immediately.'
+            : result.subscriptionEndError
+              ? ' Ending the subscription failed -- cancel it manually.'
+              : result.subscriptionEndPending
+                ? ' Razorpay has the refund as pending; the subscription ends when it confirms.'
+                : '';
+          successMessage = (result.alreadyApplied
+            ? `This refund had already been applied -- no duplicate refund was issued (${amount} · ${formatCoins(beatsToCoins(result.beatsClawedBack))} coins clawed back).`
+            : `Refunded ${amount} · ${formatCoins(beatsToCoins(result.beatsClawedBack))} coins clawed back.`) + subscriptionNote;
+          break;
+        }
+        case 'cancel': {
+          const result = unwrap(await cancelBillingSubscriptionAtCycleEndSettled({
+            subscriptionId: billingDialog.subscription.id,
+            reason: billingReason,
+            requestKey: billingRequestKey,
+          }));
+          successMessage = result.alreadyApplied
+            ? 'This cancellation had already been applied.'
+            : `This subscription will stop renewing at the end of the current cycle (status: ${result.status}).`;
+          break;
+        }
+        case 'resyncSubscription': {
+          const result = unwrap(await resyncBillingSubscriptionFromProviderSettled({
+            providerSubscriptionId: billingDialog.subscription.providerSubscriptionId ?? '',
+          }));
+          successMessage = `Re-synced from Razorpay -- status: ${result.subscriptionStatus}${
+            result.grantedCoins > 0 ? ` · ${formatCoins(result.grantedCoins)} coins granted` : ''
+          }.`;
+          break;
+        }
+        case 'resyncTopup': {
+          const result = unwrap(await resyncBillingTopupFromProviderSettled({ billingOrderId: billingDialog.order.id }));
+          successMessage = result.grantedCoins > 0
+            ? `Re-synced from Razorpay -- ${formatCoins(result.grantedCoins)} coins granted.`
+            : 'Re-synced from Razorpay -- nothing new to grant.';
+          break;
+        }
+        case 'reprocess': {
+          const result = unwrap(await reprocessBillingWebhookEventByIdSettled({ eventId: billingDialog.event.id }));
+          successMessage = `Reprocessed -- status: ${result.status}${result.outcome ? ` · outcome: ${result.outcome}` : ''}.`;
+          break;
+        }
+        case 'retryJob': {
+          unwrap(await retryBillingJobSettled({ jobId: billingDialog.job.id }));
+          successMessage = 'The billing email job was reset to pending and the worker was kicked.';
+          break;
+        }
+        case 'resendDocument': {
+          unwrap(await resendBillingDocumentSettled({ documentId: billingDialog.document.id }));
+          successMessage = 'A resend of this document was queued.';
+          break;
+        }
+      }
+      setError(null);
+      setNotice(successMessage);
+      setBillingDialog(null);
+      setBillingRequestKey('');
+      setBillingReason('');
+      router.refresh();
+    } catch (actionError) {
+      setBillingDialogError(actionError instanceof Error ? actionError.message : 'This action failed.');
+    } finally {
+      setBillingBusy(false);
+    }
+  }
 
   const moderationTarget = useMemo((): {
     status: AdminAccountStatus;
@@ -150,6 +349,101 @@ export default function AdminUserDetail({
     }
   }
 
+  const billingDialogMeta = useMemo(() => {
+    if (!billingDialog) return null;
+    if (billingDialog.kind === 'refund') {
+      const payment = billingDialog.payment;
+      const grantMatch = matchTopupGrantForRefund(
+        { kind: payment.kind, billingOrderId: payment.billingOrderId },
+        data.walletActivity
+      );
+      // Decision R1: past 7 days from capture, the dialog must show the warning and require an
+      // explicit tick before Confirm is enabled -- see the ConfirmDialog usage below.
+      const outsideRefundWindow = isOutsideRefundWindow(payment.capturedAt, new Date());
+      return {
+        title: 'Refund payment',
+        tone: 'danger' as const,
+        confirmLabel: 'Refund',
+        requiresReason: true,
+        outsideRefundWindow,
+        lines: [
+          `Refunding ${formatMoneyMinorForConfirmation(payment.currencyCode, payment.grossMinor)} in full -- this action only issues full refunds.`,
+          grantMatch
+            ? `${formatCoins(grantMatch.remainingCoins)} of ${formatCoins(grantMatch.totalCoins)} coins from this purchase are still unspent -- ${formatCoins(grantMatch.remainingCoins)} will be removed. Coins already spent are not recoverable.`
+            : "This purchase's unspent coins will be removed first; coins already spent are not recoverable.",
+          "Refused if too much of this purchase's coins have already been spent.",
+          // Decision 15: only a refund of the cycle presently paid for ends the subscription.
+          ...(isCurrentCycleSubscriptionPayment({ kind: payment.kind, cycleEnd: payment.cycleEnd })
+            ? ['This also ends the subscription immediately.']
+            : []),
+        ],
+      };
+    }
+    if (billingDialog.kind === 'cancel') {
+      return {
+        title: 'Cancel at cycle end',
+        tone: 'danger' as const,
+        confirmLabel: 'Cancel at cycle end',
+        requiresReason: true,
+        outsideRefundWindow: false,
+        lines: ['Renewal stops; the user keeps access until the end of the current billing period.'],
+      };
+    }
+    if (billingDialog.kind === 'resyncSubscription') {
+      return {
+        title: 'Re-sync subscription',
+        tone: 'default' as const,
+        confirmLabel: 'Re-sync',
+        requiresReason: false,
+        outsideRefundWindow: false,
+        lines: ["Re-runs the same idempotent reconcile the daily cron uses for this subscription."],
+      };
+    }
+    if (billingDialog.kind === 'resyncTopup') {
+      return {
+        title: 'Re-sync top-up order',
+        tone: 'default' as const,
+        confirmLabel: 'Re-sync',
+        requiresReason: false,
+        outsideRefundWindow: false,
+        lines: ['Re-runs the same idempotent reconcile the daily cron uses for this order.'],
+      };
+    }
+    if (billingDialog.kind === 'reprocess') {
+      return {
+        title: 'Reprocess webhook event',
+        tone: 'default' as const,
+        confirmLabel: 'Reprocess',
+        requiresReason: false,
+        outsideRefundWindow: false,
+        lines: [
+          'Re-runs this webhook event through the same handler live traffic uses.',
+          'Safe to repeat: a payment, grant or refund already recorded is not recorded again. A full refund of a current-cycle subscription payment ends that subscription.',
+        ],
+      };
+    }
+    if (billingDialog.kind === 'retryJob') {
+      return {
+        title: 'Retry billing email',
+        tone: 'default' as const,
+        confirmLabel: 'Retry',
+        requiresReason: false,
+        outsideRefundWindow: false,
+        lines: [
+          `Resets this "${describeBillingJobKind(billingDialog.job.kind)}" job to pending and kicks the worker to run it again now.`,
+        ],
+      };
+    }
+    return {
+      title: 'Resend document email',
+      tone: 'default' as const,
+      outsideRefundWindow: false,
+      confirmLabel: 'Resend',
+      requiresReason: false,
+      lines: ['Queues a fresh email for this document, with the PDF attached again.'],
+    };
+  }, [billingDialog, data.walletActivity]);
+
   return (
     <div className="space-y-6">
       <div>
@@ -185,6 +479,18 @@ export default function AdminUserDetail({
           </Link>
         </div>
       </div>
+
+      <nav aria-label="Jump to section" className="flex flex-wrap gap-2">
+        {JUMP_LINKS.map((link) => (
+          <a
+            key={link.href}
+            href={link.href}
+            className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-neutral-400 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-200"
+          >
+            {link.label}
+          </a>
+        ))}
+      </nav>
 
       {error && (
         <div className="rounded-xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
@@ -232,7 +538,7 @@ export default function AdminUserDetail({
         <StoryMetricCard label="Reels" value={user.reelCount} icon={Film} />
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-2">
+      <section id="account" className="grid scroll-mt-6 gap-4 xl:grid-cols-2">
         <article className="rounded-2xl border border-white/10 bg-white/[0.035] p-5">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -405,7 +711,7 @@ export default function AdminUserDetail({
         </article>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-2">
+      <section id="activity" className="grid scroll-mt-6 gap-4 xl:grid-cols-2">
         <TimelineCard title="Wallet activity" icon={WalletCards}>
           {data.walletActivity.length > 0 ? data.walletActivity.map((item) => (
             <div key={item.id} className="flex items-start justify-between gap-4 border-b border-white/5 py-3 last:border-0">
@@ -436,7 +742,7 @@ export default function AdminUserDetail({
         </TimelineCard>
       </section>
 
-      <TimelineCard title="Recent stories and reels" icon={BookOpen}>
+      <TimelineCard id="stories" title="Recent stories and reels" icon={BookOpen}>
         {data.recentStories.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[680px] text-sm">
@@ -476,6 +782,366 @@ export default function AdminUserDetail({
         ) : <EmptyText>No stories or reels created yet.</EmptyText>}
       </TimelineCard>
 
+      <TimelineCard id="watch-quota" title="Watch quota" icon={Eye}>
+        {data.watchQuota.status === 'unavailable' ? (
+          <EmptyText>
+            <span className="inline-flex items-center gap-1.5 text-amber-400/70">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              {data.watchQuota.unavailableReason === 'pricing_state'
+                ? 'Could not be read -- this account’s pricing state failed to load, so whether a limit applies is unknown. Treat this as a live problem, not a missing migration.'
+                : 'Not available on this environment yet -- the watch-quota migration (129) has not been applied here.'}
+            </span>
+          </EmptyText>
+        ) : (
+          <div className="space-y-4">
+            <p className="rounded-xl border border-white/10 bg-neutral-950/40 p-3 text-sm text-neutral-300">
+              {describeWatchQuotaWhy(data.watchQuota.why)}
+            </p>
+            <p className="text-xs text-neutral-500">
+              Reporting IST day <span className="text-neutral-300">{data.watchQuota.istDay.localDay}</span>
+              {' '}&mdash; rolls over at {formatDateTime(data.watchQuota.istDay.rollsOverAtUtc)}.
+            </p>
+
+            <div>
+              <h3 className="text-xs uppercase tracking-[0.12em] text-neutral-600">Opened today</h3>
+              {data.watchQuota.todaySlots.length > 0 ? (
+                <ul className="mt-2 space-y-1.5">
+                  {data.watchQuota.todaySlots.map((slot) => (
+                    <li key={slot.storylineId} className="flex items-center justify-between gap-4 text-sm">
+                      <span className="truncate text-neutral-300">
+                        {slot.storylineTitle ?? slot.storylineId}
+                      </span>
+                      <span className="shrink-0 text-xs text-neutral-600">
+                        {formatDateTime(slot.createdAt)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-sm text-neutral-600">Nothing opened yet today.</p>
+              )}
+            </div>
+
+            <div>
+              <h3 className="text-xs uppercase tracking-[0.12em] text-neutral-600">
+                Last {data.watchQuota.recentDayCounts.length} IST days
+              </h3>
+              <div className="mt-2 grid grid-cols-7 gap-1.5">
+                {data.watchQuota.recentDayCounts.map((day) => (
+                  <div
+                    key={day.localDay}
+                    className="rounded-lg border border-white/10 bg-neutral-950/40 px-1.5 py-1.5 text-center"
+                  >
+                    <p className="text-[10px] text-neutral-600">{day.localDay.slice(5)}</p>
+                    <p className="text-sm font-medium text-neutral-200">{day.count}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </TimelineCard>
+
+      <div id="billing" className="scroll-mt-6">
+        <h2 className="text-lg font-serif text-neutral-100">Billing</h2>
+        <p className="mt-1 text-sm text-neutral-500">
+          Read-only tables below survive their migration not being applied on this environment yet --
+          a section renders &ldquo;not available&rdquo; rather than breaking the page. Refund, cancel,
+          re-sync and reprocess actions live in each row&apos;s <MoreVertical className="inline h-3.5 w-3.5" /> menu.
+        </p>
+      </div>
+
+      {!billingActionsEnabled && (
+        <div className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/[0.035] px-4 py-3 text-sm text-neutral-400">
+          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-neutral-500" />
+          <p>
+            Admin money actions (refund, cancel, re-sync, reprocess) are switched off. Turn them on at{' '}
+            <Link
+              href="/admin/settings/billing-operations"
+              className="text-emerald-300 underline underline-offset-2 hover:text-emerald-200"
+            >
+              /admin/settings/billing-operations
+            </Link>
+            . The menu items below still show what would be available.
+          </p>
+        </div>
+      )}
+
+      {data.billing.planKeyCheck.mismatched && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>
+            Plan key disagreement: the user directory reports{' '}
+            <span className="font-medium capitalize">{data.billing.planKeyCheck.rpcPlanKey}</span>, but this
+            account&apos;s own subscription records imply{' '}
+            <span className="font-medium capitalize">{data.billing.planKeyCheck.subscriptionPlanKey}</span>.
+            Worth investigating directly rather than assuming either side is right.
+          </p>
+        </div>
+      )}
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <BillingListSection<AdminBillingSubscription>
+          title="Subscription"
+          icon={Repeat}
+          sectionKey="subscriptions"
+          status={data.billing.subscriptions.status}
+          items={data.billing.subscriptions.items}
+          headerCells={['Status', 'Plan', 'Interval', 'Period end', 'Cancel at end', 'Provider', '']}
+          renderRow={(subscription) => {
+            const eligible = subscription.status === 'active' && !subscription.cancelAtPeriodEnd;
+            const actions: RowAction[] = eligible
+              ? [
+                  {
+                    key: 'cancel',
+                    label: 'Cancel at cycle end…',
+                    icon: XCircle,
+                    tone: 'danger',
+                    disabled: !billingActionsEnabled,
+                    onSelect: () => openBillingDialog({ kind: 'cancel', subscription }),
+                  },
+                  {
+                    key: 'resync',
+                    label: 'Re-sync from Razorpay',
+                    icon: RefreshCw,
+                    disabled: !billingActionsEnabled || !subscription.providerSubscriptionId,
+                    onSelect: () => openBillingDialog({ kind: 'resyncSubscription', subscription }),
+                  },
+                ]
+              : [];
+            return (
+              <tr key={subscription.id} className="border-b border-white/5 last:border-0">
+                <td className="py-3 pr-4 capitalize text-neutral-200">{subscription.status}</td>
+                <td className="px-4 py-3 capitalize text-neutral-400">{subscription.planKey ?? '—'}</td>
+                <td className="px-4 py-3 capitalize text-neutral-500">{subscription.billingInterval ?? '—'}</td>
+                <td className="px-4 py-3 text-neutral-500">
+                  {subscription.currentPeriodEnd ? formatDateTime(subscription.currentPeriodEnd) : '—'}
+                </td>
+                <td className="px-4 py-3 text-neutral-500">{subscription.cancelAtPeriodEnd ? 'Yes' : 'No'}</td>
+                <td className="px-4 py-3 text-neutral-500">
+                  {subscription.provider}
+                  {subscription.providerMode ? ` · ${subscription.providerMode}` : ''}
+                </td>
+                <td className="py-3 pl-4 text-right">
+                  <RowActionsMenu ariaLabel={`Billing actions for subscription ${subscription.id}`} actions={actions} />
+                </td>
+              </tr>
+            );
+          }}
+        />
+
+        <BillingListSection<AdminBillingOrder>
+          title="Orders"
+          icon={ShoppingCart}
+          sectionKey="orders"
+          status={data.billing.orders.status}
+          items={data.billing.orders.items}
+          headerCells={['Type', 'Amount', 'Status', 'Provider', 'Created', '']}
+          renderRow={(order) => {
+            const actions: RowAction[] = order.orderType === 'topup_checkout'
+              ? [
+                  {
+                    key: 'resync',
+                    label: 'Re-sync from Razorpay',
+                    icon: RefreshCw,
+                    disabled: !billingActionsEnabled,
+                    onSelect: () => openBillingDialog({ kind: 'resyncTopup', order }),
+                  },
+                ]
+              : [];
+            return (
+              <tr key={order.id} className="border-b border-white/5 last:border-0">
+                <td className="py-3 pr-4 text-neutral-200">{order.orderType.replaceAll('_', ' ')}</td>
+                <td className="px-4 py-3 text-neutral-300">{formatCurrencyMinor(order.currencyCode, order.amountMinor)}</td>
+                <td className="px-4 py-3 capitalize text-neutral-500">{order.status}</td>
+                <td className="px-4 py-3 text-neutral-500">
+                  {order.provider}
+                  {order.providerMode ? ` · ${order.providerMode}` : ''}
+                </td>
+                <td className="px-4 py-3 text-neutral-500">{formatDate(order.createdAt)}</td>
+                <td className="py-3 pl-4 text-right">
+                  <RowActionsMenu ariaLabel={`Billing actions for order ${order.id}`} actions={actions} />
+                </td>
+              </tr>
+            );
+          }}
+        />
+
+        <BillingListSection<AdminBillingPayment>
+          title="Payments"
+          icon={CreditCard}
+          sectionKey="payments"
+          status={data.billing.payments.status}
+          items={data.billing.payments.items}
+          headerCells={['Kind', 'Gross', 'Method', 'Status', 'Captured', '']}
+          renderRow={(payment) => {
+            const actions: RowAction[] = payment.status === 'captured'
+              ? [
+                  {
+                    key: 'refund',
+                    label: 'Refund…',
+                    icon: Undo2,
+                    tone: 'danger',
+                    disabled: !billingActionsEnabled,
+                    onSelect: () => openBillingDialog({ kind: 'refund', payment }),
+                  },
+                ]
+              : [];
+            return (
+              <tr key={payment.id} className="border-b border-white/5 last:border-0">
+                <td className="py-3 pr-4 text-neutral-200">{payment.kind.replaceAll('_', ' ')}</td>
+                <td className="px-4 py-3 text-neutral-300">{formatCurrencyMinor(payment.currencyCode, payment.grossMinor)}</td>
+                <td className="px-4 py-3 capitalize text-neutral-500">{payment.methodCategory ?? 'unknown'}</td>
+                <td className="px-4 py-3 capitalize text-neutral-500">{payment.status}</td>
+                <td className="px-4 py-3 text-neutral-500">
+                  {payment.capturedAt ? formatDate(payment.capturedAt) : '—'}
+                </td>
+                <td className="py-3 pl-4 text-right">
+                  <RowActionsMenu ariaLabel={`Billing actions for payment ${payment.id}`} actions={actions} />
+                </td>
+              </tr>
+            );
+          }}
+        />
+
+        <BillingListSection<AdminBillingRefund>
+          title="Refunds & disputes"
+          icon={Undo2}
+          sectionKey="refunds"
+          status={data.billing.refunds.status}
+          items={data.billing.refunds.items}
+          headerCells={['Type', 'Amount', 'Status', 'Reason', 'Created']}
+          renderRow={(refund) => (
+            <tr key={refund.id} className="border-b border-white/5 last:border-0">
+              <td className="py-3 pr-4 text-neutral-200">{refund.isDispute ? 'Dispute' : 'Refund'}</td>
+              <td className="px-4 py-3 text-neutral-300">{formatCurrencyMinor(refund.currencyCode, refund.amountMinor)}</td>
+              <td className="px-4 py-3 capitalize text-neutral-500">{refund.status}</td>
+              <td className="max-w-[220px] truncate px-4 py-3 text-neutral-500">{refund.reason ?? '—'}</td>
+              <td className="px-4 py-3 text-neutral-500">{formatDate(refund.createdAt)}</td>
+            </tr>
+          )}
+        />
+
+        <BillingListSection<AdminBillingDocument>
+          title="Documents"
+          icon={FileText}
+          sectionKey="documents"
+          status={data.billing.documents.status}
+          items={data.billing.documents.items}
+          headerCells={['Number', 'Type', 'Amount', 'Status', 'Issued', '']}
+          renderRow={(doc) => {
+            // Resend only makes sense for a document that was actually issued -- a void document
+            // has nothing to re-email (plan §10 D: "Resend (each issued document on the page)").
+            const actions: RowAction[] = doc.status === 'issued'
+              ? [
+                  {
+                    key: 'resend',
+                    label: 'Resend email…',
+                    icon: Send,
+                    onSelect: () => openBillingDialog({ kind: 'resendDocument', document: doc }),
+                  },
+                ]
+              : [];
+            return (
+              <tr key={doc.id} className="border-b border-white/5 last:border-0">
+                <td className="py-3 pr-4 text-neutral-200">{doc.documentNumber}</td>
+                <td className="px-4 py-3 capitalize text-neutral-500">{doc.documentType.replaceAll('_', ' ')}</td>
+                <td className="px-4 py-3 text-neutral-300">{formatCurrencyMinor(doc.currencyCode, doc.grossMinor)}</td>
+                <td className="px-4 py-3 capitalize text-neutral-500">{doc.status}</td>
+                <td className="px-4 py-3 text-neutral-500">{formatDate(doc.issuedAt)}</td>
+                <td className="py-3 pl-4 text-right">
+                  <div className="flex items-center justify-end gap-2">
+                    <a
+                      href={`/api/billing/documents/${doc.id}/pdf`}
+                      download
+                      className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-neutral-300 transition-colors hover:border-white/20 hover:bg-white/10 hover:text-neutral-100"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Download
+                    </a>
+                    <RowActionsMenu ariaLabel={`Billing actions for document ${doc.documentNumber}`} actions={actions} />
+                  </div>
+                </td>
+              </tr>
+            );
+          }}
+        />
+
+        <BillingProfileCard status={data.billing.profile.status} profile={data.billing.profile.profile} />
+
+        <BillingListSection<AdminBillingNotificationJob>
+          title="Billing emails"
+          icon={Mail}
+          sectionKey="notificationJobs"
+          status={data.billing.notificationJobs.status}
+          items={data.billing.notificationJobs.items}
+          headerCells={['Kind', 'Status', 'Email', 'Document', 'Error', 'Created', '']}
+          renderRow={(job) => {
+            // Retry only makes sense once a job has actually failed -- a pending/processing/done job
+            // has nothing to retry (plan §10 D: "Retry (failed jobs only)").
+            const actions: RowAction[] = job.status === 'failed'
+              ? [
+                  {
+                    key: 'retry',
+                    label: 'Retry',
+                    icon: RotateCw,
+                    onSelect: () => openBillingDialog({ kind: 'retryJob', job }),
+                  },
+                ]
+              : [];
+            return (
+              <tr key={job.id} className="border-b border-white/5 last:border-0">
+                <td className="py-3 pr-4 text-neutral-200">{describeBillingJobKind(job.kind)}</td>
+                <td className="px-4 py-3 capitalize text-neutral-500">{job.status}</td>
+                <td className="px-4 py-3 text-neutral-500">{describeBillingEmailStatus(job.emailStatus)}</td>
+                <td className="px-4 py-3 capitalize text-neutral-500">{job.documentOutcome?.replaceAll('_', ' ') ?? '—'}</td>
+                <td className="max-w-[200px] truncate px-4 py-3 text-neutral-500" title={job.lastError ?? undefined}>
+                  {job.lastError ?? '—'}
+                </td>
+                <td className="px-4 py-3 text-neutral-500">{formatDateTime(job.createdAt)}</td>
+                <td className="py-3 pl-4 text-right">
+                  <RowActionsMenu ariaLabel={`Billing actions for job ${job.id}`} actions={actions} />
+                </td>
+              </tr>
+            );
+          }}
+        />
+
+        <BillingListSection<AdminBillingWebhookEvent>
+          title="Webhook events"
+          icon={Webhook}
+          sectionKey="webhookEvents"
+          status={data.billing.webhookEvents.status}
+          items={data.billing.webhookEvents.items}
+          headerCells={['Event', 'Status', 'Outcome', 'Attempts', 'Received', '']}
+          renderRow={(event) => {
+            // Offered on every event, not only failed ones: processing is idempotent, and re-running a
+            // processed event is how a rule added after it arrived (e.g. decision 15) gets applied.
+            const actions: RowAction[] = [
+              {
+                key: 'reprocess',
+                label: event.status === 'failed' || event.status === 'received' ? 'Reprocess' : 'Re-run',
+                icon: RotateCw,
+                disabled: !billingActionsEnabled,
+                onSelect: () => openBillingDialog({ kind: 'reprocess', event }),
+              },
+            ];
+            return (
+              <tr key={event.id} className="border-b border-white/5 last:border-0">
+                <td className="max-w-[220px] truncate py-3 pr-4 text-neutral-200">{event.eventType}</td>
+                <td className="px-4 py-3 capitalize text-neutral-500">{event.status}</td>
+                <td className="px-4 py-3 capitalize text-neutral-500">{event.outcome ?? '—'}</td>
+                <td className="px-4 py-3 text-neutral-500">{event.attemptCount ?? '—'}</td>
+                <td className="px-4 py-3 text-neutral-500">{formatDateTime(event.receivedAt)}</td>
+                <td className="py-3 pl-4 text-right">
+                  <RowActionsMenu ariaLabel={`Billing actions for webhook event ${event.id}`} actions={actions} />
+                </td>
+              </tr>
+            );
+          }}
+        />
+      </section>
+
       <ConfirmDialog
         open={confirmModeration}
         title={moderationTarget?.label ?? 'Update account'}
@@ -504,6 +1170,58 @@ export default function AdminUserDetail({
           setGrantRequestKey('');
         }}
         onConfirm={executeCoinGrant}
+      />
+
+      <ConfirmDialog
+        open={billingDialog !== null}
+        title={billingDialogMeta?.title ?? 'Confirm'}
+        tone={billingDialogMeta?.tone ?? 'default'}
+        confirmLabel={billingDialogMeta?.confirmLabel ?? 'Confirm'}
+        busy={billingBusy}
+        confirmDisabled={
+          (billingDialogMeta?.requiresReason
+            ? billingReason.trim().length < 3 || billingReason.trim().length > 500
+            : false) || Boolean(billingDialogMeta?.outsideRefundWindow && !refundOutsideWindowConfirmed)
+        }
+        onCancel={closeBillingDialog}
+        onConfirm={executeBillingDialog}
+        message={
+          <div className="space-y-3">
+            {billingDialogMeta?.lines.map((line) => <p key={line}>{line}</p>)}
+            {billingDialogMeta?.outsideRefundWindow && (
+              <div className="space-y-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+                <p>This payment is outside the 7-day refund window. Confirm to refund anyway.</p>
+                <label className="flex cursor-pointer items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={refundOutsideWindowConfirmed}
+                    onChange={(event) => setRefundOutsideWindowConfirmed(event.target.checked)}
+                    className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-amber-500"
+                  />
+                  <span>I understand -- refund anyway.</span>
+                </label>
+              </div>
+            )}
+            {billingDialogMeta?.requiresReason && (
+              <label className="block">
+                <span className="mb-1.5 block text-xs uppercase tracking-[0.12em] text-neutral-500">Reason</span>
+                <textarea
+                  value={billingReason}
+                  onChange={(event) => setBillingReason(event.target.value)}
+                  rows={3}
+                  maxLength={500}
+                  placeholder="Required for the audit trail"
+                  className={`${INPUT_CLASS} resize-none`}
+                />
+              </label>
+            )}
+            {billingDialogError && (
+              <p className="rounded-lg border border-rose-500/25 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                {billingDialogError}
+              </p>
+            )}
+          </div>
+        }
       />
     </div>
   );
@@ -587,14 +1305,16 @@ function ActionButton({
 function TimelineCard({
   title,
   icon: Icon,
+  id,
   children,
 }: {
   title: string;
   icon: typeof BookOpen;
+  id?: string;
   children: React.ReactNode;
 }) {
   return (
-    <article className="rounded-2xl border border-white/10 bg-white/[0.035] p-5">
+    <article id={id} className={`rounded-2xl border border-white/10 bg-white/[0.035] p-5${id ? ' scroll-mt-6' : ''}`}>
       <div className="flex items-center gap-2">
         <Icon className="h-4 w-4 text-emerald-300" />
         <h2 className="text-lg font-serif text-neutral-100">{title}</h2>
@@ -606,6 +1326,181 @@ function TimelineCard({
 
 function EmptyText({ children }: { children: React.ReactNode }) {
   return <p className="py-8 text-center text-sm text-neutral-600">{children}</p>;
+}
+
+function BillingSectionEmptyState({
+  state,
+}: {
+  state: ReturnType<typeof describeBillingSectionState>;
+}) {
+  if (state.kind === 'unavailable') {
+    return (
+      <EmptyText>
+        <span className="inline-flex items-center gap-1.5 text-amber-400/70">
+          <AlertTriangle className="h-3.5 w-3.5" />
+          {state.message}
+        </span>
+      </EmptyText>
+    );
+  }
+  return <EmptyText>{state.message}</EmptyText>;
+}
+
+function BillingListSection<T>({
+  title,
+  icon: Icon,
+  sectionKey,
+  status,
+  items,
+  headerCells,
+  renderRow,
+}: {
+  title: string;
+  icon: typeof WalletCards;
+  sectionKey: AdminBillingSectionKey;
+  status: AdminBillingSectionStatus;
+  items: T[];
+  headerCells: string[];
+  renderRow: (item: T) => React.ReactNode;
+}) {
+  const state = describeBillingSectionState(sectionKey, status, items.length);
+  const [page, setPage] = useState(1);
+  // A refund/cancel/re-sync/reprocess action calls router.refresh() rather than patching this
+  // row in place, which hands `items` down as a new array -- reset to page 1 so a stale page
+  // number from a longer previous result set never renders an empty table. Adjusted during render
+  // (React's documented pattern for "state that depends on a prop"), not an effect -- an effect's
+  // setState here is exactly what react-hooks/set-state-in-effect rejects.
+  const [prevItems, setPrevItems] = useState(items);
+  if (items !== prevItems) {
+    setPrevItems(items);
+    setPage(1);
+  }
+  const paged = paginateAdminTableRows(items, page);
+
+  return (
+    <TimelineCard title={title} icon={Icon}>
+      {state.kind === 'has_data' ? (
+        <>
+          <div className="admin-table-scroll max-h-[420px] overflow-auto">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead>
+                <tr className="sticky top-0 z-10 border-b border-white/10 bg-neutral-950 text-left text-xs uppercase tracking-[0.12em] text-neutral-600">
+                  {headerCells.map((cell, index) => (
+                    <th key={cell} className={index === 0 ? 'py-3 pr-4 font-medium' : 'px-4 py-3 font-medium'}>
+                      {cell}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>{paged.rows.map(renderRow)}</tbody>
+            </table>
+          </div>
+          <TablePager
+            page={paged.page}
+            pageCount={paged.pageCount}
+            rangeStart={paged.rangeStart}
+            rangeEnd={paged.rangeEnd}
+            totalCount={paged.totalCount}
+            onPageChange={setPage}
+          />
+        </>
+      ) : (
+        <BillingSectionEmptyState state={state} />
+      )}
+    </TimelineCard>
+  );
+}
+
+/** Compact "‹ Prev · 1–10 of 23 · Next ›" footer for a BillingListSection table. Hidden entirely
+ * when everything fits on one page -- pageCount is always >= 1, so this is the only check needed. */
+function TablePager({
+  page,
+  pageCount,
+  rangeStart,
+  rangeEnd,
+  totalCount,
+  onPageChange,
+}: {
+  page: number;
+  pageCount: number;
+  rangeStart: number;
+  rangeEnd: number;
+  totalCount: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (pageCount <= 1) return null;
+  const pagerButtonClass = 'rounded-full border border-white/10 bg-white/5 px-3 py-1 text-neutral-400 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-200 disabled:pointer-events-none disabled:opacity-30';
+  return (
+    <div className="mt-3 flex items-center justify-end gap-3 border-t border-white/5 pt-3 text-xs text-neutral-500">
+      <button type="button" disabled={page <= 1} onClick={() => onPageChange(page - 1)} className={pagerButtonClass}>
+        ‹ Prev
+      </button>
+      <span>
+        {rangeStart}–{rangeEnd} of {totalCount}
+      </span>
+      <button
+        type="button"
+        disabled={page >= pageCount}
+        onClick={() => onPageChange(page + 1)}
+        className={pagerButtonClass}
+      >
+        Next ›
+      </button>
+    </div>
+  );
+}
+
+function BillingProfileCard({
+  status,
+  profile,
+}: {
+  status: AdminBillingSectionStatus;
+  profile: AdminBillingProfile | null;
+}) {
+  const state = describeBillingSectionState('profile', status, profile ? 1 : 0);
+  const address = profile
+    ? [profile.addressLine1, profile.addressLine2, profile.city, profile.postalCode, profile.countryCode]
+      .filter(Boolean)
+      .join(', ')
+    : '';
+
+  return (
+    <TimelineCard title="Billing profile" icon={Landmark}>
+      {state.kind === 'has_data' && profile ? (
+        <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+          <ProfileField label="Legal name" value={profile.legalName} />
+          <ProfileField label="Company" value={profile.companyName} />
+          <ProfileField label="Billing email" value={profile.billingEmail} />
+          <ProfileField label="Phone" value={profile.phone} />
+          <ProfileField label="GSTIN" value={profile.gstin} />
+          <ProfileField label="State code" value={profile.stateCode} />
+          <ProfileField label="Address" value={address || null} />
+        </dl>
+      ) : (
+        <BillingSectionEmptyState state={state} />
+      )}
+    </TimelineCard>
+  );
+}
+
+function ProfileField({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div>
+      <dt className="text-xs uppercase tracking-[0.12em] text-neutral-600">{label}</dt>
+      <dd className="mt-1 text-sm text-neutral-300">{value ?? '—'}</dd>
+    </div>
+  );
+}
+
+function describeWatchQuotaWhy(why: AdminWatchQuotaWhy | null): string {
+  if (!why) return '';
+  if (why.reason === 'admin_account') {
+    return 'This is the admin account -- never metered, and no ledger row is ever written for it.';
+  }
+  if (why.reason === 'unlimited_plan') {
+    return `This account's plan (${why.planKey}) grants unlimited watching -- no daily limit applies.`;
+  }
+  return `A daily limit of ${why.limit} applies. Used ${why.used} today; ${why.remaining} remaining.`;
 }
 
 function auditLabel(actionType: string): string {

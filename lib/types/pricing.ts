@@ -3,6 +3,11 @@
 // its type here is erased at build time and safe on either side of the
 // client/server boundary, exactly like every other type in this file.
 import type { AgentReviewerRole } from '@/lib/agentic/reviewers.shared';
+// Payments Phase 2, Unit B2a: the wallet's GST display maths live in wallet-tax.shared.ts (pure,
+// isomorphic) so both the server action and the client wallet import the same arithmetic. Imported
+// (not redeclared) and re-exported below, so there is exactly one definition.
+import type { WalletTaxPreview } from '@/lib/billing/wallet-tax.shared';
+export type { WalletTaxPreview };
 
 export const PRICING_MARKET_KEYS = ['IN', 'ROW'] as const;
 export type PricingMarketKey = (typeof PRICING_MARKET_KEYS)[number];
@@ -12,7 +17,7 @@ export const COINS_PER_BEAT = 10;
 export const BILLING_PROVIDERS = ['stripe', 'razorpay'] as const;
 export type BillingProvider = (typeof BILLING_PROVIDERS)[number];
 
-export const PLAN_KEYS = ['free', 'plus', 'studio'] as const;
+export const PLAN_KEYS = ['free', 'audience', 'plus', 'studio'] as const;
 export type PlanKey = (typeof PLAN_KEYS)[number];
 
 export const BILLING_INTERVALS = ['monthly', 'annual'] as const;
@@ -29,6 +34,45 @@ export type BillingOrderType = (typeof BILLING_ORDER_TYPES)[number];
 
 export const BILLING_WEBHOOK_EVENT_STATUSES = ['received', 'processed', 'failed', 'ignored'] as const;
 export type BillingWebhookEventStatus = (typeof BILLING_WEBHOOK_EVENT_STATUSES)[number];
+
+// Payments Phase 2 (docs/payments/phase-2-plan.md, migration 125): the durable payment/refund/
+// document ledger and its GST rules.
+export const BILLING_TAX_RULE_APPLIES_TO = ['all', 'subscription', 'topup'] as const;
+export type BillingTaxRuleAppliesTo = (typeof BILLING_TAX_RULE_APPLIES_TO)[number];
+
+// Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, migration 138): 'in_export_lut' is a
+// ROW export of services under an LUT, zero-rated.
+export const BILLING_TAX_REGIMES = ['in_gst', 'none', 'in_export_lut'] as const;
+export type BillingTaxRegime = (typeof BILLING_TAX_REGIMES)[number];
+
+export const BILLING_PAYMENT_KINDS = ['topup', 'subscription_first', 'subscription_renewal'] as const;
+export type BillingPaymentKind = (typeof BILLING_PAYMENT_KINDS)[number];
+
+export const BILLING_PAYMENT_STATUSES = ['captured', 'failed', 'refunded', 'partially_refunded', 'disputed'] as const;
+export type BillingPaymentStatus = (typeof BILLING_PAYMENT_STATUSES)[number];
+
+export const BILLING_METHOD_CATEGORIES = [
+  'card', 'upi', 'netbanking', 'wallet', 'emi', 'paylater', 'other', 'unknown',
+] as const;
+export type BillingMethodCategory = (typeof BILLING_METHOD_CATEGORIES)[number];
+
+export const BILLING_REFUND_STATUSES = ['pending', 'processed', 'failed'] as const;
+export type BillingRefundStatus = (typeof BILLING_REFUND_STATUSES)[number];
+
+export const BILLING_REFUND_INITIATORS = ['user', 'admin', 'provider', 'dispute'] as const;
+export type BillingRefundInitiator = (typeof BILLING_REFUND_INITIATORS)[number];
+
+export const BILLING_DOCUMENT_TYPES = ['receipt', 'tax_invoice', 'credit_note'] as const;
+export type BillingDocumentType = (typeof BILLING_DOCUMENT_TYPES)[number];
+
+export const BILLING_DOCUMENT_STATUSES = ['issued', 'void'] as const;
+export type BillingDocumentStatus = (typeof BILLING_DOCUMENT_STATUSES)[number];
+
+export const ACCOUNT_DELETION_ACTORS = ['user', 'admin'] as const;
+export type AccountDeletionActor = (typeof ACCOUNT_DELETION_ACTORS)[number];
+
+export const ACCOUNT_DELETION_STATUSES = ['started', 'completed', 'failed'] as const;
+export type AccountDeletionStatus = (typeof ACCOUNT_DELETION_STATUSES)[number];
 
 export const BEAT_GRANT_SOURCE_TYPES = [
   'subscription',
@@ -119,6 +163,7 @@ export const PRICING_RUNTIME_FLAG_KEYS = [
   'pricing_routing_provider_in',
   'pricing_routing_provider_row',
   'pricing_india_only_beta_enabled',
+  'pricing_free_daily_watch_quota',
 ] as const;
 export type PricingRuntimeFlagKey = (typeof PRICING_RUNTIME_FLAG_KEYS)[number];
 
@@ -241,6 +286,17 @@ export const PRICING_RUNTIME_SETTING_DEFINITIONS: readonly PricingRuntimeSetting
     disabledHelp: 'When this is off, Kissago uses the built-in timeout for temporary coin holds.',
   },
   {
+    key: 'pricing_free_daily_watch_quota',
+    kind: 'integer',
+    defaultEnabled: false,
+    defaultValue: '3',
+    label: 'Free Daily Watch Limit',
+    description: 'Sets how many different stories an account on a watch-limited plan can open in one day.',
+    enabledHelp:
+      'When this is on, Kissago uses the number below as the number of different stories a watch-limited account can open in one day, counted on the Indian calendar day. Re-opening a story already watched that day is always free and never counts again.',
+    disabledHelp: 'When this is off, Kissago uses its built-in daily watch limit.',
+  },
+  {
     key: 'pricing_migration_grant_beats',
     kind: 'integer',
     defaultEnabled: false,
@@ -322,6 +378,13 @@ export interface PricingPlanFeatureFlags {
   canAccessDownloads?: boolean;
   canAccessUnbrandedExports?: boolean;
   creatorControls?: boolean;
+  /**
+   * Payments Phase 3, Unit B (docs/payments/phase-3-plan.md §5, B0). Exempts the plan from the
+   * daily free watch quota (lib/pricing/watch-quota.ts). Unlike every other capability here,
+   * absence must normalize to `true`, not `false` -- see the normalizer in
+   * app/actions/pricing-admin.ts for why.
+   */
+  unlimitedWatching?: boolean;
   videoExportPreset?: Partial<VideoExportPreset> | null;
 }
 
@@ -348,6 +411,14 @@ export interface PricingRuntimeControls {
   routingProviderIn: BillingProvider;
   routingProviderRow: BillingProvider;
   indiaOnlyBetaEnabled: boolean;
+  /**
+   * Payments Phase 3, Unit E: how many DISTINCT storylines an account without the
+   * `unlimitedWatching` capability may open in one IST day. Re-watching one already seen that day
+   * is free and never counts again (owner decision 3), so this is a limit on breadth, not on time
+   * spent. Enforced in lib/pricing/watch-quota.ts; a plan carrying `unlimitedWatching` and any
+   * admin account never reach it.
+   */
+  freeDailyWatchQuota: number;
 }
 
 export interface EffectivePricingSnapshot {
@@ -377,6 +448,9 @@ export interface EffectivePricingSnapshot {
   canAccessDownloads: boolean;
   canAccessUnbrandedExports: boolean;
   creatorControls: boolean;
+  /** See PricingPlanFeatureFlags.unlimitedWatching -- defaults `true` (unrestricted), the one
+   * capability in this codebase that fails open rather than closed. */
+  unlimitedWatching: boolean;
   videoExportPreset: VideoExportPreset;
   availablePromoBeats: number;
   availableSubscriptionBeats: number;
@@ -426,6 +500,7 @@ export interface PricingPlanOfferCard {
   canAccessDownloads: boolean;
   canAccessUnbrandedExports: boolean;
   creatorControls: boolean;
+  unlimitedWatching: boolean;
   videoExportPreset: VideoExportPreset;
   isCurrentPlan: boolean;
 }
@@ -489,6 +564,14 @@ export interface PricingWalletPageData {
   planOffers: PricingPlanOfferCard[];
   topupOffers: PricingTopupOfferCard[];
   recentActivity: PricingWalletActivityItem[];
+  // Payments Phase 2, Unit B2a: only populated for a signed-in user (see getPricingWalletPageData).
+  billingProfile: BillingProfileDTO | null;
+  /** null when migration 125 is absent -- the wallet then behaves exactly as it does today. */
+  taxPreview: WalletTaxPreview | null;
+  /** Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, owner decision P6): the active
+   * viewer profile's audience scope, from lib/viewer-profile. 'kids' hides every buy button behind a
+   * "switch profiles" line -- checkout refuses server-side regardless of what the client sends. */
+  audienceMode: 'all' | 'kids';
 }
 
 export type PricingAuthorizationDeniedReason =
@@ -594,6 +677,13 @@ interface PreparedRazorpayCheckoutBase {
   description: string;
   userName: string | null;
   userEmail: string | null;
+  /** Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1): the profile's normalised phone
+   * (+91XXXXXXXXXX), read from the same profile checkout already loaded to resolve tax. Feeds
+   * Razorpay's `prefill.contact`; null when there is no profile or no phone on it. */
+  userPhone: string | null;
+  /** True only when this checkout reused an already-open session (the RPC's own `reused` flag) --
+   * carried through so the `[checkout-timing]` log line can tell a resumed checkout from a fresh one. */
+  reused: boolean;
 }
 
 export interface PreparedRazorpaySubscriptionCheckout extends PreparedRazorpayCheckoutBase {
@@ -611,3 +701,116 @@ export interface PreparedRazorpayTopupCheckout extends PreparedRazorpayCheckoutB
 export type PreparedRazorpayCheckout =
   | PreparedRazorpaySubscriptionCheckout
   | PreparedRazorpayTopupCheckout;
+
+// Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit B): the billing profile a customer fills
+// in once -- required before checkout so tax has a place of supply, and reused later for issued
+// documents (Phase 6). Defined here, not in lib/billing/billing-profile.ts (server-only) or the
+// 'use server' action, so Unit B2's client-side form can import the same shapes.
+export interface BillingProfileInput {
+  legalName: string;
+  billingEmail?: string | null;
+  phone?: string | null;
+  companyName?: string | null;
+  /** Validated against lib/billing/india-states.shared.ts's GSTIN_REGEX before it ever reaches the DB. */
+  gstin?: string | null;
+  /** Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit B): the Personal/Business toggle. When
+   * absent (an old client), treated as 'business' iff a GSTIN is present -- see
+   * lib/billing/billing-profile.shared.ts's validateBillingProfile. */
+  profileType?: 'personal' | 'business';
+  /** A code from lib/billing/india-states.shared.ts's INDIA_GST_STATE_CODES -- the checkout place of
+   * supply. For a business profile this is derived from the GSTIN server-side; the client's value is
+   * ignored (Unit B). Ignored entirely for a foreign profile (Unit B, Phase 8). */
+  stateCode: string;
+  /** Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): a code from
+   * lib/billing/international.shared.ts's SUPPORTED_BILLING_COUNTRIES. Absent means 'IN', so an old
+   * client that never sends this field still validates and saves as Indian. */
+  countryCode?: string;
+  /** A foreign customer's state/province, e.g. a US state code from lib/billing/us-states.shared.ts.
+   * Always null for an Indian profile. */
+  region?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
+}
+
+export interface BillingProfileDTO {
+  id: string;
+  legalName: string;
+  billingEmail: string | null;
+  phone: string | null;
+  companyName: string | null;
+  gstin: string | null;
+  /** Derived, not stored: 'business' iff gstin is set (lib/billing/billing-profile.ts's
+   * toBillingProfileDTO). Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit B). */
+  profileType: 'personal' | 'business';
+  stateCode: string;
+  countryCode: string;
+  /** Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B): null on a database predating
+   * migration 138, and always null for an Indian profile. */
+  region: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  postalCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 'unavailable' means migration 125 hasn't run on this database yet (plan §4/§7) -- the caller
+ * should treat this the same as "no profile filled in yet" for display purposes, but must not offer
+ * to save one until 125 is applied. */
+export type GetBillingProfileResult =
+  | { status: 'ok'; profile: BillingProfileDTO | null }
+  | { status: 'unavailable' };
+
+export type SaveBillingProfileResult =
+  | { status: 'ok'; profile: BillingProfileDTO }
+  | { status: 'unavailable' }
+  | { status: 'invalid'; message: string };
+
+// Payments Phase 2, Unit B2b: the admin tax-rules panel over billing_tax_rules (migration 125).
+// Camel-cased DTO mirrors BillingProfileDTO above -- lib/billing/tax-rules-admin.ts (server-only)
+// maps DbBillingTaxRule rows to this shape so the 'use server' action and the admin panel never need
+// to import lib/types/database.ts directly.
+export interface TaxRuleAdminRecord {
+  id: string;
+  marketKey: string;
+  appliesTo: BillingTaxRuleAppliesTo;
+  taxRegime: BillingTaxRegime;
+  ratePercent: number;
+  sacCode: string | null;
+  supplierStateCode: string;
+  status: PricingCatalogStatus;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Input to create (no `id`) or update (`id` of an existing *draft*) a tax rule. */
+export interface TaxRuleDraftInput {
+  id?: string | null;
+  marketKey: PricingMarketKey;
+  appliesTo: BillingTaxRuleAppliesTo;
+  taxRegime: BillingTaxRegime;
+  ratePercent: number;
+  sacCode?: string | null;
+  /** A code from lib/billing/india-states.shared.ts's INDIA_GST_STATE_CODES. */
+  supplierStateCode: string;
+  notes?: string | null;
+}
+
+/** 'unavailable' means migration 125 hasn't run on this database yet -- mirrors GetBillingProfileResult. */
+export type TaxRuleAdminListResult =
+  | { status: 'ok'; rules: TaxRuleAdminRecord[] }
+  | { status: 'unavailable' };
+
+export type TaxRuleAdminMutationResult =
+  | { status: 'ok'; rules: TaxRuleAdminRecord[]; rule: TaxRuleAdminRecord }
+  | { status: 'unavailable' }
+  | { status: 'invalid'; message: string }
+  /** A concurrent publish already took the (market_key, applies_to) slot -- uq_billing_tax_rules_live
+   * (125_billing_ledger_and_retention.sql) raised 23505. Surfaced as a message, never a raw PG error. */
+  | { status: 'conflict'; message: string };

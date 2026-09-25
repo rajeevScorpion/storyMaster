@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
+import { PLAN_KEYS } from '@/lib/types/pricing';
 import {
   isPromotedEntitlementTier,
   normalizeEntitlementPlanKey,
   resolveEffectiveEntitlementTier,
 } from './entitlement-tier.shared';
+
+// Payments Phase 3, Unit A: 'audience' joined PLAN_KEYS between 'free' and 'plus'.
+describe('PLAN_KEYS', () => {
+  it('contains audience', () => {
+    expect(PLAN_KEYS).toContain('audience');
+  });
+});
 
 describe('resolveEffectiveEntitlementTier', () => {
   it('leaves an un-promoted account on its billing plan', () => {
@@ -17,9 +25,27 @@ describe('resolveEffectiveEntitlementTier', () => {
     expect(resolveEffectiveEntitlementTier({ billingPlanKey: 'free', overridePlanKey: 'studio' })).toBe('studio');
   });
 
+  it('promotes free to audience', () => {
+    expect(resolveEffectiveEntitlementTier({ billingPlanKey: 'free', overridePlanKey: 'audience' })).toBe(
+      'audience'
+    );
+  });
+
+  it('promotes audience to plus', () => {
+    expect(resolveEffectiveEntitlementTier({ billingPlanKey: 'audience', overridePlanKey: 'plus' })).toBe(
+      'plus'
+    );
+  });
+
   it('never demotes below what the subscription already pays for', () => {
     expect(resolveEffectiveEntitlementTier({ billingPlanKey: 'plus', overridePlanKey: 'free' })).toBe('plus');
     expect(resolveEffectiveEntitlementTier({ billingPlanKey: 'studio', overridePlanKey: 'plus' })).toBe('studio');
+  });
+
+  it('refuses to pull a paying plus account down to audience', () => {
+    expect(resolveEffectiveEntitlementTier({ billingPlanKey: 'plus', overridePlanKey: 'audience' })).toBe(
+      'plus'
+    );
   });
 
   it('gives the admin account studio entitlements whatever the override says', () => {
@@ -31,8 +57,9 @@ describe('resolveEffectiveEntitlementTier', () => {
 });
 
 describe('normalizeEntitlementPlanKey', () => {
-  it('accepts the three plan keys and rejects everything else', () => {
+  it('accepts the four plan keys and rejects everything else', () => {
     expect(normalizeEntitlementPlanKey('studio')).toBe('studio');
+    expect(normalizeEntitlementPlanKey('audience')).toBe('audience');
     expect(normalizeEntitlementPlanKey('creator')).toBeNull();
     expect(normalizeEntitlementPlanKey('')).toBeNull();
     expect(normalizeEntitlementPlanKey(undefined)).toBeNull();

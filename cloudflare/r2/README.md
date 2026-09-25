@@ -2,7 +2,7 @@
 
 R2 is enabled for staging through environment variables and Global Settings. The private bucket must not be connected to a public/custom domain.
 
-Kissago staging runs from `https://kissagostage.vercel.app`; that origin is included explicitly in the R2 CORS policy.
+Kissago staging runs on the `kissago` Vercel project's Preview deployments; the `dev` branch is at `https://kissago-git-dev-rajeevscorpions-projects.vercel.app`. The R2 CORS policy allows previews through `https://*.vercel.app`.
 
 ## Wrangler Commands
 
@@ -45,7 +45,9 @@ powershell -ExecutionPolicy Bypass -File cloudflare/r2/setup-staging.ps1
    - Do not enable public delivery for this bucket.
    - Kissago stores private objects as `r2://bucket/key` and resolves playback URLs with short-lived signed GET URLs server-side.
 
-## Vercel Staging Env
+## Vercel Preview Env
+
+Set these on the `kissago` Vercel project with the scope **Preview** only, never Production.
 
 ```bash
 CLOUDFLARE_ACCOUNT_ID=

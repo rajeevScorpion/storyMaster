@@ -6,6 +6,9 @@ import { loadCachedStoryline, saveStorylineAndPrefetch } from '@/lib/persistence
 import type { StorylineManifestPayload } from '@/lib/persistence';
 import type { StorylineSeriesContext } from '@/lib/types/series';
 import { preloadStorylineMedia } from '@/lib/media/storyline-preload';
+import { getWatchQuotaView } from '@/app/actions/watch-quota';
+import { isLastWatchSlot, type WatchQuotaView } from '@/lib/pricing/watch-quota.shared';
+import { WatchQuotaExhausted, WatchQuotaLastSlotConfirm } from './WatchQuotaNotice';
 import OpenFlowLoader from './OpenFlowLoader';
 import StorylinePlayer from './StorylinePlayer';
 
@@ -37,15 +40,50 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
   const [payload, setPayload] = useState<StorylineManifestPayload | null>(null);
   const [sourceUpdatedAt, setSourceUpdatedAt] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [watchQuotaExhausted, setWatchQuotaExhausted] = useState(false);
   const [loadMessage, setLoadMessage] = useState('Checking saved copy...');
   const [loadPhaseIndex, setLoadPhaseIndex] = useState(0);
+  /**
+   * Payments Phase 3, Unit D. Resolved before the beats are fetched, because
+   * `loadStorylineWithBeats` SPENDS a slot: there is no way to ask "use your last one on this?"
+   * after the call that would have used it. `null` means the answer has not arrived yet.
+   */
+  const [quotaView, setQuotaView] = useState<WatchQuotaView | null>(null);
+  const [lastSlotConfirmed, setLastSlotConfirmed] = useState(false);
+
+  // Reading the quota is a separate effect from loading the storyline so that the confirmation can
+  // sit between them. It short-circuits server-side for an admin or an exempt plan before it ever
+  // touches the slots table, so the cost for a reader who has no limit is one cheap call.
+  useEffect(() => {
+    let active = true;
+    setQuotaView(null);
+    setLastSlotConfirmed(false);
+    void getWatchQuotaView(props.storylineId)
+      .then((view) => {
+        if (active) setQuotaView(view);
+      })
+      .catch((error) => {
+        // Fail open, exactly as every other reference to this capability does: a quota lookup that
+        // errors must not stop someone reading. The server still enforces the real limit.
+        console.warn('[watch-quota] could not read the quota view, continuing unrestricted:', error);
+        if (active) setQuotaView({ unlimited: true, used: 0, limit: 0, isReplay: false, upsell: null });
+      });
+    return () => { active = false; };
+  }, [props.storylineId]);
+
+  const awaitingLastSlotConfirm = quotaView !== null && isLastWatchSlot(quotaView) && !lastSlotConfirmed;
 
   useEffect(() => {
+    // Wait for the quota answer, and for the reader's yes when this would be their last slot.
+    // Nothing below is started until then -- the network call is what spends the slot.
+    if (quotaView === null || awaitingLastSlotConfirm) return;
+
     let active = true;
     let hasDisplayedPayload = false;
     void (async () => {
       setLoadMessage('Checking saved copy...');
       setLoadPhaseIndex(0);
+      setWatchQuotaExhausted(false);
       const cachePromise = loadCachedStoryline({
         storylineId: props.storylineId,
         storyId: props.storyId,
@@ -78,6 +116,19 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
         setLoadMessage('Loading latest published version...');
         setLoadPhaseIndex(1);
         const loaded = await networkPromise;
+        if (loaded.status === 'watch_quota_exhausted') {
+          if (!active) return;
+          // The cache read races this call and can paint the story before the refusal arrives
+          // (the cachePromise.then handler above). Setting hasDisplayedPayload true -- not false --
+          // both clears anything already shown AND stops a cache resolution still in flight from
+          // painting it afterwards: that handler bails out whenever the flag is true, and it stays
+          // true for the rest of this effect run.
+          hasDisplayedPayload = true;
+          setPayload(null);
+          setError(null);
+          setWatchQuotaExhausted(true);
+          return;
+        }
         if (loaded.beats.length === 0) {
           throw new Error('This storyline is still preparing its pages. Please try again shortly.');
         }
@@ -113,6 +164,9 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
           currentPageIndex: 0,
         });
       } catch (loadError) {
+        // Only genuine failures reach here -- a quota refusal is returned as data above, because a
+        // production build would not carry a marker on a thrown action's message this far
+        // (GOTCHAS.md). Keeping a displayed cached copy is right for these and wrong for a refusal.
         const cached = await cachePromise;
         if (active && !hasDisplayedPayload && !cached) {
           setError(loadError instanceof Error ? loadError.message : 'Unable to load storyline');
@@ -131,8 +185,30 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
     props.title,
     props.userId,
     props.shareToken,
+    quotaView,
+    awaitingLastSlotConfirm,
   ]);
 
+  if (watchQuotaExhausted) {
+    // The peek's own numbers, with `used` pinned to the limit: the server refused, so the day is
+    // full whatever the peek saw a moment earlier (another device may have spent the last slot
+    // in between). `quotaView` is only null if the refusal beat the peek back, which cannot
+    // normally happen -- the fallback is there so this surface can never render blank.
+    const view: WatchQuotaView = quotaView
+      ? { ...quotaView, used: quotaView.limit, isReplay: false }
+      : { unlimited: false, used: 0, limit: 0, isReplay: false, upsell: null };
+    return <WatchQuotaExhausted view={view} />;
+  }
+
+  if (awaitingLastSlotConfirm && quotaView) {
+    return (
+      <WatchQuotaLastSlotConfirm
+        view={quotaView}
+        title={props.title}
+        onConfirm={() => setLastSlotConfirmed(true)}
+      />
+    );
+  }
   if (error && !payload) {
     return <div className="min-h-screen bg-neutral-950 p-8 text-center text-neutral-300">{error}</div>;
   }

@@ -1,9 +1,13 @@
 import { NextResponse } from 'next/server';
-import { fetchRazorpaySubscription, verifyRazorpayOrderSignature, verifyRazorpaySubscriptionSignature } from '@/lib/billing/razorpay';
-import { grantTopupIfMissing, syncRazorpaySubscriptionState } from '@/lib/billing/razorpay-sync';
+import { verifyRazorpayOrderSignature, verifyRazorpaySubscriptionSignature } from '@/lib/billing/razorpay';
+import {
+  nextSubscriptionCheckoutOrderStatus,
+  settleTopupOrder,
+  syncSubscriptionFromProvider,
+} from '@/lib/billing/razorpay-sync';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
-import type { DbBillingOrder, DbPricingPlanVersion, DbPricingTopupPack } from '@/lib/types/database';
+import type { DbBillingOrder, DbPricingPlanVersion } from '@/lib/types/database';
 
 type VerifyRequestBody =
   | {
@@ -20,6 +24,9 @@ type VerifyRequestBody =
       razorpaySignature: string;
       razorpayOrderId: string;
     };
+
+const GENERIC_VERIFY_ERROR =
+  "We couldn't confirm this payment yet. If you were charged, it will be applied automatically.";
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -56,6 +63,13 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'Subscription checkout record is invalid' }, { status: 400 });
       }
 
+      if (
+        body.razorpaySubscriptionId &&
+        body.razorpaySubscriptionId !== billingOrder.provider_checkout_session_id
+      ) {
+        return NextResponse.json({ error: 'Subscription does not match this checkout' }, { status: 400 });
+      }
+
       const signatureValid = verifyRazorpaySubscriptionSignature({
         subscriptionId: billingOrder.provider_checkout_session_id,
         paymentId: body.razorpayPaymentId,
@@ -67,44 +81,47 @@ export async function POST(request: Request) {
       }
 
       const planVersion = await loadPlanVersion(admin, billingOrder.plan_version_id);
-      const subscription = await fetchRazorpaySubscription(body.razorpaySubscriptionId);
-      const syncResult = await syncRazorpaySubscriptionState({
+      const syncResult = await syncSubscriptionFromProvider({
         supabase: admin,
         userId: user.id,
-        pricingMarketKey: planVersion.pricing_market_key,
-        countryCode: planVersion.pricing_market_key === 'IN' ? 'IN' : null,
         planVersion,
-        subscription,
+        providerSubscriptionId: billingOrder.provider_checkout_session_id,
+        checkoutOrder: billingOrder,
+        source: 'verify',
         rawPayload: {
           kind: 'subscription_verify',
-          checkoutResponse: body,
-          subscription,
+          paymentId: body.razorpayPaymentId,
         },
       });
 
       const updateResult = await admin
         .from('billing_orders')
         .update({
-          provider_payment_id: body.razorpayPaymentId,
-          status: subscription.status,
-          raw_provider_payload_json: {
-            ...(billingOrder.raw_provider_payload_json ?? {}),
-            verification: body,
-            latestSubscription: subscription,
-          },
+          provider_payment_id: billingOrder.provider_payment_id ?? body.razorpayPaymentId,
+          status: nextSubscriptionCheckoutOrderStatus(billingOrder.status, syncResult.status),
           updated_at: new Date().toISOString(),
         })
         .eq('id', billingOrder.id);
 
       throwIfQueryFailed(updateResult.error, 'Failed to update subscription billing order');
 
+      // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E2): the same condition the message
+      // below already branches on, surfaced as its own flag so the client can drive its own progress
+      // UI (CheckoutSummarySheet) instead of pattern-matching the message text.
+      const pending = syncResult.grantedCoins === 0 && !syncResult.firstChargeConfirmed;
+
+      const message =
+        syncResult.grantedCoins > 0
+          ? `Your plan is active and ${syncResult.grantedCoins.toLocaleString()} coins were added.`
+          : syncResult.firstChargeConfirmed
+            ? 'Your plan is active.'
+            : "Payment received. We're confirming it with your bank — your plan and coins will appear shortly.";
+
       return NextResponse.json({
         ok: true,
         grantedCoins: syncResult.grantedCoins,
-        message:
-          syncResult.grantedCoins > 0
-            ? `Your plan is active and ${syncResult.grantedCoins.toLocaleString()} coins were added.`
-            : 'Your plan is active. Coins will appear as soon as the current cycle grant is confirmed.',
+        pending,
+        message,
       });
     }
 
@@ -122,40 +139,37 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid Razorpay payment signature' }, { status: 400 });
     }
 
-    const topupPack = await loadTopupPack(admin, billingOrder.topup_pack_id);
-    const grantedCoins = await grantTopupIfMissing({
+    const settleResult = await settleTopupOrder({
       supabase: admin,
-      billingOrder,
-      topupPack,
-      paymentId: body.razorpayPaymentId,
-      rawPayload: body,
+      billingOrderId: billingOrder.id,
+      paymentIdHint: body.razorpayPaymentId,
+      source: 'verify',
     });
 
-    const updateResult = await admin
-      .from('billing_orders')
-      .update({
-        provider_payment_id: body.razorpayPaymentId,
-        status: 'paid',
-        raw_provider_payload_json: {
-          ...(billingOrder.raw_provider_payload_json ?? {}),
-          verification: body,
-        },
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', billingOrder.id);
+    if (settleResult.state === 'refunded') {
+      return NextResponse.json({ error: 'This payment was refunded.' }, { status: 409 });
+    }
 
-    throwIfQueryFailed(updateResult.error, 'Failed to update top-up billing order');
+    if (settleResult.state === 'failed') {
+      return NextResponse.json({ error: 'This payment could not be completed.' }, { status: 402 });
+    }
+
+    const message =
+      settleResult.state === 'pending'
+        ? "Payment received. We're confirming it — coins will appear shortly."
+        : settleResult.grantedCoins > 0
+          ? `${settleResult.grantedCoins.toLocaleString()} coins were added to your wallet.`
+          : 'This top-up has already been applied to your wallet.';
 
     return NextResponse.json({
       ok: true,
-      grantedCoins,
-      message:
-        grantedCoins > 0
-          ? `${grantedCoins.toLocaleString()} coins were added to your wallet.`
-          : 'This top-up has already been applied to your wallet.',
+      grantedCoins: settleResult.grantedCoins,
+      pending: settleResult.state === 'pending',
+      message,
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err?.message ?? 'Failed to verify Razorpay checkout' }, { status: 500 });
+    console.error('[razorpay.verify]', { message: err?.message ?? 'Unknown error' });
+    return NextResponse.json({ error: GENERIC_VERIFY_ERROR }, { status: 500 });
   }
 }
 
@@ -181,30 +195,6 @@ async function loadPlanVersion(
   }
 
   return version;
-}
-
-async function loadTopupPack(
-  supabase: ReturnType<typeof createAdminClient>,
-  topupPackId: string | null
-): Promise<DbPricingTopupPack> {
-  if (!topupPackId) {
-    throw new Error('Billing order is missing a top-up pack');
-  }
-
-  const result = await supabase
-    .from('pricing_topup_packs')
-    .select('*')
-    .eq('id', topupPackId)
-    .maybeSingle();
-
-  throwIfQueryFailed(result.error, 'Failed to load top-up pack');
-
-  const topup = (result.data ?? null) as DbPricingTopupPack | null;
-  if (!topup) {
-    throw new Error('Top-up pack not found');
-  }
-
-  return topup;
 }
 
 function throwIfQueryFailed(error: { message: string } | null, context: string): void {

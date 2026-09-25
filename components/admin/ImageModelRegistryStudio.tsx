@@ -23,7 +23,7 @@ import {
   DEFAULT_ELEVENLABS_COST_SETTINGS,
   type ElevenLabsCostSettings,
 } from '@/lib/ai/provider-costs.shared';
-import type { PlanKey } from '@/lib/types/pricing';
+import { PLAN_KEYS, type PlanKey } from '@/lib/types/pricing';
 
 type Draft = Pick<
   ImageModelRegistryRecord,
@@ -48,8 +48,6 @@ const TASK_LABELS: Record<ImageTaskKey, string> = {
   reel_image_generation: 'Reel Images',
   portrait_generation: 'Portraits',
 };
-
-const PLAN_KEYS: PlanKey[] = ['free', 'plus', 'studio'];
 
 const FIELD_LABEL = 'text-[11px] font-medium uppercase tracking-[0.14em] text-neutral-500';
 

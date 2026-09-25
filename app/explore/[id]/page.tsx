@@ -13,6 +13,7 @@ import KissagoLogo from '@/components/ui/KissagoLogo';
 import { requestHomeStoryReset } from '@/lib/story/home-navigation';
 import { getSessionCurrentVisualUrl } from '@/lib/story/first-visual';
 import { useImagePreload } from '@/lib/hooks/useImagePreload';
+import { isCrossOriginIsolationExemptPath } from '@/lib/navigation/cross-origin-isolation.shared';
 
 export default function ExplorePage() {
   const params = useParams();
@@ -111,7 +112,7 @@ export default function ExplorePage() {
 
       {/* User menu — fixed top-right */}
       <div className="fixed top-4 right-4 z-40">
-        <UserMenu onMyStories={() => setShowMyStories(true)} />
+        <UserMenu onMyStories={() => setShowMyStories(true)} openWalletInNewTab />
       </div>
 
       <MyStoriesDrawer
@@ -124,7 +125,12 @@ export default function ExplorePage() {
           <p className="text-sm font-medium">{error}</p>
           {errorAction && (
             <button
-              onClick={() => router.push(errorAction.href)}
+              onClick={() =>
+                // The wallet reloads the page (cross-origin isolation); a new tab keeps this session.
+                isCrossOriginIsolationExemptPath(errorAction.href)
+                  ? window.open(errorAction.href, '_blank')
+                  : router.push(errorAction.href)
+              }
               className="text-xs font-bold uppercase tracking-wider transition-colors hover:text-white"
             >
               {errorAction.label}

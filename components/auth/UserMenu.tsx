@@ -3,15 +3,18 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
-import { User, LogOut, LogIn, BookMarked, Loader2, Coins, Wallet, LifeBuoy, ClipboardCheck } from 'lucide-react';
+import { User, LogOut, LogIn, BookMarked, Loader2, Coins, Wallet, LifeBuoy, ClipboardCheck, Receipt, Trash2 } from 'lucide-react';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import Link from 'next/link';
 import { COINS_PER_BEAT } from '@/lib/types/pricing';
 import { startNavigationProgress } from '@/lib/navigation/progress';
+import { getAccountDeletionEnabled } from '@/app/actions/account';
 
 interface UserMenuProps {
   onMyStories?: () => void;
+  /** Story surfaces pass true: navigating to the wallet reloads the page, which would drop the in-memory story session. */
+  openWalletInNewTab?: boolean;
 }
 
 function beatsToCoins(value: number) {
@@ -29,11 +32,31 @@ const REVIEWER_ROLE_LABELS: Record<'reviewer' | 'editor', string> = {
   editor: 'Editor',
 };
 
-export default function UserMenu({ onMyStories }: UserMenuProps) {
+export default function UserMenu({ onMyStories, openWalletInNewTab = false }: UserMenuProps) {
   const { user, isLoading, openAuthDialog, signOut } = useAuth();
   const { data: pricing, isLoading: pricingLoading } = usePricingRuntime();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Payments Phase 2 plan §7: "Delete account" is hidden while account_deletion_enabled is off.
+  // Defaults to hidden (fail closed) until the flag check resolves, rather than flashing the link
+  // and then removing it. Fetched only for a signed-in user -- there is nothing to gate otherwise.
+  const [accountDeletionEnabled, setAccountDeletionEnabled] = useState(false);
+  const userId = user?.id;
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    getAccountDeletionEnabled()
+      .then((enabled) => {
+        if (!cancelled) setAccountDeletionEnabled(enabled);
+      })
+      .catch(() => {
+        // Fail closed: leave the link hidden on any error, matching getFeatureFlag's own fallback.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   // Close menu on outside click
   useEffect(() => {
@@ -208,11 +231,23 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
               )}
               <Link
                 href="/wallet"
+                target={openWalletInNewTab ? '_blank' : undefined}
+                rel={openWalletInNewTab ? 'noopener' : undefined}
                 onClick={() => setIsOpen(false)}
                 className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-neutral-100 transition-colors"
               >
                 <Wallet className="w-4 h-4" />
                 Wallet & Billing
+              </Link>
+              <Link
+                href="/account/billing"
+                target={openWalletInNewTab ? '_blank' : undefined}
+                rel={openWalletInNewTab ? 'noopener' : undefined}
+                onClick={() => setIsOpen(false)}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-neutral-100 transition-colors"
+              >
+                <Receipt className="w-4 h-4" />
+                Billing
               </Link>
               <Link
                 href="/help-legal"
@@ -248,6 +283,16 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
                 <LogOut className="w-4 h-4" />
                 Sign out
               </button>
+              {accountDeletionEnabled && (
+                <Link
+                  href="/account/delete"
+                  onClick={() => setIsOpen(false)}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-500 hover:bg-white/5 hover:text-rose-300 transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete account
+                </Link>
+              )}
             </div>
           </motion.div>
         )}

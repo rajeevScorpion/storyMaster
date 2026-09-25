@@ -1,7 +1,10 @@
 import 'server-only';
 
-import { fetchRazorpaySubscription } from '@/lib/billing/razorpay';
-import { grantTopupIfMissing, syncRazorpaySubscriptionState } from '@/lib/billing/razorpay-sync';
+import {
+  nextSubscriptionCheckoutOrderStatus,
+  settleTopupOrder,
+  syncSubscriptionFromProvider,
+} from '@/lib/billing/razorpay-sync';
 import { buildPricingRuntimeContextData } from '@/lib/pricing/snapshot';
 import { normalizeEntitlementPlanKey } from '@/lib/pricing/entitlement-tier.shared';
 import {
@@ -21,7 +24,6 @@ import type {
   DbPricingActionCost,
   DbPricingPlan,
   DbPricingPlanVersion,
-  DbPricingTopupPack,
 } from '@/lib/types/database';
 import {
   COINS_PER_BEAT,
@@ -508,19 +510,16 @@ export async function reconcileRazorpaySubscription(
   }
 
   const planVersion = await loadPlanVersion(supabase, planVersionId);
-  const subscription = await fetchRazorpaySubscription(subscriptionId);
-  const syncResult = await syncRazorpaySubscriptionState({
+  const syncResult = await syncSubscriptionFromProvider({
     supabase,
     userId,
-    pricingMarketKey: planVersion.pricing_market_key,
-    countryCode: planVersion.pricing_market_key === 'IN' ? 'IN' : null,
     planVersion,
-    subscription,
+    providerSubscriptionId: subscriptionId,
+    checkoutOrder: billingOrder,
+    source: 'reconcile',
     rawPayload: {
       kind: 'admin_manual_reconcile',
       billingOrderId: billingOrder?.id ?? input.billingOrderId ?? null,
-      providerSubscriptionId: subscriptionId,
-      subscription,
     },
   });
 
@@ -528,12 +527,7 @@ export async function reconcileRazorpaySubscription(
     const { error } = await supabase
       .from('billing_orders')
       .update({
-        status: subscription.status,
-        raw_provider_payload_json: {
-          ...(billingOrder.raw_provider_payload_json ?? {}),
-          manualReconcileAt: new Date().toISOString(),
-          latestSubscription: subscription,
-        },
+        status: nextSubscriptionCheckoutOrderStatus(billingOrder.status, syncResult.status),
         updated_at: new Date().toISOString(),
       })
       .eq('id', billingOrder.id);
@@ -543,8 +537,8 @@ export async function reconcileRazorpaySubscription(
 
   return {
     billingSubscriptionId: syncResult.billingSubscriptionId,
-    providerSubscriptionId: subscription.id,
-    subscriptionStatus: subscription.status,
+    providerSubscriptionId: subscriptionId,
+    subscriptionStatus: syncResult.status,
     grantedCoins: syncResult.grantedCoins,
   };
 }
@@ -555,52 +549,30 @@ export async function reconcileRazorpayTopup(
   const supabase = createAdminClient();
   const billingOrder = await loadBillingOrderById(supabase, input.billingOrderId);
 
-  if (billingOrder.order_type !== 'topup_checkout' || !billingOrder.topup_pack_id) {
+  if (billingOrder.order_type !== 'topup_checkout' || !billingOrder.provider_order_id) {
     throw new Error('This billing order is not a top-up checkout.');
   }
 
-  const paymentId =
+  const paymentIdHint =
     normalizeText(input.razorpayPaymentId) ??
     normalizeText(billingOrder.provider_payment_id) ??
     extractPaymentIdFromBillingOrder(billingOrder);
 
-  if (!paymentId) {
+  const settleResult = await settleTopupOrder({
+    supabase,
+    billingOrderId: billingOrder.id,
+    paymentIdHint,
+    source: 'reconcile',
+  });
+
+  if (!settleResult.paymentId) {
     throw new Error('Provide the Razorpay payment id to reconcile this top-up.');
   }
 
-  const topupPack = await loadTopupPack(supabase, billingOrder.topup_pack_id);
-  const grantedCoins = await grantTopupIfMissing({
-    supabase,
-    billingOrder,
-    topupPack,
-    paymentId,
-    rawPayload: {
-      kind: 'admin_manual_reconcile',
-      billingOrderId: billingOrder.id,
-      providerPaymentId: paymentId,
-    },
-  });
-
-  const { error } = await supabase
-    .from('billing_orders')
-    .update({
-      provider_payment_id: paymentId,
-      status: 'paid',
-      raw_provider_payload_json: {
-        ...(billingOrder.raw_provider_payload_json ?? {}),
-        manualReconcileAt: new Date().toISOString(),
-        manualPaymentId: paymentId,
-      },
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', billingOrder.id);
-
-  throwIfQueryFailed(error, 'Failed to update billing order during top-up reconcile');
-
   return {
     billingOrderId: billingOrder.id,
-    grantedCoins,
-    paymentId,
+    grantedCoins: settleResult.grantedCoins,
+    paymentId: settleResult.paymentId,
   };
 }
 
@@ -639,6 +611,80 @@ export async function resolveEntitlementPlanKeyForUser(userId: string): Promise<
     );
     return 'free';
   }
+}
+
+/**
+ * Payments Phase 3, Unit B (docs/payments/phase-3-plan.md §5, B3): whether this user's plan is
+ * exempt from the daily free watch quota (lib/pricing/watch-quota.ts's consumeWatchSlot). Reads
+ * the capability off the resolved snapshot, never the tier rank -- PLAN_TIER_RANK is a promotion
+ * order, not a feature matrix, and audit §D is explicit that Audience/Plus/Studio only get this by
+ * Unit C setting `unlimitedWatching` true on their plan rows.
+ *
+ * Defaults to `true` (unrestricted) on any resolution failure, mirroring
+ * EffectivePricingSnapshot.unlimitedWatching's own fail-open default -- a pricing-system hiccup
+ * must never be what switches a watch limit on.
+ */
+export interface WatchQuotaPolicy {
+  /** The plan's `unlimitedWatching` capability, read off the resolved snapshot -- never derived
+   * from the tier rank (docs/payments/phase-3-plan.md §4). */
+  unlimited: boolean;
+  /** `pricing_free_daily_watch_quota` (Unit E). Meaningless when `unlimited`. */
+  dailyQuota: number;
+  /** The billing plan `unlimitedWatching` was actually read off (lib/pricing/snapshot.ts's
+   * `planKey`, never entitlementPlanKey or the tier rank). Absent only on
+   * `resolveWatchQuotaPolicyForUser`'s fail-open catch below, where there is no snapshot to read
+   * it from. Populated on every real resolution, including `resolveWatchQuotaPolicyForUserStrict`. */
+  planKey?: PlanKey;
+}
+
+/**
+ * The actual read behind the watch-quota policy, shared by both resolvers below so the fail-open
+ * reader path (`resolveWatchQuotaPolicyForUser`) and the fail-closed admin path
+ * (`resolveWatchQuotaPolicyForUserStrict`) can never disagree on how the decision is made -- only
+ * on what happens when it cannot be made at all.
+ */
+async function loadWatchQuotaPolicy(userId: string): Promise<Required<WatchQuotaPolicy>> {
+  const supabase = createAdminClient();
+  const state = await loadPricingState(supabase, userId);
+  return {
+    unlimited: state.snapshot.unlimitedWatching,
+    dailyQuota: state.controls.freeDailyWatchQuota,
+    planKey: state.snapshot.planKey,
+  };
+}
+
+/**
+ * Both halves of the watch-quota decision from one load of the pricing state: whether this account
+ * is exempt, and the limit if it is not. Resolved together because the caller needs both on every
+ * watch and `loadPricingState` already carries both -- asking twice would load it twice.
+ *
+ * Fails OPEN, like every other reference to this capability: a pricing system that cannot answer
+ * must not lock every reader out of the product. See lib/pricing/watch-quota.ts.
+ */
+export async function resolveWatchQuotaPolicyForUser(userId: string): Promise<WatchQuotaPolicy> {
+  try {
+    return await loadWatchQuotaPolicy(userId);
+  } catch (error) {
+    console.error(
+      'resolveWatchQuotaPolicyForUser failed, defaulting to unlimited (fail-open):',
+      error instanceof Error ? error.message : error
+    );
+    return { unlimited: true, dailyQuota: 0 };
+  }
+}
+
+/**
+ * Payments Phase 4, Unit D: the same resolution as `resolveWatchQuotaPolicyForUser`, for the admin
+ * quota-inspection panel. That reader-facing function fails OPEN on any error, which is correct for
+ * a reader (never show a limit that isn't being enforced) and wrong for an admin, who would then be
+ * told "this account is unmetered" when the truth is "the pricing state could not be read". This
+ * function does not catch anything -- a caller that needs to tell an admin "unavailable" rather than
+ * a false "unlimited" must catch the rejection itself (docs/payments/phase-4-plan.md, Unit D).
+ */
+export async function resolveWatchQuotaPolicyForUserStrict(
+  userId: string
+): Promise<Required<WatchQuotaPolicy>> {
+  return loadWatchQuotaPolicy(userId);
 }
 
 export async function getPricingPolicyContextForUser(userId: string | null): Promise<{
@@ -1004,23 +1050,6 @@ async function loadPlanVersion(supabase: AdminClient, planVersionId: string): Pr
   }
 
   return version;
-}
-
-async function loadTopupPack(supabase: AdminClient, topupPackId: string): Promise<DbPricingTopupPack> {
-  const result = await supabase
-    .from('pricing_topup_packs')
-    .select('*')
-    .eq('id', topupPackId)
-    .maybeSingle();
-
-  throwIfQueryFailed(result.error, 'Failed to load top-up pack');
-
-  const pack = (result.data ?? null) as DbPricingTopupPack | null;
-  if (!pack) {
-    throw new Error('Top-up pack not found');
-  }
-
-  return pack;
 }
 
 function extractPaymentIdFromBillingOrder(order: DbBillingOrder): string | null {

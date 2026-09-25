@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react';
 import {
+  AlertTriangle,
   BookOpen,
   BookOpenText,
   BookUser,
@@ -26,6 +27,8 @@ import {
   Package,
   Palette,
   PenLine,
+  Percent,
+  Receipt,
   Route,
   Settings,
   Settings2,
@@ -42,6 +45,7 @@ import {
   Wind,
   Workflow,
   Wrench,
+  ToggleRight,
 } from 'lucide-react';
 
 // ── Single source of truth for the admin navigation tree ───────────────
@@ -256,6 +260,14 @@ const SETTINGS_CHILD_GROUPS: AdminNavChildGroup[] = [
         description: 'Rollout legal, support, blog, docs, FAQ, and footer controls.',
         staticSummary: 'Managed rollout pages, footer controls, and route guards',
       },
+      {
+        id: 'billing-operations',
+        label: 'Billing operations',
+        href: '/admin/settings/billing-operations',
+        icon: ToggleRight,
+        description: 'Account deletion, payment reconciliation, and tax document issuing switches.',
+        staticSummary: 'Deletion, reconciliation, and document issuing switches',
+      },
     ],
   },
 ];
@@ -300,6 +312,14 @@ const PRICING_CHILD_GROUP: AdminNavChildGroup = {
       staticSummary: 'Campaign bonus offers',
     },
     {
+      id: 'tax-rules',
+      label: 'Tax rules',
+      href: '/admin/pricing/tax-rules',
+      icon: Percent,
+      description: 'Draft and publish GST rules by market and kind, and trigger the payments backfill.',
+      staticSummary: 'GST rules by market and kind, plus the payments backfill',
+    },
+    {
       id: 'action-costs',
       label: 'Action costs',
       href: '/admin/pricing/action-costs',
@@ -322,6 +342,22 @@ const PRICING_CHILD_GROUP: AdminNavChildGroup = {
       icon: Wrench,
       description: 'Repair test wallet, checkout, and reservation issues.',
       staticSummary: 'Repair wallet, checkout, and reservations',
+    },
+    {
+      id: 'payments',
+      label: 'Payments',
+      href: '/admin/pricing/payments',
+      icon: Receipt,
+      description: 'Every captured, failed, refunded, or disputed payment across every account.',
+      staticSummary: 'Search payments by Razorpay id, email, or user id',
+    },
+    {
+      id: 'billing-incidents',
+      label: 'Billing incidents',
+      href: '/admin/pricing/billing-incidents',
+      icon: AlertTriangle,
+      description: 'Failed webhooks, stuck checkouts, and subscriptions past their renewal boundary.',
+      staticSummary: 'Failed webhooks, stuck checkouts, and overdue subscriptions',
     },
     {
       id: 'audit',
