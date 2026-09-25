@@ -109,16 +109,22 @@ describe('resolvePlansCta', () => {
 
 describe('formatPlanPriceCell', () => {
   it('shows Free for the free plan, never a ₹ price', () => {
-    expect(formatPlanPriceCell({ planKey: 'free', monthlyPriceMinor: 0, priceLabel: '₹0' })).toBe('Free');
+    expect(formatPlanPriceCell({ planKey: 'free', monthlyPriceMinor: 0, priceLabel: '₹0', currencyCode: 'INR' })).toBe('Free');
   });
 
   it('shows Coming soon for a missing or ₹0 price on a paid plan', () => {
-    expect(formatPlanPriceCell({ planKey: 'studio', monthlyPriceMinor: null, priceLabel: '₹0' })).toBe('Coming soon');
-    expect(formatPlanPriceCell({ planKey: 'studio', monthlyPriceMinor: 0, priceLabel: '₹0' })).toBe('Coming soon');
+    expect(formatPlanPriceCell({ planKey: 'studio', monthlyPriceMinor: null, priceLabel: '₹0', currencyCode: 'INR' })).toBe('Coming soon');
+    expect(formatPlanPriceCell({ planKey: 'studio', monthlyPriceMinor: 0, priceLabel: '₹0', currencyCode: 'INR' })).toBe('Coming soon');
   });
 
-  it('shows the GST-exclusive price with the monthly + GST suffix', () => {
-    expect(formatPlanPriceCell({ planKey: 'plus', monthlyPriceMinor: 85000, priceLabel: '₹850' })).toBe('₹850 / month + GST');
+  it('shows the GST-exclusive price with the monthly + GST suffix for INR', () => {
+    expect(formatPlanPriceCell({ planKey: 'plus', monthlyPriceMinor: 85000, priceLabel: '₹850', currencyCode: 'INR' })).toBe('₹850 / month + GST');
+  });
+
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): GST is an Indian tax, so a non-INR
+  // (export) price never carries the suffix.
+  it('omits the GST suffix for a non-INR price', () => {
+    expect(formatPlanPriceCell({ planKey: 'plus', monthlyPriceMinor: 2900, priceLabel: '$29', currencyCode: 'USD' })).toBe('$29 / month');
   });
 });
 

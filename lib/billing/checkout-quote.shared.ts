@@ -30,8 +30,10 @@ export interface CheckoutQuote {
   nextChargeDate: string | null;
 }
 
-/** `inter_state` gives IGST; `intra_state` gives CGST + SGST; `none` or no breakdown gives no tax
- * lines at all (a database without migration 125, or a published zero-rate/'none' rule). */
+/** `inter_state` gives IGST; `intra_state` gives CGST + SGST; `none`, `export` (Payments Phase 8,
+ * docs/payments/phase-8-plan.md §9, Unit D: a zero-rated LUT export has no tax line to show, unlike
+ * the invoice's own explicit "IGST @ 0%" row) or no breakdown gives no tax lines at all (a database
+ * without migration 125, or a published zero-rate/'none' rule). */
 export function taxLinesFromBreakdown(breakdown: TaxBreakdown | null): CheckoutQuoteTaxLine[] {
   if (!breakdown) return [];
   if (breakdown.supplyType === 'inter_state') {
@@ -57,6 +59,21 @@ export function addBillingInterval(date: Date, interval: BillingInterval): Date 
   const targetDay = Math.min(date.getUTCDate(), daysInTargetMonth);
 
   return new Date(Date.UTC(targetYear, targetMonth, targetDay, date.getUTCHours(), date.getUTCMinutes(), date.getUTCSeconds()));
+}
+
+/** Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): formatRenewalLine's own amount --
+ * always two decimals for a non-INR currency ("$29.00"), matching the wallet-tax.shared.ts naming
+ * convention but not its conditional-decimals behaviour, which would otherwise drop a whole dollar's
+ * cents ("$29") on this legal-adjacent disclosure line. INR keeps formatCurrencyMinor's existing
+ * (decimals-only-when-present) behaviour, unchanged. */
+function formatRenewalAmount(currencyCode: string, grossMinor: number): string {
+  if (currencyCode === 'INR') return formatCurrencyMinor(currencyCode, grossMinor);
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: currencyCode,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(grossMinor / 100);
 }
 
 function ordinal(day: number): string {
@@ -87,7 +104,7 @@ export function formatRenewalLine(
   if (!interval || !nextChargeDate) return '';
   const date = new Date(nextChargeDate);
   if (Number.isNaN(date.getTime())) return '';
-  const amount = formatCurrencyMinor(currencyCode, grossMinor);
+  const amount = formatRenewalAmount(currencyCode, grossMinor);
 
   if (interval === 'annual') {
     const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });

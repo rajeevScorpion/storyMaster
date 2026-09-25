@@ -72,14 +72,17 @@ export function resolvePlansCta(input: {
   return { kind: 'checkout', label: `Choose ${offer.name}`, planVersionId: offer.monthlyPlanVersionId };
 }
 
-/** "₹200 / month + GST", "Free", or "Coming soon" -- the same missing/₹0 test resolvePlansCta uses,
- * so a plan never shows a price its own CTA disagrees with. `priceLabel` is the formatted "₹200" the
- * caller already has (e.g. from formatCurrencyMinor) -- this function only decides which of the three
- * strings applies and appends the interval and tax suffix. */
+/** "₹200 / month + GST" (INR), "$29 / month" (any other currency -- Payments Phase 8,
+ * docs/payments/phase-8-plan.md §9, Unit D: GST is an Indian tax, so a foreign/export price never
+ * carries the suffix), "Free", or "Coming soon" -- the same missing/₹0 test resolvePlansCta uses, so a
+ * plan never shows a price its own CTA disagrees with. `priceLabel` is the formatted "₹200" the caller
+ * already has (e.g. from formatCurrencyMinor) -- this function only decides which of the three strings
+ * applies and appends the interval and tax suffix. */
 export function formatPlanPriceCell(input: {
   planKey: PlanKey;
   monthlyPriceMinor: number | null;
   priceLabel: string;
+  currencyCode: string;
 }): string {
   if (input.planKey === 'free') {
     return 'Free';
@@ -87,7 +90,7 @@ export function formatPlanPriceCell(input: {
   if (input.monthlyPriceMinor == null || input.monthlyPriceMinor <= 0) {
     return 'Coming soon';
   }
-  return `${input.priceLabel} / month + GST`;
+  return input.currencyCode === 'INR' ? `${input.priceLabel} / month + GST` : `${input.priceLabel} / month`;
 }
 
 /** "Unlimited", or "{n} stories a day" off the pricing control -- never a literal number in the caller. */

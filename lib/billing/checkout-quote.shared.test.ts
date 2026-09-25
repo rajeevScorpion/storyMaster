@@ -42,6 +42,13 @@ describe('taxLinesFromBreakdown', () => {
   it('returns no lines when there is no breakdown at all', () => {
     expect(taxLinesFromBreakdown(null)).toEqual([]);
   });
+
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): the checkout sheet shows no tax
+  // line for a zero-rated export -- the invoice itself still prints an explicit "IGST @ 0%" row
+  // (document-view.shared.ts), but there's nothing for the pre-payment quote to break out.
+  it('returns no lines for an export supply', () => {
+    expect(taxLinesFromBreakdown(breakdown({ taxRegime: 'in_export_lut', ratePercent: 0, supplyType: 'export' }))).toEqual([]);
+  });
 });
 
 describe('addBillingInterval', () => {
@@ -110,5 +117,19 @@ describe('formatRenewalLine', () => {
   it('returns an empty string with no interval or no date', () => {
     expect(formatRenewalLine(null, '2026-09-24T00:00:00.000Z', 53100, 'INR')).toBe('');
     expect(formatRenewalLine('monthly', null, 53100, 'INR')).toBe('');
+  });
+
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): a USD renewal always shows cents,
+  // even on a whole dollar -- unlike the INR case above, which drops them.
+  it('always shows cents for a non-INR currency, even on a whole dollar', () => {
+    expect(formatRenewalLine('monthly', '2026-09-24T00:00:00.000Z', 2900, 'USD')).toBe(
+      'Renews monthly on the 24th at $29.00.'
+    );
+  });
+
+  it('shows cents for a non-round USD amount too', () => {
+    expect(formatRenewalLine('monthly', '2026-09-24T00:00:00.000Z', 2999, 'USD')).toBe(
+      'Renews monthly on the 24th at $29.99.'
+    );
   });
 });

@@ -156,10 +156,12 @@ export default function PlansComparison({
                       planKey: offer.planKey,
                       monthlyPriceMinor: offer.monthlyPriceMinor,
                       priceLabel: formatCurrencyMinor(offer.currencyCode, offer.monthlyPriceMinor ?? 0),
+                      currencyCode: offer.currencyCode,
                     })}
                     {offer.monthlyPriceMinor != null && offer.annualPriceMinor != null && (
                       <span className="mt-1 block text-xs text-neutral-500">
-                        {formatCurrencyMinor(offer.currencyCode, offer.annualPriceMinor)} / year + GST
+                        {formatCurrencyMinor(offer.currencyCode, offer.annualPriceMinor)} / year
+                        {offer.currencyCode === 'INR' ? ' + GST' : ''}
                       </span>
                     )}
                   </td>
@@ -252,6 +254,7 @@ export default function PlansComparison({
                     planKey: offer.planKey,
                     monthlyPriceMinor: offer.monthlyPriceMinor,
                     priceLabel: formatCurrencyMinor(offer.currencyCode, offer.monthlyPriceMinor ?? 0),
+                    currencyCode: offer.currencyCode,
                   })}
                 </p>
 

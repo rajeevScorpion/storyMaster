@@ -263,8 +263,10 @@ export default function WalletPage() {
   }, [loadWalletData]);
 
   const usingRazorpayMarket = pricingData.snapshot.routingProvider === 'razorpay';
-  const yearlyCheckoutDeferred =
-    usingRazorpayMarket && pricingData.snapshot.pricingMarketKey === 'IN';
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): the annual refusal is no longer
+  // India-only -- AC's checkout guard keeps every Razorpay item monthly-only at US launch too, so this
+  // is now just usingRazorpayMarket, whatever the market.
+  const yearlyCheckoutDeferred = usingRazorpayMarket;
 
   useEffect(() => {
     if (yearlyCheckoutDeferred && selectedPlanInterval === 'annual') {
@@ -736,7 +738,7 @@ export default function WalletPage() {
 
             {yearlyCheckoutDeferred && (
               <div className="mb-5 rounded-2xl border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
-                India checkout is monthly-only for this stage rollout. Yearly plans stay out of checkout until monthly refills for annual billing are ready.
+                Checkout is monthly-only for this stage rollout. Yearly plans stay out of checkout until monthly refills for annual billing are ready.
               </div>
             )}
 
@@ -892,7 +894,7 @@ export default function WalletPage() {
                           : !checkoutEnabled
                           ? 'Top-up coming soon'
                           : pack.provider !== 'razorpay'
-                          ? 'Stripe comes next'
+                          ? 'Coming soon in your country'
                           : !razorpayReady
                           ? 'Loading checkout'
                           : 'Buy coins'}

@@ -316,7 +316,7 @@ export default function BillingAccountPage() {
                     {priceMinor != null && subscription.currencyCode && (
                       <span className="ml-2 text-base font-sans text-neutral-400">
                         {formatCurrencyMinor(subscription.currencyCode, priceMinor)} / {subscription.interval === 'annual' ? 'year' : 'month'}
-                        {walletData?.taxPreview ? ' + GST' : ''}
+                        {walletData?.taxPreview && subscription.currencyCode === 'INR' ? ' + GST' : ''}
                       </span>
                     )}
                   </h2>

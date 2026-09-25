@@ -269,6 +269,14 @@ export default function CheckoutSummarySheet({
                     .join(' + ')}
                 </p>
               )}
+              {/* Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): an export/ROW quote has
+                  no tax lines at all (taxLinesFromBreakdown returns [] for 'export') -- currencyCode
+                  !== 'INR' is enough to tell that apart from an IN quote whose rule simply hasn't
+                  loaded, since every IN item prices in INR and every non-INR item here is a
+                  zero-rated export. */}
+              {quote.taxLines.length === 0 && quote.currencyCode !== 'INR' && (
+                <p className="text-xs text-neutral-500">No GST: export of services.</p>
+              )}
               {quote.interval === 'annual' && (
                 <p className="text-xs text-neutral-500">
                   Billed once a year (≈ {formatCurrencyMinor(quote.currencyCode, Math.round(quote.grossMinor / 12))} / month)

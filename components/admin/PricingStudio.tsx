@@ -601,8 +601,11 @@ function defaultCurrencyForMarket(market: PricingMarketKey) {
   return market === 'IN' ? 'INR' : 'USD';
 }
 
-function defaultProviderForMarket(market: PricingMarketKey): BillingProvider {
-  return market === 'IN' ? 'razorpay' : 'stripe';
+// Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): every market defaults to Razorpay now
+// -- International Cards covers the US too (§2). Existing rows are untouched; the walk re-tags them
+// by hand.
+function defaultProviderForMarket(_market: PricingMarketKey): BillingProvider {
+  return 'razorpay';
 }
 
 function defaultPlanEditor(planKey: PlanKey, market: PricingMarketKey): PlanEditorState {
