@@ -8,7 +8,15 @@
  * caller in the repo, so a route-only gate would have been bypassable through it).
  */
 
-export type CheckoutRefusalCode = 'kids_profile' | 'not_attested' | 'not_in_rollout';
+import { INDIA_COUNTRY_CODE } from '@/lib/billing/international.shared';
+
+export type CheckoutRefusalCode =
+  | 'kids_profile'
+  | 'not_attested'
+  | 'not_in_rollout'
+  | 'provider_unavailable'
+  | 'country_not_supported'
+  | 'market_country_mismatch';
 
 export interface CheckoutRefusal {
   code: CheckoutRefusalCode;
@@ -31,6 +39,53 @@ export function assertCheckoutAllowed(input: CheckoutAllowedInput): CheckoutRefu
     return { code: 'not_attested', message: "Please confirm you're 18 or older and the one paying." };
   }
 
+  return null;
+}
+
+/**
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, G1): `prepareRazorpayCheckoutInternal`
+ * never read the item's `provider` before this -- the catalogue loaders already filter to
+ * `provider = 'razorpay'`, but this is the explicit, testable gate the plan calls for, and it stays
+ * correct even if that filter ever changes.
+ */
+export function assertCheckoutProvider(provider: string | null): CheckoutRefusal | null {
+  if (provider !== 'razorpay') {
+    return { code: 'provider_unavailable', message: "This item can't be bought here yet." };
+  }
+  return null;
+}
+
+export interface AssertMarketMatchesCountryInput {
+  itemMarketKey: string;
+  /** A null profile country counts as IN -- every profile saved before migration 138 is Indian. */
+  profileCountryCode: string | null;
+  /** `getInternationalCheckoutCountries()`'s result -- unused for an IN item, so a caller pricing an
+   * IN item need not fetch it. */
+  internationalCountries: readonly string[];
+}
+
+/**
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC): stops an India-based customer from
+ * buying the zero-rated ROW price, and refuses a country the countries flag hasn't opened -- checked
+ * independent of whether a ROW tax rule is even published. Called from resolveCheckoutTax before any
+ * tax maths.
+ */
+export function assertMarketMatchesCountry(input: AssertMarketMatchesCountryInput): CheckoutRefusal | null {
+  const profileCountryCode = input.profileCountryCode ?? INDIA_COUNTRY_CODE;
+
+  if (input.itemMarketKey === 'IN') {
+    if (profileCountryCode !== INDIA_COUNTRY_CODE) {
+      return {
+        code: 'market_country_mismatch',
+        message: 'This price is for customers in India. Please choose the price for your country.',
+      };
+    }
+    return null;
+  }
+
+  if (!input.internationalCountries.includes(profileCountryCode)) {
+    return { code: 'country_not_supported', message: "Payments from your country aren't open yet." };
+  }
   return null;
 }
 

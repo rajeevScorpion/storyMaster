@@ -8,7 +8,12 @@
  * rounded afterwards (net + tax, both already integers). A CGST/SGST split's odd paisa goes to CGST.
  */
 
-export type GstSupplyType = 'intra_state' | 'inter_state' | 'none';
+/**
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC): `'export'` is an export of services
+ * under an LUT, zero-rated -- never CGST/SGST/IGST, so it is a third bucket alongside the two GST
+ * supply types, not a variant of either.
+ */
+export type GstSupplyType = 'intra_state' | 'inter_state' | 'none' | 'export';
 
 /** The subset of a billing_tax_rules row computeTax needs -- not the DB row itself, so this module
  * never has to import lib/types/database.ts. */
@@ -16,7 +21,10 @@ export interface TaxRuleInput {
   id: string | null;
   marketKey: string;
   appliesTo: string;
-  taxRegime: 'in_gst' | 'none';
+  /** Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC): `in_export_lut` is a ROW export of
+   * services under an LUT -- zero-rated, no CGST/SGST/IGST. Migration 138 widens the database CHECK to
+   * match. */
+  taxRegime: 'in_gst' | 'none' | 'in_export_lut';
   ratePercent: number;
   sacCode: string | null;
   /** Unit B (docs/payments/phase-2-plan.md §4): the rule's own registered supplier state --
@@ -33,7 +41,7 @@ export interface TaxBreakdown {
   ruleId: string | null;
   marketKey: string;
   appliesTo: string;
-  taxRegime: 'in_gst' | 'none';
+  taxRegime: 'in_gst' | 'none' | 'in_export_lut';
   ratePercent: number;
   sacCode: string | null;
   supplierStateCode: string;
@@ -68,12 +76,7 @@ export function computeTax(input: ComputeTaxInput): TaxComputationResult {
   const taxMinor = rule.taxRegime === 'in_gst' ? roundHalfUpTax(netMinor, rule.ratePercent) : 0;
   const grossMinor = netMinor + taxMinor;
 
-  const supplyType: GstSupplyType =
-    rule.taxRegime !== 'in_gst'
-      ? 'none'
-      : supplierStateCode === placeOfSupplyStateCode
-        ? 'intra_state'
-        : 'inter_state';
+  const supplyType = resolveSupplyType(rule.taxRegime, supplierStateCode, placeOfSupplyStateCode);
 
   const { cgstMinor, sgstMinor, igstMinor } = splitGstComponents(taxMinor, supplyType);
 
@@ -96,6 +99,19 @@ export function computeTax(input: ComputeTaxInput): TaxComputationResult {
       igstMinor,
     },
   };
+}
+
+/** Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC): `in_export_lut` is always `'export'`,
+ * regardless of state codes -- an export supply has no place-of-supply-vs-supplier-state comparison at
+ * all. Shared by computeTax and computeTaxFromGross so the two never drift on this. */
+function resolveSupplyType(
+  taxRegime: TaxRuleInput['taxRegime'],
+  supplierStateCode: string,
+  placeOfSupplyStateCode: string
+): GstSupplyType {
+  if (taxRegime === 'in_export_lut') return 'export';
+  if (taxRegime !== 'in_gst') return 'none';
+  return supplierStateCode === placeOfSupplyStateCode ? 'intra_state' : 'inter_state';
 }
 
 /** net * rate% rounded half-up to the nearest paisa, done in integer arithmetic (basis points of
@@ -128,12 +144,7 @@ export function computeTaxFromGross(input: ComputeTaxFromGrossInput): TaxComputa
     throw new Error(`computeTaxFromGross: grossMinor must be a non-negative integer minor-unit amount, got ${grossMinor}`);
   }
 
-  const supplyType: GstSupplyType =
-    rule.taxRegime !== 'in_gst'
-      ? 'none'
-      : supplierStateCode === placeOfSupplyStateCode
-        ? 'intra_state'
-        : 'inter_state';
+  const supplyType = resolveSupplyType(rule.taxRegime, supplierStateCode, placeOfSupplyStateCode);
 
   if (rule.taxRegime !== 'in_gst' || rule.ratePercent === 0) {
     return {

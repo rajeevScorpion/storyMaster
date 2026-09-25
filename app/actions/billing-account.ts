@@ -5,7 +5,12 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import { resolveActiveViewerProfile } from '@/lib/viewer-profile';
-import { assertCheckoutAllowed, CheckoutRefusalError } from '@/lib/billing/checkout-guard.shared';
+import {
+  assertCheckoutAllowed,
+  assertCheckoutProvider,
+  CheckoutRefusalError,
+  type CheckoutRefusal,
+} from '@/lib/billing/checkout-guard.shared';
 import { checkoutStateFromOrder } from '@/lib/billing/checkout-status.shared';
 import type { CheckoutOrderState } from '@/lib/billing/checkout-status.shared';
 import { addBillingInterval, taxLinesFromBreakdown } from '@/lib/billing/checkout-quote.shared';
@@ -48,6 +53,16 @@ type AdminClient = ReturnType<typeof createAdminClient>;
 
 export interface CheckoutStatusResult {
   state: CheckoutOrderState;
+}
+
+/** Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, G1): mirrors
+ * app/actions/pricing-checkout.ts's own assertCheckoutProviderOrThrow, so the quote a customer sees
+ * and the checkout they open refuse a non-Razorpay item the same way. */
+function assertCheckoutProviderOrThrow(provider: string | null): void {
+  const refusal: CheckoutRefusal | null = assertCheckoutProvider(provider);
+  if (refusal) {
+    throw new CheckoutRefusalError(refusal.message, refusal.code, 400);
+  }
 }
 
 async function getAuthenticatedUserId(): Promise<string> {
@@ -165,6 +180,7 @@ async function quoteSubscription(
 ): Promise<CheckoutQuote> {
   const version = await loadPlanVersionForCheckout(supabase, planVersionId, pricingMarketKey);
   await assertBetaMarketAllowed(version.pricing_market_key);
+  assertCheckoutProviderOrThrow(version.provider);
   const plan = await loadPlanById(supabase, version.plan_id);
 
   if (plan.plan_key === 'free' || version.price_minor <= 0) {
@@ -181,7 +197,13 @@ async function quoteSubscription(
     );
   }
 
-  const tax = await resolveCheckoutTax({ supabase, userId, appliesTo: 'subscription', netMinor: version.price_minor });
+  const tax = await resolveCheckoutTax({
+    supabase,
+    userId,
+    appliesTo: 'subscription',
+    netMinor: version.price_minor,
+    itemMarketKey: version.pricing_market_key,
+  });
 
   return {
     kind: 'subscription',
@@ -206,12 +228,19 @@ async function quoteTopup(
 ): Promise<CheckoutQuote> {
   const topup = await loadTopupPackForCheckout(supabase, topupPackId, pricingMarketKey);
   await assertBetaMarketAllowed(topup.pricing_market_key);
+  assertCheckoutProviderOrThrow(topup.provider);
 
   if (topup.price_minor <= 0) {
     throw new CheckoutRefusalError('This coin pack is not purchasable', 'not_purchasable', 400);
   }
 
-  const tax = await resolveCheckoutTax({ supabase, userId, appliesTo: 'topup', netMinor: topup.price_minor });
+  const tax = await resolveCheckoutTax({
+    supabase,
+    userId,
+    appliesTo: 'topup',
+    netMinor: topup.price_minor,
+    itemMarketKey: topup.pricing_market_key,
+  });
 
   return {
     kind: 'topup',

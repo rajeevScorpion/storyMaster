@@ -16,7 +16,15 @@ import { getPublishedTaxRule } from '@/lib/billing/tax-rules';
 import { computeTax, type TaxBreakdown } from '@/lib/billing/tax.shared';
 import { buildCustomerSnapshot, loadBillingProfile, toBillingProfileDTO } from '@/lib/billing/billing-profile';
 import { isBillingProfileComplete } from '@/lib/billing/billing-profile.shared';
-import { assertCheckoutAllowed, CheckoutRefusalError } from '@/lib/billing/checkout-guard.shared';
+import {
+  assertCheckoutAllowed,
+  assertCheckoutProvider,
+  assertMarketMatchesCountry,
+  CheckoutRefusalError,
+  type CheckoutRefusal,
+} from '@/lib/billing/checkout-guard.shared';
+import { isForeignBillingCountry } from '@/lib/billing/international.shared';
+import { getInternationalCheckoutCountries } from '@/lib/billing/international';
 import { isCheckoutOpenForUser } from '@/lib/billing/checkout-allowlist';
 import type { CheckoutTimer } from '@/lib/billing/checkout-timing.shared';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -84,47 +92,51 @@ export interface CheckoutTaxContext {
  *  - 125 present with a published rule: require a declared billing-profile state (place of supply
  *    is a legal requirement, not a preference) and compute tax on top.
  */
+/** The "migration absent, charge the net" fallback -- same shape whether it's `loadBillingProfile` or
+ * `getPublishedTaxRule` that first reports the schema missing. */
+function chargeNetOnly(netMinor: number): CheckoutTaxContext {
+  return {
+    netMinor,
+    taxMinor: 0,
+    grossMinor: netMinor,
+    taxBreakdown: null,
+    ruleId: null,
+    supplierStateCode: null,
+    placeOfSupplyStateCode: null,
+    schemaAvailable: false,
+    profile: null,
+  };
+}
+
 /**
  * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E2): exported so `quoteCheckout`
  * (app/actions/billing-account.ts) can price a checkout -- tax included -- without creating a
  * Razorpay order or subscription. Behaviour is unchanged for prepare's own callers.
+ *
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, step 3): the profile now loads
+ * *before* the rule -- the rule's market (IN vs ROW) depends on the profile's country, and the
+ * country gate (assertMarketMatchesCountry) must run before any tax maths regardless of which rule
+ * ends up selected. `itemMarketKey` is the catalogue row's own `pricing_market_key`, never trusted
+ * from the client alone -- loadPlanVersionForCheckout/loadTopupPackForCheckout already re-validate it
+ * against the row.
  */
 export async function resolveCheckoutTax(input: {
   supabase: ReturnType<typeof createAdminClient>;
   userId: string;
   appliesTo: 'subscription' | 'topup';
   netMinor: number;
+  itemMarketKey: PricingMarketKey;
 }): Promise<CheckoutTaxContext> {
-  const ruleResult = await getPublishedTaxRule('IN', input.appliesTo);
-
-  if (ruleResult.status === 'unavailable') {
-    return {
-      netMinor: input.netMinor,
-      taxMinor: 0,
-      grossMinor: input.netMinor,
-      taxBreakdown: null,
-      ruleId: null,
-      supplierStateCode: null,
-      placeOfSupplyStateCode: null,
-      schemaAvailable: false,
-      profile: null,
-    };
-  }
-
-  if (ruleResult.status === 'not_found') {
-    throw new CheckoutRefusalError(
-      'Checkout is temporarily unavailable while tax rules are being configured. Please try again shortly.',
-      'tax_rules_unavailable',
-      503
-    );
-  }
-
   const profileResult = await loadBillingProfile(input.supabase, input.userId);
 
-  // The tax-rule table and billing_profiles come from the same migration (125), so this should be
-  // unreachable in practice -- but a partially-applied migration must still refuse, not under-charge.
   if (profileResult.status === 'unavailable') {
-    throw new CheckoutRefusalError('Checkout is temporarily unavailable. Please try again shortly.', 'billing_schema_unavailable', 503);
+    // Migration 125 itself is absent. IN checkout still charges the net, exactly as before Phase 2;
+    // a non-IN item has no billing_profiles to read a country from at all, so it refuses rather than
+    // charge a USD net with no country or tax context.
+    if (input.itemMarketKey !== 'IN') {
+      throw new CheckoutRefusalError('Checkout is temporarily unavailable. Please try again shortly.', 'billing_schema_unavailable', 503);
+    }
+    return chargeNetOnly(input.netMinor);
   }
 
   const profile = profileResult.profile;
@@ -134,6 +146,41 @@ export async function resolveCheckoutTax(input: {
   // (WalletPage.tsx), so only a stale or crafted client ever reaches this refusal.
   if (!profile || !isBillingProfileComplete(toBillingProfileDTO(profile))) {
     throw new CheckoutRefusalError('Please complete your billing details before checkout.', 'billing_details_incomplete', 400);
+  }
+
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC): the country gate, before any tax
+  // maths -- stops an India-based customer from buying the zero-rated ROW price, and refuses a
+  // country the countries flag hasn't opened, independent of whether a ROW rule is even published.
+  // getInternationalCheckoutCountries() reads a feature flag, so it's skipped for an IN item -- the
+  // guard's IN branch never looks at it anyway.
+  const countryRefusal = assertMarketMatchesCountry({
+    itemMarketKey: input.itemMarketKey,
+    profileCountryCode: profile.country_code,
+    internationalCountries: input.itemMarketKey === 'IN' ? [] : await getInternationalCheckoutCountries(),
+  });
+  if (countryRefusal) {
+    throw new CheckoutRefusalError(countryRefusal.message, countryRefusal.code, 400);
+  }
+
+  const ruleMarketKey: PricingMarketKey = isForeignBillingCountry(profile.country_code) ? 'ROW' : 'IN';
+  const ruleResult = await getPublishedTaxRule(ruleMarketKey, input.appliesTo);
+
+  if (ruleResult.status === 'unavailable') {
+    // billing_tax_rules specifically is absent even though billing_profiles just loaded fine (a
+    // partially-applied 125) -- same "charge the net" fallback as before, IN only; a ROW item still
+    // has no rule to price itself against.
+    if (input.itemMarketKey !== 'IN') {
+      throw new CheckoutRefusalError('Checkout is temporarily unavailable. Please try again shortly.', 'billing_schema_unavailable', 503);
+    }
+    return chargeNetOnly(input.netMinor);
+  }
+
+  if (ruleResult.status === 'not_found') {
+    throw new CheckoutRefusalError(
+      'Checkout is temporarily unavailable while tax rules are being configured. Please try again shortly.',
+      'tax_rules_unavailable',
+      503
+    );
   }
 
   const result = computeTax({
@@ -154,6 +201,15 @@ export async function resolveCheckoutTax(input: {
     schemaAvailable: true,
     profile,
   };
+}
+
+/** Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, G1): thrown from both checkout paths
+ * right after their market check -- see assertCheckoutProvider's own comment. */
+function assertCheckoutProviderOrThrow(provider: string | null): void {
+  const refusal: CheckoutRefusal | null = assertCheckoutProvider(provider);
+  if (refusal) {
+    throw new CheckoutRefusalError(refusal.message, refusal.code, 400);
+  }
 }
 
 function taxSnapshotFields(tax: CheckoutTaxContext) {
@@ -209,6 +265,7 @@ export async function prepareRazorpayCheckoutInternal(
   if (input.kind === 'subscription') {
     const version = await loadPlanVersionForCheckout(supabase, input.planVersionId, options.pricingMarketKey ?? null);
     await assertBetaMarketAllowed(version.pricing_market_key);
+    assertCheckoutProviderOrThrow(version.provider);
     const plan = await loadPlanById(supabase, version.plan_id);
 
     if (plan.plan_key === 'free' || version.price_minor <= 0) {
@@ -230,6 +287,7 @@ export async function prepareRazorpayCheckoutInternal(
       userId: auth.userId,
       appliesTo: 'subscription',
       netMinor: version.price_minor,
+      itemMarketKey: version.pricing_market_key,
     });
     timer?.mark('tax');
 
@@ -403,6 +461,7 @@ export async function prepareRazorpayCheckoutInternal(
 
   const topup = await loadTopupPackForCheckout(supabase, input.topupPackId, options.pricingMarketKey ?? null);
   await assertBetaMarketAllowed(topup.pricing_market_key);
+  assertCheckoutProviderOrThrow(topup.provider);
   if (topup.price_minor <= 0) {
     throw new CheckoutRefusalError('This coin pack is not purchasable', 'not_purchasable', 400);
   }
@@ -414,6 +473,7 @@ export async function prepareRazorpayCheckoutInternal(
     userId: auth.userId,
     appliesTo: 'topup',
     netMinor: topup.price_minor,
+    itemMarketKey: topup.pricing_market_key,
   });
   timer?.mark('tax');
 
@@ -435,7 +495,7 @@ export async function prepareRazorpayCheckoutInternal(
     .insert({
       user_id: auth.userId,
       ...(tax.schemaAvailable ? { subject_ref: auth.userId } : {}),
-      provider: 'razorpay',
+      provider: topup.provider,
       provider_mode: providerMode,
       order_type: 'topup_checkout',
       provider_order_id: order.id,

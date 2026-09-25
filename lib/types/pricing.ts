@@ -40,7 +40,9 @@ export type BillingWebhookEventStatus = (typeof BILLING_WEBHOOK_EVENT_STATUSES)[
 export const BILLING_TAX_RULE_APPLIES_TO = ['all', 'subscription', 'topup'] as const;
 export type BillingTaxRuleAppliesTo = (typeof BILLING_TAX_RULE_APPLIES_TO)[number];
 
-export const BILLING_TAX_REGIMES = ['in_gst', 'none'] as const;
+// Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, migration 138): 'in_export_lut' is a
+// ROW export of services under an LUT, zero-rated.
+export const BILLING_TAX_REGIMES = ['in_gst', 'none', 'in_export_lut'] as const;
 export type BillingTaxRegime = (typeof BILLING_TAX_REGIMES)[number];
 
 export const BILLING_PAYMENT_KINDS = ['topup', 'subscription_first', 'subscription_renewal'] as const;

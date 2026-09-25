@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 
-import { assertCheckoutAllowed, CheckoutRefusalError, parseCheckoutAllowlist } from './checkout-guard.shared';
+import {
+  assertCheckoutAllowed,
+  assertCheckoutProvider,
+  assertMarketMatchesCountry,
+  CheckoutRefusalError,
+  parseCheckoutAllowlist,
+} from './checkout-guard.shared';
 
 /**
  * Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1): owner decision P6's kids/attestation
@@ -63,6 +69,73 @@ describe('parseCheckoutAllowlist', () => {
 
   it('parses a value that is only whitespace/commas to an empty list', () => {
     expect(parseCheckoutAllowlist('  ,  ,\n')).toEqual([]);
+  });
+});
+
+// Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, G1): the provider guard that closes
+// the gap prepareRazorpayCheckoutInternal used to have -- it never read the item's `provider` before.
+describe('assertCheckoutProvider', () => {
+  it('allows a razorpay item', () => {
+    expect(assertCheckoutProvider('razorpay')).toBeNull();
+  });
+
+  it('refuses a stripe-tagged item', () => {
+    expect(assertCheckoutProvider('stripe')).toEqual({
+      code: 'provider_unavailable',
+      message: "This item can't be bought here yet.",
+    });
+  });
+
+  it('refuses a null provider', () => {
+    expect(assertCheckoutProvider(null)?.code).toBe('provider_unavailable');
+  });
+});
+
+// Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC): the market-country consistency rule
+// -- an IN item needs an IN profile, a ROW item needs a listed non-IN profile country.
+describe('assertMarketMatchesCountry', () => {
+  it('allows an IN item for an IN profile', () => {
+    expect(
+      assertMarketMatchesCountry({ itemMarketKey: 'IN', profileCountryCode: 'IN', internationalCountries: [] })
+    ).toBeNull();
+  });
+
+  it('treats a null profile country as IN, for an IN item', () => {
+    expect(
+      assertMarketMatchesCountry({ itemMarketKey: 'IN', profileCountryCode: null, internationalCountries: [] })
+    ).toBeNull();
+  });
+
+  it('refuses an IN item for a foreign profile', () => {
+    const refusal = assertMarketMatchesCountry({ itemMarketKey: 'IN', profileCountryCode: 'US', internationalCountries: ['US'] });
+    expect(refusal).toEqual({
+      code: 'market_country_mismatch',
+      message: 'This price is for customers in India. Please choose the price for your country.',
+    });
+  });
+
+  it('allows a ROW item for a profile country the flag has opened', () => {
+    expect(
+      assertMarketMatchesCountry({ itemMarketKey: 'ROW', profileCountryCode: 'US', internationalCountries: ['US'] })
+    ).toBeNull();
+  });
+
+  it('refuses a ROW item for an IN profile (no buying the zero-rated price from India)', () => {
+    const refusal = assertMarketMatchesCountry({ itemMarketKey: 'ROW', profileCountryCode: 'IN', internationalCountries: ['US'] });
+    expect(refusal?.code).toBe('country_not_supported');
+  });
+
+  it('refuses a ROW item when the countries flag has not opened that country', () => {
+    const refusal = assertMarketMatchesCountry({ itemMarketKey: 'ROW', profileCountryCode: 'US', internationalCountries: [] });
+    expect(refusal).toEqual({
+      code: 'country_not_supported',
+      message: "Payments from your country aren't open yet.",
+    });
+  });
+
+  it('treats a null profile country as IN, refusing a ROW item', () => {
+    const refusal = assertMarketMatchesCountry({ itemMarketKey: 'ROW', profileCountryCode: null, internationalCountries: ['US'] });
+    expect(refusal?.code).toBe('country_not_supported');
   });
 });
 

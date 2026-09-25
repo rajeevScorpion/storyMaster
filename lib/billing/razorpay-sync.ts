@@ -18,6 +18,7 @@ import { recordPayment } from '@/lib/billing/ledger';
 import { getPublishedTaxRule } from '@/lib/billing/tax-rules';
 import { buildCustomerSnapshot, loadBillingProfile } from '@/lib/billing/billing-profile';
 import { computeTaxFromGross, type TaxBreakdown } from '@/lib/billing/tax.shared';
+import { isForeignBillingCountry } from '@/lib/billing/international.shared';
 import { enqueueBillingJob } from '@/lib/billing/notifications/queue';
 import { subscriptionTransitionJobs } from '@/lib/billing/notifications/subscription-transition.shared';
 import type {
@@ -68,6 +69,46 @@ export interface SettleTopupOrderResult {
   state: 'granted' | 'already_granted' | 'pending' | 'failed' | 'refunded' | 'skipped_no_owner';
   grantedCoins: number;
   paymentId: string | null;
+}
+
+/**
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, step 6): whether the card that paid was
+ * foreign-issued, and its country -- the evidence behind billing-incidents.shared.ts's
+ * "export sale on a domestic card" card (a sale sold at the zero-rated ROW price should be paid with
+ * an international card; a domestic one may mean an India-resident customer claiming a US address).
+ */
+export interface PaymentCaptureEvidence {
+  cardInternational: boolean | null;
+  cardCountry: string | null;
+}
+
+/**
+ * Razorpay's payment entity carries `international` (true for a foreign-issued card) and `card.country`
+ * on a card payment, but lib/billing/razorpay.ts's RazorpayPayment type deliberately doesn't declare
+ * `card` at all (its own comment: "card/bank_account/vpa/etc. are intentionally absent... they are
+ * never read"). Reading the two extra fields locally, rather than widening that shared type, keeps
+ * that boundary intact -- only this file's capture-evidence step needs them.
+ */
+function paymentCaptureEvidence(payment: RazorpayPayment): PaymentCaptureEvidence {
+  const raw = payment as RazorpayPayment & { international?: boolean; card?: { country?: string | null } | null };
+  return {
+    cardInternational: typeof raw.international === 'boolean' ? raw.international : null,
+    cardCountry: raw.card?.country ?? null,
+  };
+}
+
+/**
+ * Merges capture-time card evidence into a purchase snapshot at the moment `billing_payments`' own
+ * row is inserted -- see ledger.ts's recordPayment: `purchase_snapshot_json` is written only on that
+ * first insert and never backfilled, so this is the one place this evidence can land. A renewal has
+ * no selling-context snapshot of its own (see the comment at its call site below), so for a renewal
+ * this evidence is the snapshot's only content, not an addition to one.
+ */
+function withCaptureEvidence(
+  snapshot: Record<string, unknown> | null,
+  evidence: PaymentCaptureEvidence
+): Record<string, unknown> {
+  return { ...(snapshot ?? {}), cardInternational: evidence.cardInternational, cardCountry: evidence.cardCountry };
 }
 
 /** Payments Phase 2 (docs/payments/phase-2-plan.md §4, Unit B): the net/tax/gross a top-up payment
@@ -217,7 +258,10 @@ export async function settleTopupOrder(input: {
       rawMethod: payment.method ?? null,
       providerFeeMinor: payment.fee ?? null,
       providerTaxMinor: payment.tax ?? null,
-      purchaseSnapshot: order.purchase_snapshot_json,
+      // Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, step 6): the captured payment's
+      // card evidence, merged in fresh here -- see withCaptureEvidence's own comment for why this
+      // field, not customer_snapshot_json or a raw payload column that billing_payments doesn't have.
+      purchaseSnapshot: withCaptureEvidence(order.purchase_snapshot_json, paymentCaptureEvidence(payment)),
       customerSnapshot,
       capturedAt: payment.created_at ? razorpayUnixToIso(payment.created_at) : new Date().toISOString(),
     });
@@ -390,6 +434,12 @@ interface SubscriptionPaymentMoney {
  * force *now* -- the total is the plan's gross; tax is never added on top of it a second time. Any
  * failure to resolve a rule/state falls back to recording the whole gross as net (no invented tax),
  * because a bookkeeping gap must never block coins the customer already paid for.
+ *
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, step 5): the rule market is picked
+ * from the profile's own country, exactly as resolveCheckoutTax (app/actions/pricing-checkout.ts)
+ * picks it at checkout -- IN for an IN (or missing) country, ROW for a listed foreign one. There is
+ * no country/market gate here, unlike checkout: the charge has already happened, so a mismatch is a
+ * bookkeeping question, not a reason to refuse.
  */
 async function resolveSubscriptionPaymentMoney(input: {
   supabase: AdminClient;
@@ -421,13 +471,14 @@ async function resolveSubscriptionPaymentMoney(input: {
   }
 
   try {
-    const ruleResult = await getPublishedTaxRule('IN', 'subscription');
-    if (ruleResult.status === 'ok') {
-      const profileResult = await loadBillingProfile(input.supabase, input.userId);
-      const profile = profileResult.status === 'ok' ? profileResult.profile : null;
-      const stateCode = profile?.state_code ?? null;
+    const profileResult = await loadBillingProfile(input.supabase, input.userId);
+    const profile = profileResult.status === 'ok' ? profileResult.profile : null;
+    const stateCode = profile?.state_code ?? null;
 
-      if (stateCode) {
+    if (profile && stateCode) {
+      const ruleMarketKey = isForeignBillingCountry(profile.country_code) ? 'ROW' : 'IN';
+      const ruleResult = await getPublishedTaxRule(ruleMarketKey, 'subscription');
+      if (ruleResult.status === 'ok') {
         const result = computeTaxFromGross({
           grossMinor: input.grossMinor,
           rule: ruleResult.rule,
@@ -456,6 +507,11 @@ interface SubscriptionPaymentMethod {
   rawMethod: string | null;
   providerFeeMinor: number | null;
   providerTaxMinor: number | null;
+  /** Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, step 6): null on the fallback path
+   * below (no Razorpay payment was actually fetched, so there is no card evidence to report) -- never
+   * guessed from the subscription entity, which carries no card details at all. */
+  cardInternational: boolean | null;
+  cardCountry: string | null;
 }
 
 /**
@@ -478,6 +534,8 @@ async function resolveSubscriptionPaymentMethod(input: {
     rawMethod: input.subscriptionPaymentMethod ?? null,
     providerFeeMinor: null,
     providerTaxMinor: null,
+    cardInternational: null,
+    cardCountry: null,
   };
 
   const existing = await input.supabase
@@ -497,10 +555,13 @@ async function resolveSubscriptionPaymentMethod(input: {
 
   try {
     const payment = await fetchRazorpayPayment(input.providerPaymentId);
+    const evidence = paymentCaptureEvidence(payment);
     return {
       rawMethod: payment.method ?? fallback.rawMethod,
       providerFeeMinor: payment.fee ?? null,
       providerTaxMinor: payment.tax ?? null,
+      cardInternational: evidence.cardInternational,
+      cardCountry: evidence.cardCountry,
     };
   } catch (err) {
     console.error(
@@ -755,7 +816,13 @@ export async function syncSubscriptionFromProvider(input: {
           // sitting -- a renewal has no order of its own (Razorpay charges the fixed plan amount on
           // its own schedule), and `checkoutOrder` here is still the original checkout order, so
           // attaching it to a renewal would misrepresent it as that renewal's purchase context.
-          purchaseSnapshot: isFirstCharge ? (checkoutOrder?.purchase_snapshot_json ?? null) : null,
+          // Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, step 6): every charge still
+          // gets this call's own captured card evidence merged in -- for a renewal that evidence is
+          // the snapshot's only content, never the stale checkout-time selling context above.
+          purchaseSnapshot: withCaptureEvidence(isFirstCharge ? (checkoutOrder?.purchase_snapshot_json ?? null) : null, {
+            cardInternational: method.cardInternational,
+            cardCountry: method.cardCountry,
+          }),
           customerSnapshot,
           cycleStart: razorpayUnixToIso(paidInvoice.billing_start),
           cycleEnd: razorpayUnixToIso(paidInvoice.billing_end),

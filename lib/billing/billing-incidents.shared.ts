@@ -178,6 +178,30 @@ export function isStalePendingRefundIncident(row: BillingRefundRowShape, nowMs: 
   return new Date(row.created_at).getTime() < nowMs - PENDING_REFUND_STALE_MS;
 }
 
+// ── Export sale on a domestic card (Payments Phase 8, docs/payments/phase-8-plan.md §8, Unit AC) ──
+// A payment sold at the zero-rated ROW price should be paid with an international (foreign-issued)
+// card -- lib/billing/razorpay-sync.ts records the payment entity's own `international`/`card.country`
+// into billing_payments.purchase_snapshot_json as cardInternational/cardCountry at capture time
+// (step 6). A `false` here may mean an India-resident customer claimed a US billing address to reach
+// the zero-rated price.
+
+export interface ExportSaleOnDomesticCardRowShape {
+  tax_breakdown_json: Record<string, unknown> | null;
+  purchase_snapshot_json: Record<string, unknown> | null;
+}
+
+/** Missing evidence (cardInternational absent -- e.g. a payment captured before this unit, or a card
+ * fetch that failed) is never flagged, only a captured `false` -- the same "don't manufacture a
+ * defect from a gap" rule as isFailedWebhookIncident and friends above. */
+export function isExportSaleOnDomesticCardIncident(row: ExportSaleOnDomesticCardRowShape): boolean {
+  const supplyType = (row.tax_breakdown_json as { supplyType?: string } | null)?.supplyType;
+  if (supplyType !== 'export') return false;
+
+  const cardInternational = (row.purchase_snapshot_json as { cardInternational?: boolean | null } | null)
+    ?.cardInternational;
+  return cardInternational === false;
+}
+
 /** The set-difference at the heart of the "no issued invoice" card: which of a batch of captured
  * payment ids has no matching row in `issuedPaymentIds` (payment ids with an `issued` `tax_invoice`
  * document). Pure so the join -- done as two separate PostgREST queries, since PostgREST has no

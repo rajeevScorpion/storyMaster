@@ -155,6 +155,17 @@ export interface PaymentMissingInvoiceRow {
   capturedAt: string;
 }
 
+// Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, step 7).
+export interface ExportSaleOnDomesticCardRow {
+  id: string;
+  subjectRef: string;
+  userId: string | null;
+  amountMinor: number;
+  currencyCode: string;
+  capturedAt: string;
+  cardCountry: string | null;
+}
+
 export interface BillingIncidentsDashboardData {
   /** The clock every section's age/threshold math was computed against. */
   generatedAtMs: number;
@@ -166,6 +177,7 @@ export interface BillingIncidentsDashboardData {
   stalePendingBillingJobs: BillingIncidentSection<StalePendingBillingJobRow>;
   stalePendingRefunds: BillingIncidentSection<StalePendingRefundRow>;
   paymentsMissingInvoice: BillingIncidentSection<PaymentMissingInvoiceRow>;
+  exportSalesOnDomesticCard: BillingIncidentSection<ExportSaleOnDomesticCardRow>;
 }
 
 const DASHBOARD_ROW_LIMIT = 100;
@@ -195,6 +207,7 @@ export async function getBillingIncidentsDashboard(): Promise<BillingIncidentsDa
     stalePendingBillingJobs,
     stalePendingRefunds,
     paymentsMissingInvoice,
+    exportSalesOnDomesticCard,
   ] = await Promise.all([
     loadFailedWebhooks(supabase, generatedAtMs),
     mode
@@ -208,6 +221,9 @@ export async function getBillingIncidentsDashboard(): Promise<BillingIncidentsDa
     loadStalePendingBillingJobs(supabase, generatedAtMs),
     loadStalePendingRefunds(supabase, generatedAtMs),
     loadPaymentsMissingInvoice(supabase),
+    mode
+      ? loadExportSalesOnDomesticCard(supabase, mode)
+      : Promise.resolve(unavailableSection<ExportSaleOnDomesticCardRow>('provider_config')),
   ]);
 
   return {
@@ -220,6 +236,7 @@ export async function getBillingIncidentsDashboard(): Promise<BillingIncidentsDa
     stalePendingBillingJobs,
     stalePendingRefunds,
     paymentsMissingInvoice,
+    exportSalesOnDomesticCard,
   };
 }
 
@@ -549,6 +566,47 @@ async function loadPaymentsMissingInvoice(
     }));
 
   return { status: 'ok', unavailableReason: null, totalCount: rows.length, rows };
+}
+
+/**
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, step 7): "export sales on a domestic
+ * card" -- billing-incidents.shared.ts's isExportSaleOnDomesticCardIncident pins the same two-field
+ * predicate this filters by directly (PostgREST's `->>` reads a JSON field as text, so a captured
+ * `false` compares as the string `'false'`; a missing or null field never matches, which is what
+ * keeps a pre-Phase-8 payment or a failed card-evidence fetch from being flagged). Scoped to the
+ * Razorpay mode, like the other three order/payment sections on this page.
+ */
+async function loadExportSalesOnDomesticCard(
+  supabase: AdminClient,
+  mode: RazorpayMode
+): Promise<BillingIncidentSection<ExportSaleOnDomesticCardRow>> {
+  const result = await supabase
+    .from('billing_payments')
+    .select('id, subject_ref, user_id, gross_minor, currency_code, captured_at, purchase_snapshot_json', {
+      count: 'exact',
+    })
+    .eq('provider', 'razorpay')
+    .eq('provider_mode', mode)
+    .eq('tax_breakdown_json->>supplyType', 'export')
+    .eq('purchase_snapshot_json->>cardInternational', 'false')
+    .order('captured_at', { ascending: false })
+    .limit(DASHBOARD_ROW_LIMIT);
+
+  if (isMissingBillingSchemaError(result.error)) return unavailableSection('schema');
+  throwIfQueryFailed(result.error, 'Failed to load export sales on a domestic card');
+
+  const rows: ExportSaleOnDomesticCardRow[] = (result.data ?? []).map((row: Record<string, unknown>) => ({
+    id: row.id as string,
+    subjectRef: row.subject_ref as string,
+    userId: (row.user_id as string | null) ?? null,
+    amountMinor: row.gross_minor as number,
+    currencyCode: row.currency_code as string,
+    capturedAt: row.captured_at as string,
+    cardCountry:
+      ((row.purchase_snapshot_json as { cardCountry?: string | null } | null)?.cardCountry as string | null) ?? null,
+  }));
+
+  return { status: 'ok', unavailableReason: null, totalCount: result.count ?? rows.length, rows };
 }
 
 function throwIfQueryFailed(error: PostgrestError | null, context: string): void {

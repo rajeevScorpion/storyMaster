@@ -1233,7 +1233,10 @@ describe('syncSubscriptionFromProvider — subscription payment method & custome
         providerFeeMinor: 40,
         providerTaxMinor: 6,
         customerSnapshot: orderCustomer,
-        purchaseSnapshot: checkoutOrder.purchase_snapshot_json,
+        // Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, step 6): the checkout order's
+        // own snapshot, plus this call's own captured card evidence -- fakePayment() here carries
+        // neither `international` nor `card`, so both come back null.
+        purchaseSnapshot: { ...checkoutOrder.purchase_snapshot_json, cardInternational: null, cardCountry: null },
       })
     );
   });
@@ -1278,9 +1281,56 @@ describe('syncSubscriptionFromProvider — subscription payment method & custome
       expect.objectContaining({
         kind: 'subscription_renewal',
         rawMethod: 'upi',
-        purchaseSnapshot: null,
+        // Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, step 6): a renewal has no
+        // selling-context snapshot of its own (unchanged), but now carries this call's own captured
+        // card evidence instead of staying bare null -- fakePayment() here carries neither
+        // `international` nor `card`, so both come back null.
+        purchaseSnapshot: { cardInternational: null, cardCountry: null },
         customerSnapshot: expect.objectContaining({ profileType: 'personal', legalName: 'Jane Doe', stateCode: '24', stateName: 'Gujarat' }),
       })
+    );
+  });
+
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, step 5/8): the renewal fallback
+  // picks the tax rule's market from the profile's own country -- IN for an IN profile, ROW for a
+  // foreign one -- exactly as resolveCheckoutTax does at checkout. No gate here: the charge has
+  // already happened, so the sync just needs to book it correctly.
+  it('picks the ROW tax rule for a renewal on a US billing profile', async () => {
+    const { supabase, enqueue } = createFakeSupabase();
+    fetchRazorpaySubscriptionMock.mockResolvedValueOnce(
+      fakeSubscription({ status: 'active', current_start: 1_702_592_000, current_end: 1_705_270_400, payment_method: 'card' })
+    );
+    enqueue('billing_subscriptions', 'select', {
+      data: { id: 'billing-sub-1', user_id: 'user-1', first_charge_confirmed_at: '2026-08-01T00:00:00.000Z' },
+      error: null,
+    });
+    enqueue('billing_subscriptions', 'update', { data: null, error: null });
+    fetchRazorpaySubscriptionInvoicesMock.mockResolvedValueOnce({
+      items: [fakeInvoice({ id: 'inv_row', billing_start: 1_702_592_000, billing_end: 1_705_270_400, amount_paid: 2900 })],
+    });
+    enqueue('billing_payments', 'select', { data: null, error: null }); // no row yet -> fetch the payment
+    enqueue('beat_grants', 'insert', { data: null, error: null });
+    fetchRazorpayPaymentMock.mockResolvedValueOnce(fakePayment({ id: 'pay_row_1', method: 'card' }));
+
+    getPublishedTaxRuleMock.mockResolvedValueOnce({
+      status: 'ok',
+      rule: { id: 'rule-row', marketKey: 'ROW', appliesTo: 'subscription', taxRegime: 'in_export_lut', ratePercent: 0, sacCode: '998439', supplierStateCode: '24' },
+    } as any);
+    const usProfile = {
+      legal_name: 'Jane Doe', billing_email: 'jane@example.com', phone: '+14155551234', company_name: null,
+      gstin: null, state_code: '96', country_code: 'US', address_line_1: null, address_line_2: null,
+      city: 'San Francisco', postal_code: '94103', updated_at: '2026-09-01T00:00:00.000Z',
+    };
+    loadBillingProfileMock.mockResolvedValueOnce({ status: 'ok', profile: usProfile } as any);
+
+    await syncSubscriptionFromProvider({
+      supabase, userId: 'user-1', planVersion: fakePlanVersion({ currency_code: 'USD', pricing_market_key: 'ROW' }),
+      providerSubscriptionId: 'sub_1', checkoutOrder: null, source: 'reconcile', rawPayload: {},
+    });
+
+    expect(getPublishedTaxRuleMock).toHaveBeenCalledWith('ROW', 'subscription');
+    expect(recordPaymentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'subscription_renewal', netMinor: 2900, taxMinor: 0, grossMinor: 2900 })
     );
   });
 

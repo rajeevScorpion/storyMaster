@@ -21,6 +21,7 @@ import {
   isStalePendingBillingJobIncident,
   isStalePendingRefundIncident,
   paymentIdsMissingInvoice,
+  isExportSaleOnDomesticCardIncident,
   formatIncidentAge,
 } from './billing-incidents.shared';
 
@@ -227,6 +228,57 @@ describe('paymentIdsMissingInvoice', () => {
 
   it('returns an empty list for an empty batch regardless of what was issued', () => {
     expect(paymentIdsMissingInvoice([], ['p1'])).toEqual([]);
+  });
+});
+
+// Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC, step 7).
+describe('isExportSaleOnDomesticCardIncident', () => {
+  it('flags an export sale whose captured evidence says the card was not international', () => {
+    expect(
+      isExportSaleOnDomesticCardIncident({
+        tax_breakdown_json: { supplyType: 'export' },
+        purchase_snapshot_json: { cardInternational: false },
+      })
+    ).toBe(true);
+  });
+
+  it('does not flag an export sale paid with an international card', () => {
+    expect(
+      isExportSaleOnDomesticCardIncident({
+        tax_breakdown_json: { supplyType: 'export' },
+        purchase_snapshot_json: { cardInternational: true },
+      })
+    ).toBe(false);
+  });
+
+  it('does not flag a non-export sale, even on a domestic card', () => {
+    expect(
+      isExportSaleOnDomesticCardIncident({
+        tax_breakdown_json: { supplyType: 'intra_state' },
+        purchase_snapshot_json: { cardInternational: false },
+      })
+    ).toBe(false);
+  });
+
+  it('does not flag an export sale with missing card evidence (never manufactures a defect from a gap)', () => {
+    expect(
+      isExportSaleOnDomesticCardIncident({
+        tax_breakdown_json: { supplyType: 'export' },
+        purchase_snapshot_json: { kind: 'topup' },
+      })
+    ).toBe(false);
+    expect(
+      isExportSaleOnDomesticCardIncident({
+        tax_breakdown_json: { supplyType: 'export' },
+        purchase_snapshot_json: null,
+      })
+    ).toBe(false);
+  });
+
+  it('does not flag a row with no tax breakdown at all', () => {
+    expect(
+      isExportSaleOnDomesticCardIncident({ tax_breakdown_json: null, purchase_snapshot_json: { cardInternational: false } })
+    ).toBe(false);
   });
 });
 

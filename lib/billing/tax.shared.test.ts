@@ -155,6 +155,24 @@ describe('computeTax', () => {
     expect(result.breakdown.supplyType).toBe('none');
   });
 
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC): the export-of-services regime --
+  // zero-rated under an LUT, supply type 'export', never CGST/SGST/IGST regardless of state codes.
+  it('charges no tax and classifies the supply as export under in_export_lut, regardless of state codes', () => {
+    const result = computeTax({
+      netMinor: 1000,
+      rule: fakeRule({ taxRegime: 'in_export_lut', ratePercent: 0, supplierStateCode: GUJARAT }),
+      supplierStateCode: GUJARAT,
+      placeOfSupplyStateCode: '96', // GST's "Foreign Country" code
+    });
+
+    expect(result.taxMinor).toBe(0);
+    expect(result.grossMinor).toBe(1000);
+    expect(result.breakdown.supplyType).toBe('export');
+    expect(result.breakdown.cgstMinor).toBe(0);
+    expect(result.breakdown.sgstMinor).toBe(0);
+    expect(result.breakdown.igstMinor).toBe(0);
+  });
+
   it('rejects a non-integer or negative net amount', () => {
     expect(() =>
       computeTax({ netMinor: 10.5, rule: fakeRule(), supplierStateCode: GUJARAT, placeOfSupplyStateCode: GUJARAT })
@@ -239,6 +257,19 @@ describe('computeTaxFromGross', () => {
       placeOfSupplyStateCode: GUJARAT,
     });
     expect(zeroRate).toMatchObject({ netMinor: 1000, taxMinor: 0, grossMinor: 1000 });
+  });
+
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC).
+  it('treats the whole gross as net under in_export_lut, classified as export', () => {
+    const result = computeTaxFromGross({
+      grossMinor: 1000,
+      rule: fakeRule({ taxRegime: 'in_export_lut', ratePercent: 0 }),
+      supplierStateCode: GUJARAT,
+      placeOfSupplyStateCode: '96',
+    });
+
+    expect(result).toMatchObject({ netMinor: 1000, taxMinor: 0, grossMinor: 1000 });
+    expect(result.breakdown.supplyType).toBe('export');
   });
 
   it('rejects a non-integer or negative gross amount', () => {

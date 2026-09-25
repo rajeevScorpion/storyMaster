@@ -32,6 +32,10 @@ vi.mock('@/lib/billing/tax-rules', () => ({
   getPublishedTaxRule: vi.fn(),
 }));
 
+vi.mock('@/lib/billing/international', () => ({
+  getInternationalCheckoutCountries: vi.fn(),
+}));
+
 vi.mock('@/lib/billing/billing-profile', async (importOriginal) => {
   // buildCustomerSnapshot (Payments Phase 5, Unit A) is left as the real, pure mapper so these tests
   // exercise the exact snapshot pricing-checkout.ts freezes into purchase_snapshot_json.customer,
@@ -56,6 +60,7 @@ import {
 } from '@/lib/billing/razorpay';
 import { getPublishedTaxRule } from '@/lib/billing/tax-rules';
 import { loadBillingProfile } from '@/lib/billing/billing-profile';
+import { getInternationalCheckoutCountries } from '@/lib/billing/international';
 import { prepareRazorpayCheckoutInternal } from './pricing-checkout';
 import type { DbPricingPlan, DbPricingPlanVersion } from '@/lib/types/database';
 
@@ -69,6 +74,7 @@ const createRazorpayOrderMock = vi.mocked(createRazorpayOrder);
 const cancelRazorpaySubscriptionMock = vi.mocked(cancelRazorpaySubscription);
 const getPublishedTaxRuleMock = vi.mocked(getPublishedTaxRule);
 const loadBillingProfileMock = vi.mocked(loadBillingProfile);
+const getInternationalCheckoutCountriesMock = vi.mocked(getInternationalCheckoutCountries);
 
 interface QueryResult {
   data?: unknown;
@@ -285,6 +291,33 @@ function billingProfileWithState(stateCode = '24') {
   } as any);
 }
 
+// Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC): a foreign billing profile -- state
+// code '96' (GST's "Foreign Country") plus a US `region` (Unit B's validateUsBillingFields requires
+// it), same completeness intent as billingProfileWithState.
+function billingProfileWithCountry(countryCode: string) {
+  loadBillingProfileMock.mockResolvedValueOnce({
+    status: 'ok',
+    profile: {
+      id: 'bp-2',
+      user_id: 'user-1',
+      legal_name: 'Jane Doe',
+      billing_email: 'jane@example.com',
+      phone: '+14155551234',
+      company_name: null,
+      gstin: null,
+      state_code: '96',
+      country_code: countryCode,
+      region: 'CA',
+      address_line_1: null,
+      address_line_2: null,
+      city: 'San Francisco',
+      postal_code: '94103',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    },
+  } as any);
+}
+
 function signedIn() {
   createClientMock.mockResolvedValue({
     auth: {
@@ -300,6 +333,10 @@ beforeEach(() => {
   // Default: migration 125 absent -- checkout charges the net, exactly as before Phase 2. Tests
   // that exercise tax charging override this with mockResolvedValueOnce.
   getPublishedTaxRuleMock.mockResolvedValue({ status: 'unavailable' });
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC): resolveCheckoutTax now loads the
+  // profile before the rule (it needs the profile's country to pick IN vs ROW), so this needs the
+  // same "125 absent" default as the rule above -- in practice both come from the same migration.
+  loadBillingProfileMock.mockResolvedValue({ status: 'unavailable' });
 });
 
 describe('prepareRazorpayCheckoutInternal — kill switch', () => {
@@ -721,7 +758,8 @@ describe('prepareRazorpayCheckoutInternal — top-up checkout charges tax', () =
     const { supabase, enqueue } = createFakeSupabase();
     createAdminClientMock.mockReturnValue(supabase);
     enqueue('pricing_topup_packs', 'select', { data: fakeTopupPackRow(), error: null });
-    taxAvailable();
+    // Payments Phase 8 (Unit AC): the profile now loads before the rule, and a null profile refuses
+    // before the rule is ever looked up -- no taxAvailable() needed here.
     loadBillingProfileMock.mockResolvedValueOnce({ status: 'ok', profile: null });
 
     await expect(
@@ -739,6 +777,9 @@ describe('prepareRazorpayCheckoutInternal — top-up checkout charges tax', () =
     const { supabase, enqueue } = createFakeSupabase();
     createAdminClientMock.mockReturnValue(supabase);
     enqueue('pricing_topup_packs', 'select', { data: fakeTopupPackRow(), error: null });
+    // Payments Phase 8 (Unit AC): resolveCheckoutTax now loads the profile before the rule, so a
+    // complete profile is needed to reach the rule lookup at all.
+    billingProfileWithState('24');
     getPublishedTaxRuleMock.mockResolvedValueOnce({ status: 'not_found' });
 
     await expect(
@@ -748,7 +789,7 @@ describe('prepareRazorpayCheckoutInternal — top-up checkout charges tax', () =
       )
     ).rejects.toThrow('temporarily unavailable');
 
-    expect(loadBillingProfileMock).not.toHaveBeenCalled();
+    expect(loadBillingProfileMock).toHaveBeenCalled();
     expect(createRazorpayOrderMock).not.toHaveBeenCalled();
   });
 
@@ -757,7 +798,8 @@ describe('prepareRazorpayCheckoutInternal — top-up checkout charges tax', () =
     const { supabase, enqueue, calls } = createFakeSupabase();
     createAdminClientMock.mockReturnValue(supabase);
     enqueue('pricing_topup_packs', 'select', { data: fakeTopupPackRow(), error: null });
-    // beforeEach already defaults getPublishedTaxRuleMock to 'unavailable'.
+    // beforeEach already defaults both loadBillingProfileMock and getPublishedTaxRuleMock to
+    // 'unavailable' (Payments Phase 8, Unit AC: the profile now loads first).
     createRazorpayOrderMock.mockResolvedValueOnce({ id: 'order_rzp_1', amount: 500, currency: 'INR', receipt: null, status: 'created', notes: {} });
     enqueue('billing_orders', 'insert', { data: { id: 'order-1' }, error: null });
 
@@ -769,7 +811,8 @@ describe('prepareRazorpayCheckoutInternal — top-up checkout charges tax', () =
     expect(createRazorpayOrderMock).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 500 }));
     const insertCall = calls.find((call) => call.table === 'billing_orders' && call.op === 'insert');
     expect(insertCall?.payload).not.toHaveProperty('subject_ref');
-    expect(loadBillingProfileMock).not.toHaveBeenCalled();
+    expect(loadBillingProfileMock).toHaveBeenCalled();
+    expect(getPublishedTaxRuleMock).not.toHaveBeenCalled();
   });
 });
 
@@ -1014,7 +1057,8 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax'
     createAdminClientMock.mockReturnValue(supabase);
     enqueue('pricing_plan_versions', 'select', { data: fakePlanVersion(), error: null });
     enqueue('pricing_plans', 'select', { data: fakePlan(), error: null });
-    taxAvailable();
+    // Payments Phase 8 (Unit AC): the profile now loads before the rule, and a null profile refuses
+    // before the rule is ever looked up -- no taxAvailable() needed here.
     loadBillingProfileMock.mockResolvedValueOnce({ status: 'ok', profile: null });
 
     await expect(
@@ -1025,5 +1069,98 @@ describe('prepareRazorpayCheckoutInternal — subscription checkout charges tax'
     ).rejects.toThrow('billing details');
 
     expect(createRazorpaySubscriptionMock).not.toHaveBeenCalled();
+  });
+});
+
+// Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit AC): the provider guard (G1) and the
+// market-country consistency rule, wired into prepareRazorpayCheckoutInternal itself.
+describe('prepareRazorpayCheckoutInternal — provider and country guard (Payments Phase 8, Unit AC)', () => {
+  it('refuses a stripe-tagged item and never calls Razorpay', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_topup_packs', 'select', { data: fakeTopupPackRow({ provider: 'stripe' }), error: null });
+
+    const error = await prepareRazorpayCheckoutInternal(
+      { kind: 'topup', topupPackId: 'pack-1' },
+      { adultAttested: true, audienceMode: 'all' }
+    ).catch((err) => err);
+
+    expect(error).toMatchObject({
+      message: "This item can't be bought here yet.",
+      code: 'provider_unavailable',
+      httpStatus: 400,
+    });
+    expect(createRazorpayOrderMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses an India profile buying a ROW item', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_topup_packs', 'select', {
+      data: fakeTopupPackRow({ pricing_market_key: 'ROW', currency_code: 'USD' }),
+      error: null,
+    });
+    billingProfileWithState('24'); // country_code 'IN'
+    getInternationalCheckoutCountriesMock.mockResolvedValueOnce(['US']);
+
+    const error = await prepareRazorpayCheckoutInternal(
+      { kind: 'topup', topupPackId: 'pack-1' },
+      { adultAttested: true, audienceMode: 'all' }
+    ).catch((err) => err);
+
+    expect(error).toMatchObject({ code: 'country_not_supported' });
+    expect(createRazorpayOrderMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a US profile when the countries flag is off (empty list)", async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_topup_packs', 'select', {
+      data: fakeTopupPackRow({ pricing_market_key: 'ROW', currency_code: 'USD' }),
+      error: null,
+    });
+    billingProfileWithCountry('US');
+    getInternationalCheckoutCountriesMock.mockResolvedValueOnce([]); // flag off
+
+    const error = await prepareRazorpayCheckoutInternal(
+      { kind: 'topup', topupPackId: 'pack-1' },
+      { adultAttested: true, audienceMode: 'all' }
+    ).catch((err) => err);
+
+    expect(error).toMatchObject({ code: 'country_not_supported' });
+    expect(createRazorpayOrderMock).not.toHaveBeenCalled();
+  });
+
+  it('charges a US profile the zero-rated export price once the countries flag lists it', async () => {
+    getFeatureFlagMock.mockResolvedValueOnce(true);
+    const { supabase, enqueue, calls } = createFakeSupabase();
+    createAdminClientMock.mockReturnValue(supabase);
+    enqueue('pricing_topup_packs', 'select', {
+      data: fakeTopupPackRow({ pricing_market_key: 'ROW', currency_code: 'USD', price_minor: 2900 }),
+      error: null,
+    });
+    billingProfileWithCountry('US');
+    getInternationalCheckoutCountriesMock.mockResolvedValueOnce(['US']);
+    getPublishedTaxRuleMock.mockResolvedValueOnce({
+      status: 'ok',
+      rule: { id: 'rule-row', marketKey: 'ROW', appliesTo: 'all', taxRegime: 'in_export_lut', ratePercent: 0, sacCode: '998439', supplierStateCode: '24' },
+    } as any);
+    createRazorpayOrderMock.mockResolvedValueOnce({ id: 'order_rzp_row', amount: 2900, currency: 'USD', receipt: null, status: 'created', notes: {} });
+    enqueue('billing_orders', 'insert', { data: { id: 'order-row-1' }, error: null });
+
+    const result = await prepareRazorpayCheckoutInternal(
+      { kind: 'topup', topupPackId: 'pack-1' },
+      { adultAttested: true, audienceMode: 'all' }
+    );
+
+    expect(getPublishedTaxRuleMock).toHaveBeenCalledWith('ROW', 'topup');
+    expect(result).toMatchObject({ kind: 'topup', amountMinor: 2900 });
+    const insertCall = calls.find((call) => call.table === 'billing_orders' && call.op === 'insert');
+    expect(insertCall?.payload).toMatchObject({
+      purchase_snapshot_json: expect.objectContaining({ netMinor: 2900, taxMinor: 0, grossMinor: 2900 }),
+    });
   });
 });

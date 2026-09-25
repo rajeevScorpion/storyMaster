@@ -1,5 +1,5 @@
 import type { ComponentType, ReactNode } from 'react';
-import { CalendarClock, FileWarning, Hourglass, MailWarning, PackageX, Webhook } from 'lucide-react';
+import { CalendarClock, FileWarning, Globe, Hourglass, MailWarning, PackageX, Webhook } from 'lucide-react';
 import AdminPageHeader from '@/components/admin/AdminPageHeader';
 import { getBillingIncidentsDashboard, type BillingIncidentSection } from '@/app/actions/billing-incidents';
 import { formatIncidentAge } from '@/lib/billing/billing-incidents.shared';
@@ -8,7 +8,8 @@ import { formatIncidentAge } from '@/lib/billing/billing-incidents.shared';
 // dashboard. Renders the four failure classes lib/billing/razorpay-reconcile.ts's daily cron scans
 // for -- see app/actions/billing-incidents.ts for why the counts can't drift apart from it -- plus
 // four Phase 6 notification/document health cards added in Payments Phase 7
-// (docs/payments/phase-7-plan.md §8, Unit B2). This page never mutates anything; there is nothing
+// (docs/payments/phase-7-plan.md §8, Unit B2), and one Phase 8 international-checkout card
+// (docs/payments/phase-8-plan.md §8, Unit AC). This page never mutates anything; there is nothing
 // here to confirm or undo.
 export const dynamic = 'force-dynamic';
 
@@ -347,6 +348,32 @@ export default async function BillingIncidentsPage() {
               </div>
               <StatusPill tone="attention">no invoice</StatusPill>
             </div>
+          </RowCard>
+        ))}
+      </SectionShell>
+
+      <SectionShell
+        title="Export sales on a domestic card"
+        description="Zero-rated ROW payments (export of services under the LUT) whose captured card evidence says the card was NOT international -- may be an India-resident customer claiming a US billing address."
+        icon={Globe}
+        section={data.exportSalesOnDomesticCard}
+        healthyLabel="No export sale has been paid with a domestic card."
+      >
+        {data.exportSalesOnDomesticCard.rows.map((row) => (
+          <RowCard key={row.id}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-neutral-100">Payment {shortId(row.id)}</p>
+                <p className="mt-1 text-xs text-neutral-500">
+                  {row.userId ? <>User {shortId(row.userId)} · </> : 'No owner (deleted account) · '}
+                  {formatAmount(row.amountMinor, row.currencyCode)} · captured {formatIncidentAge(nowMs, row.capturedAt)} ago
+                </p>
+              </div>
+              <StatusPill tone="attention">domestic card</StatusPill>
+            </div>
+            <p className="mt-2 text-xs text-neutral-500">
+              <FieldLabel>Card country</FieldLabel> {row.cardCountry ?? 'unknown'}
+            </p>
           </RowCard>
         ))}
       </SectionShell>
