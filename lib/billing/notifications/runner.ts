@@ -46,7 +46,12 @@ async function rekickBillingWorker(): Promise<void> {
     body: JSON.stringify({}),
     signal: AbortSignal.timeout(15_000),
     keepalive: true,
-  }).catch((error) => console.error('Failed to re-kick billing job worker:', error));
+  })
+    .then((response) => {
+      // A 401/404 here (a Preview's APP_URL names another deployment) would otherwise be silent.
+      if (!response.ok) console.error(`Billing job worker re-kick got ${response.status} from ${baseUrl()}`);
+    })
+    .catch((error) => console.error('Failed to re-kick billing job worker:', error));
 }
 
 /** Permanent for the process, like every other missing-schema latch in this codebase (a hand-applied

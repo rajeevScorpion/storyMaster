@@ -82,7 +82,7 @@ export const OPERATIONAL_FLAG_DEFINITIONS: readonly OperationalFlagDefinition[] 
     enabledHelp:
       'Every recorded payment and refund is issued a numbered document. Numbers come from the database sequence and are gapless by law, so turning this on starts a series that cannot be quietly restarted.',
     disabledHelp:
-      'No documents are issued or numbered. Payments are still recorded in full, so documents can be issued later. This is the intended state until the document rendering in Phase 6 exists.',
+      'No documents are issued or numbered. Payments are still recorded in full, so documents can be issued later. Keep it off on production until the CA confirms the numbering format.',
     defaultEnabled: false,
     group: 'billing',
   },

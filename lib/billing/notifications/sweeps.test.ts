@@ -27,10 +27,10 @@ interface QueryResult {
 /** A minimal chainable stand-in: every filter method is a no-op passthrough, and the builder itself
  * is awaitable, matching the other billing test files' FakeQueryBuilder. */
 class FakeQueryBuilder implements PromiseLike<QueryResult> {
-  constructor(private readonly result: QueryResult) {}
+  constructor(private readonly result: QueryResult, private readonly gteCalls: [string, string][] = []) {}
   select() { return this; }
   eq() { return this; }
-  gte() { return this; }
+  gte(column: string, value: string) { this.gteCalls.push([column, value]); return this; }
   lte() { return this; }
   in() { return this; }
   limit() { return this; }
@@ -44,6 +44,18 @@ class FakeQueryBuilder implements PromiseLike<QueryResult> {
 
 function fakeAdmin(result: QueryResult) {
   return { from: (_table: string) => new FakeQueryBuilder(result) } as any;
+}
+
+const SWITCHED_ON_LONG_AGO: QueryResult = {
+  data: [{ enabled: true, updated_at: '2020-01-01T00:00:00.000Z' }],
+  error: null,
+};
+
+/** The receipt sweep reads feature_flags first, then billing_payments. */
+function fakeReceiptAdmin(payments: QueryResult, flags: QueryResult = SWITCHED_ON_LONG_AGO, gteCalls: [string, string][] = []) {
+  return {
+    from: (table: string) => new FakeQueryBuilder(table === 'feature_flags' ? flags : payments, gteCalls),
+  } as any;
 }
 
 beforeEach(() => {
@@ -63,7 +75,7 @@ describe('sweepMissingReceiptJobs', () => {
 
   it('enqueues payment_receipt for every settled payment in the window, with its frozen billing email', async () => {
     createAdminClientMock.mockReturnValue(
-      fakeAdmin({
+      fakeReceiptAdmin({
         data: [
           { id: 'payment-1', subject_ref: 'user-1', user_id: 'user-1', customer_snapshot_json: { billingEmail: 'a@example.com' } },
           { id: 'payment-2', subject_ref: 'user-2', user_id: 'user-2', customer_snapshot_json: null },
@@ -95,7 +107,7 @@ describe('sweepMissingReceiptJobs', () => {
 
   it('skips a row with neither subject_ref nor user_id', async () => {
     createAdminClientMock.mockReturnValue(
-      fakeAdmin({ data: [{ id: 'payment-3', subject_ref: null, user_id: null, customer_snapshot_json: null }], error: null })
+      fakeReceiptAdmin({ data: [{ id: 'payment-3', subject_ref: null, user_id: null, customer_snapshot_json: null }], error: null })
     );
 
     const count = await sweepMissingReceiptJobs();
@@ -105,7 +117,7 @@ describe('sweepMissingReceiptJobs', () => {
   });
 
   it('fails closed (returns 0, never throws) when the ledger schema is missing', async () => {
-    createAdminClientMock.mockReturnValue(fakeAdmin({ data: null, error: { code: '42P01', message: 'relation does not exist' } }));
+    createAdminClientMock.mockReturnValue(fakeReceiptAdmin({ data: null, error: { code: '42P01', message: 'relation does not exist' } }));
 
     const count = await sweepMissingReceiptJobs();
 
@@ -114,7 +126,41 @@ describe('sweepMissingReceiptJobs', () => {
   });
 
   it('fails closed on an unrelated query error too, without throwing', async () => {
-    createAdminClientMock.mockReturnValue(fakeAdmin({ data: null, error: { code: '55000', message: 'could not obtain lock' } }));
+    createAdminClientMock.mockReturnValue(fakeReceiptAdmin({ data: null, error: { code: '55000', message: 'could not obtain lock' } }));
+
+    await expect(sweepMissingReceiptJobs()).resolves.toBe(0);
+    expect(enqueueBillingJobMock).not.toHaveBeenCalled();
+  });
+
+  it('never reaches back past when the switches went on', async () => {
+    const switchedOn = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const gteCalls: [string, string][] = [];
+    createAdminClientMock.mockReturnValue(
+      fakeReceiptAdmin({ data: [], error: null }, { data: [{ enabled: true, updated_at: switchedOn }, { enabled: false, updated_at: '2020-01-01T00:00:00.000Z' }], error: null }, gteCalls)
+    );
+
+    await sweepMissingReceiptJobs();
+
+    expect(gteCalls).toEqual([['captured_at', switchedOn]]);
+  });
+
+  it('caps the window at 3 days when the switches went on long ago', async () => {
+    const gteCalls: [string, string][] = [];
+    createAdminClientMock.mockReturnValue(fakeReceiptAdmin({ data: [], error: null }, SWITCHED_ON_LONG_AGO, gteCalls));
+
+    await sweepMissingReceiptJobs();
+
+    const cutoffMs = Date.parse(gteCalls[0][1]);
+    expect(Math.abs(cutoffMs - (Date.now() - 3 * 24 * 60 * 60 * 1000))).toBeLessThan(5_000);
+  });
+
+  it('sweeps nothing when it cannot tell when the switches went on', async () => {
+    createAdminClientMock.mockReturnValue(
+      fakeReceiptAdmin(
+        { data: [{ id: 'payment-1', subject_ref: 'user-1', user_id: 'user-1', customer_snapshot_json: null }], error: null },
+        { data: null, error: { message: 'read failed' } }
+      )
+    );
 
     await expect(sweepMissingReceiptJobs()).resolves.toBe(0);
     expect(enqueueBillingJobMock).not.toHaveBeenCalled();

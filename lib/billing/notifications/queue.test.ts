@@ -16,6 +16,11 @@ vi.mock('next/server', () => ({
   after: (cb: () => void) => afterMock(cb),
 }));
 
+const runBillingJobsOnceMock = vi.fn();
+vi.mock('@/lib/billing/notifications/runner', () => ({
+  runBillingJobsOnce: () => runBillingJobsOnceMock(),
+}));
+
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
@@ -113,10 +118,7 @@ describe('enqueueBillingJob', () => {
       payload_json: { note: 'test' },
     });
     expect(afterMock).toHaveBeenCalledTimes(1);
-    expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/billing/jobs/run'),
-      expect.objectContaining({ method: 'POST' })
-    );
+    await vi.waitFor(() => expect(runBillingJobsOnceMock).toHaveBeenCalledTimes(1));
   });
 
   it('never throws when the insert fails with a real database error', async () => {
@@ -156,21 +158,36 @@ describe('enqueueBillingJob', () => {
 });
 
 describe('kickBillingJobs', () => {
-  it('uses after() when it is available', () => {
-    afterMock.mockImplementation(() => {});
+  beforeEach(() => {
+    runBillingJobsOnceMock.mockReset();
+    runBillingJobsOnceMock.mockResolvedValue({ processed: 0, failed: 0, remaining: 0 });
+  });
+
+  it('runs the worker in-process through after(), never over HTTP', async () => {
+    let scheduled: (() => Promise<void>) | undefined;
+    afterMock.mockImplementation((cb: () => Promise<void>) => { scheduled = cb; });
     kickBillingJobs();
     expect(afterMock).toHaveBeenCalledTimes(1);
+    expect(runBillingJobsOnceMock).not.toHaveBeenCalled();
+    await scheduled!();
+    expect(runBillingJobsOnceMock).toHaveBeenCalledTimes(1);
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it('falls back to a bare fetch when after() throws (no request scope)', () => {
+  it('runs the worker directly when after() throws (no request scope)', async () => {
     afterMock.mockImplementation(() => {
       throw new Error('after() was called outside a request scope');
     });
     kickBillingJobs();
-    expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/billing/jobs/run'),
-      expect.objectContaining({ method: 'POST' })
-    );
+    await vi.waitFor(() => expect(runBillingJobsOnceMock).toHaveBeenCalledTimes(1));
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('swallows a worker failure', async () => {
+    let scheduled: (() => Promise<void>) | undefined;
+    afterMock.mockImplementation((cb: () => Promise<void>) => { scheduled = cb; });
+    runBillingJobsOnceMock.mockRejectedValueOnce(new Error('boom'));
+    kickBillingJobs();
+    await expect(scheduled!()).resolves.toBeUndefined();
   });
 });

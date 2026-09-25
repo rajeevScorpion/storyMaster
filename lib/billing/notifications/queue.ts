@@ -40,42 +40,28 @@ export async function shouldEnqueue(): Promise<boolean> {
   return emailsEnabled || issuingEnabled;
 }
 
-function baseUrl(): string {
-  const raw = process.env.APP_URL
-    || process.env.NEXT_PUBLIC_APP_URL
-    || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
-  return raw.replace(/\/$/, '');
-}
-
-async function fetchKick(): Promise<void> {
-  const secret = process.env.CRON_SECRET;
-  await fetch(`${baseUrl()}/api/billing/jobs/run`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(secret ? { authorization: `Bearer ${secret}` } : {}),
-    },
-    body: JSON.stringify({}),
-    signal: AbortSignal.timeout(15_000),
-    keepalive: true,
-  }).catch((error) => console.error('Failed to kick billing job worker:', error));
+async function runWorkerInProcess(): Promise<void> {
+  try {
+    // Lazy, so every route that enqueues doesn't bundle the PDF renderer.
+    const { runBillingJobsOnce } = await import('@/lib/billing/notifications/runner');
+    await runBillingJobsOnce();
+  } catch (error) {
+    console.error('Billing job worker (kick) failed:', error instanceof Error ? error.message : error);
+  }
 }
 
 /**
- * Fires the worker without making the caller wait for it. Wrapped in `after()` when this is running
- * inside a request (a route handler or a server action) so the fetch survives past the response being
- * sent -- an un-awaited fetch outside `after()` can be cut short the moment a Vercel serverless
- * instance freezes (see lib/media/image-job-runner.ts's rekickWorker comment for the same rationale).
- * `after()` throws when there is no request scope to hang the callback off (e.g. a script, or a test
- * importing this module directly); the fallback there is a bare fire-and-forget call, which is
- * best-effort only -- the daily reconcile and the next real event both already exist as backstops
- * (plan §2), so a dropped kick here is never the only way a job gets picked up.
+ * Runs the worker in this process once the response has been sent. It does not call the worker
+ * route over HTTP: on a Preview, APP_URL names another deployment (the dev branch), so an HTTP kick
+ * got a silent 404 and jobs waited for the daily reconcile. The runner claims atomically, so a kick
+ * racing the cron or another kick is safe. Outside a request scope `after()` throws, and the run is
+ * fire-and-forget; the daily reconcile is the backstop either way.
  */
 export function kickBillingJobs(): void {
   try {
-    after(fetchKick);
+    after(runWorkerInProcess);
   } catch {
-    void fetchKick();
+    void runWorkerInProcess();
   }
 }
 

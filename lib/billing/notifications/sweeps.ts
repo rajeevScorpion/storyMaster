@@ -27,6 +27,30 @@ const RECEIPT_SWEEP_STATUSES = ['captured', 'refunded', 'partially_refunded', 'd
 const RENEWAL_REMINDER_MIN_DAYS = 6;
 const RENEWAL_REMINDER_MAX_DAYS = 8;
 
+const QUEUE_SWITCH_FLAG_KEYS = ['billing_emails_enabled', 'billing_document_issuing_enabled'];
+
+type AdminClient = ReturnType<typeof createAdminClient>;
+
+/**
+ * When the queue started accepting jobs: the earliest `updated_at` among the switches that are on.
+ * A payment captured before then was never meant to get a job, and sweeping it would number an
+ * invoice and email a receipt for a purchase that predates the switch (seen on the dev walk,
+ * 2026-09-25). `updated_at` moves on any edit, so this can only narrow the window, never widen it.
+ * Null when unreadable, and the sweep then does nothing.
+ */
+async function loadQueueSwitchedOnSince(admin: AdminClient): Promise<number | null> {
+  const result = await admin.from('feature_flags').select('enabled, updated_at').in('flag_key', QUEUE_SWITCH_FLAG_KEYS);
+  if (result.error) {
+    console.error('[billing sweeps] failed to read when the billing switches went on:', result.error.message);
+    return null;
+  }
+  const times = ((result.data ?? []) as { enabled: boolean; updated_at: string | null }[])
+    .filter((row) => row.enabled && row.updated_at)
+    .map((row) => Date.parse(row.updated_at as string))
+    .filter(Number.isFinite);
+  return times.length > 0 ? Math.min(...times) : null;
+}
+
 interface SweepPaymentRow {
   id: string;
   subject_ref: string | null;
@@ -44,7 +68,9 @@ export async function sweepMissingReceiptJobs(): Promise<number> {
   if (!(await shouldEnqueue())) return 0;
 
   const admin = createAdminClient();
-  const cutoff = new Date(Date.now() - RECEIPT_SWEEP_WINDOW_MS).toISOString();
+  const switchedOnSince = await loadQueueSwitchedOnSince(admin);
+  if (switchedOnSince === null) return 0;
+  const cutoff = new Date(Math.max(Date.now() - RECEIPT_SWEEP_WINDOW_MS, switchedOnSince)).toISOString();
 
   const result = await admin
     .from('billing_payments')
