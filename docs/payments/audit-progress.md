@@ -3,7 +3,21 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-24 late — Phase 6 A, B, C1 done; C2 and D were running; Phase 7 planned)
+## Next session starts here (updated 2026-09-25 — C2 leftovers landed, D reviewed, migration 137 written)
+
+**2026-09-25 pickup (Opus):**
+- The C2 agent died with its transition helper and hook 7 (`customer_notify`) uncommitted. Reviewed and
+  committed in `d41eb04`. Hooks 1-6, the sweeps and the reconcile wiring were never started. A new Sonnet
+  agent was given exactly those (§10 hooks 1-6 and 8). **Check `git log` for `Unit C2 --` commits after
+  `f20e419`, and review them against §10.**
+- **C2 processors reviewed, accepted with one fix** (`1c4a6fe`): the email said "attached" whenever a
+  document existed, even with no PDF attached.
+- **D reviewed, accepted with one fix** (`5dd9814`): Resend reported "queued" with emails switched off,
+  and any auth lookup error read as "account deleted".
+- A Sonnet agent was writing `app/actions/admin-billing-jobs.test.ts` (D's missing tests).
+- **Migration 137** (`f20e419`) adds the two audit types. **Applied nowhere.** Phase 7 keeps 136.
+
+**Earlier block (2026-09-24 late) follows.**
 
 **Read this block first, then "Phase 6 execution" further down.**
 - **Phase 6** (`phase-6-plan.md`):
