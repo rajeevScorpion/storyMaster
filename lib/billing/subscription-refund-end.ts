@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { createAdminClient } from '@/lib/supabase/admin';
 import { cancelRazorpaySubscription } from '@/lib/billing/razorpay';
+import { enqueueBillingJob } from '@/lib/billing/notifications/queue';
 import { isMissingBillingSchemaError } from '@/lib/billing/schema-availability.shared';
 import { shouldEndSubscriptionAfterFullRefund } from '@/lib/billing/subscription-refund-end.shared';
 
@@ -55,7 +56,7 @@ export async function endSubscriptionAfterFullRefund(
   try {
     const subscriptionResult = await supabase
       .from('billing_subscriptions')
-      .select('id, status')
+      .select('id, status, user_id, subject_ref')
       .eq('provider', 'razorpay')
       .eq('provider_subscription_id', providerSubscriptionId)
       .maybeSingle();
@@ -65,7 +66,9 @@ export async function endSubscriptionAfterFullRefund(
       return { ended: false, error: `Failed to load the subscription: ${subscriptionResult.error.message}` };
     }
 
-    const subscription = subscriptionResult.data as { id: string; status: string } | null;
+    const subscription = subscriptionResult.data as
+      | { id: string; status: string; user_id: string | null; subject_ref: string | null }
+      | null;
     if (!subscription) return { ended: false, error: null };
 
     const shouldEnd = shouldEndSubscriptionAfterFullRefund({
@@ -102,6 +105,20 @@ export async function endSubscriptionAfterFullRefund(
         ended: false,
         error: `Cancelled at Razorpay but failed to update the local subscription row: ${updateResult.error.message}`,
       };
+    }
+
+    // The row went straight to `cancelled` here, so the sync's own status-transition rule never sees
+    // the change and would never send "your plan has ended". Same kind and dedupe key as that rule, so
+    // it is still sent at most once. enqueueBillingJob never throws.
+    const subjectRef = subscription.subject_ref ?? subscription.user_id;
+    if (subjectRef) {
+      await enqueueBillingJob({
+        kind: 'subscription_ended',
+        dedupeKey: `sub_ended:${subscription.id}`,
+        subjectRef,
+        userId: subscription.user_id,
+        billingSubscriptionId: subscription.id,
+      });
     }
 
     return { ended: true, error: null };
