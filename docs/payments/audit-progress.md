@@ -16,7 +16,14 @@
   - **B:** international billing details.
   - **First thing next session:** `git log --oneline -15` for `Phase 8 AC --` / `Phase 8 B --` commits,
     and `git status` for leftovers. Then review each diff against §8.
-- **Then:** unit D (documents, copy and emails; plan §4), E (the walk), and F (the readiness doc).
+- **Update (usage 77%; the owner said hold and let the agent land):**
+  - **AC (`f466522`) and B (`02bb926`) were reviewed and accepted.** Combined: tsc clean, 2,601 tests.
+  - **G1 was not a live defect** (plan §2, corrected).
+  - **F is done (`8a3bde0`):** `international-readiness.md`, and runbook §3 (138) and §12 (the US
+    switch-on).
+  - **D is running (Sonnet; spec in plan §9).** Look for `Phase 8 D --` commits. Review above all that
+    IN documents render byte-identical.
+  - **Then:** E, the walk, which needs 138 applied on dev.
 - **Invoice PDF fix (`fec0caa`):** long addresses and descriptions now wrap. The CA has the clean
   sample set (made with `.agent/ca-render.ts`). **Waiting on the CA's answers** (runbook §1.2, plus plan
   §6 for the US).
