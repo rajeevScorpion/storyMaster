@@ -6,10 +6,16 @@ vi.mock('@/lib/billing/razorpay', () => ({
   cancelRazorpaySubscription: vi.fn(),
 }));
 
+vi.mock('@/lib/billing/notifications/queue', () => ({
+  enqueueBillingJob: vi.fn(),
+}));
+
 import { cancelRazorpaySubscription } from '@/lib/billing/razorpay';
+import { enqueueBillingJob } from '@/lib/billing/notifications/queue';
 import { endSubscriptionAfterFullRefund } from './subscription-refund-end';
 
 const cancelRazorpaySubscriptionMock = vi.mocked(cancelRazorpaySubscription);
+const enqueueBillingJobMock = vi.mocked(enqueueBillingJob);
 
 interface QueryResult {
   data?: unknown;
@@ -87,7 +93,10 @@ describe('endSubscriptionAfterFullRefund', () => {
   });
 
   it('cancels at Razorpay and marks the local row cancelled for a current-cycle full refund', async () => {
-    const { supabase, calls } = createFakeSupabase({ data: { id: 'sub-row-1', status: 'active' }, error: null });
+    const { supabase, calls } = createFakeSupabase({
+      data: { id: 'sub-row-1', status: 'active', user_id: 'user-1', subject_ref: 'subject-1' },
+      error: null,
+    });
     cancelRazorpaySubscriptionMock.mockResolvedValueOnce({
       id: 'sub_1', plan_id: 'plan_1', customer_id: null, status: 'cancelled',
       current_start: null, current_end: null, charge_at: null, start_at: null, total_count: 1200,
@@ -107,6 +116,14 @@ describe('endSubscriptionAfterFullRefund', () => {
     expect(cancelRazorpaySubscriptionMock).toHaveBeenCalledWith({ subscriptionId: 'sub_1', atCycleEnd: false });
     const update = calls.find((c) => c.op === 'update');
     expect(update?.payload).toMatchObject({ status: 'cancelled', cancel_at_period_end: false });
+    // The sync never sees this transition, so the plan-ended email is queued here, once.
+    expect(enqueueBillingJobMock).toHaveBeenCalledWith({
+      kind: 'subscription_ended',
+      dedupeKey: 'sub_ended:sub-row-1',
+      subjectRef: 'subject-1',
+      userId: 'user-1',
+      billingSubscriptionId: 'sub-row-1',
+    });
   });
 
   it('does not end it for a refund of a PAST cycle -- and never calls Razorpay', async () => {
