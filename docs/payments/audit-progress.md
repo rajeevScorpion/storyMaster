@@ -21,9 +21,14 @@
   - **G1 was not a live defect** (plan §2, corrected).
   - **F is done (`8a3bde0`):** `international-readiness.md`, and runbook §3 (138) and §12 (the US
     switch-on).
-  - **D is running (Sonnet; spec in plan §9).** Look for `Phase 8 D --` commits. Review above all that
-    IN documents render byte-identical.
-  - **Then:** E, the walk, which needs 138 applied on dev.
+  - **D is done and accepted** (`5ac7d20`, `97f60c9`, `8360e57`).
+    - Gates: tsc and lint clean, **2,627 tests / 198 files**, `build:verify` compiled.
+    - An India invoice renders to a fixed SHA-256, pinned from before D. The test passes.
+    - The Yearly toggle is off for every Razorpay market (§9 overrides an older §4 line on purpose).
+    - `LEGAL_LUT_ARN = ''` was added in `business-config.ts`.
+    - **Not done yet, left for Opus:** the "Customers outside India" section of the Refund Policy and
+      Terms (plan §4 D, last bullet). It's needed before the US switch-on, not before the walk.
+  - **Next (a fresh session): E, the walk** (plan §4 P8-E). It needs 138 applied on dev.
 - **Invoice PDF fix (`fec0caa`):** long addresses and descriptions now wrap. The CA has the clean
   sample set (made with `.agent/ca-render.ts`). **Waiting on the CA's answers** (runbook §1.2, plus plan
   §6 for the US).
