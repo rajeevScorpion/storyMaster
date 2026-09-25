@@ -109,7 +109,7 @@ describe('payment_receipt', () => {
       row: { document_number: 'KG/26-27/000001' } as any,
     });
     const payment = {
-      id: 'payment-1', kind: 'topup', gross_minor: 53100, plan_version_id: null,
+      id: 'payment-1', kind: 'topup', gross_minor: 53100, currency_code: 'INR', plan_version_id: null,
       purchase_snapshot_json: { packName: '120 Coins' },
     };
     const ctx = fakeCtx({ billing_payments: { data: payment, error: null } });
@@ -134,7 +134,7 @@ describe('payment_receipt', () => {
     issueInvoiceForPaymentMock.mockResolvedValueOnce({ outcome: 'already_issued', documentId: 'doc-2', documentNumber: 'KG/26-27/000002' });
     ensureDocumentPdfMock.mockResolvedValueOnce({ bytes: new Uint8Array([9]), row: { document_number: 'KG/26-27/000002' } as any });
     resolvePlanLineItemFieldsMock.mockResolvedValueOnce({ planName: 'Kissago Pro', billingInterval: 'monthly' });
-    const payment = { id: 'payment-2', kind: 'subscription_renewal', gross_minor: 19900, plan_version_id: 'plan-version-1', purchase_snapshot_json: null };
+    const payment = { id: 'payment-2', kind: 'subscription_renewal', gross_minor: 19900, currency_code: 'INR', plan_version_id: 'plan-version-1', purchase_snapshot_json: null };
     const ctx = fakeCtx({ billing_payments: { data: payment, error: null } });
 
     await processor(fakeJob({ payment_id: 'payment-2' }), ctx);
@@ -147,7 +147,7 @@ describe('payment_receipt', () => {
 
   it('still emails, without an attachment, when issuing is disabled', async () => {
     issueInvoiceForPaymentMock.mockResolvedValueOnce({ outcome: 'issuing_disabled', documentId: null, documentNumber: null });
-    const payment = { id: 'payment-1', kind: 'topup', gross_minor: 53100, plan_version_id: null, purchase_snapshot_json: { packName: '120 Coins' } };
+    const payment = { id: 'payment-1', kind: 'topup', gross_minor: 53100, currency_code: 'INR', plan_version_id: null, purchase_snapshot_json: { packName: '120 Coins' } };
     const ctx = fakeCtx({ billing_payments: { data: payment, error: null } });
 
     const result = await processor(fakeJob(), ctx);
@@ -164,7 +164,7 @@ describe('payment_receipt', () => {
   it('does not claim an attachment when the issued document has no PDF', async () => {
     issueInvoiceForPaymentMock.mockResolvedValueOnce({ outcome: 'issued', documentId: 'doc-1', documentNumber: 'KG/26-27/000001' });
     ensureDocumentPdfMock.mockResolvedValueOnce(null);
-    const payment = { id: 'payment-1', kind: 'topup', gross_minor: 53100, plan_version_id: null, purchase_snapshot_json: { packName: '120 Coins' } };
+    const payment = { id: 'payment-1', kind: 'topup', gross_minor: 53100, currency_code: 'INR', plan_version_id: null, purchase_snapshot_json: { packName: '120 Coins' } };
     const ctx = fakeCtx({ billing_payments: { data: payment, error: null } });
 
     const result = await processor(fakeJob(), ctx);
@@ -196,7 +196,7 @@ describe('refund_processed', () => {
   it('issues the credit note, attaches its PDF, and sends the refund email', async () => {
     issueCreditNoteForRefundMock.mockResolvedValueOnce({ outcome: 'issued', documentId: 'doc-3', documentNumber: 'KGC/26-27/000001' });
     ensureDocumentPdfMock.mockResolvedValueOnce({ bytes: new Uint8Array([7]), row: { document_number: 'KGC/26-27/000001' } as any });
-    const refund = { id: 'refund-1', amount_minor: 53100 };
+    const refund = { id: 'refund-1', amount_minor: 53100, currency_code: 'INR' };
     const ctx = fakeCtx({ billing_refunds: { data: refund, error: null } });
 
     const result = await processor(fakeJob({ kind: 'refund_processed', payment_id: null, refund_id: 'refund-1' }), ctx);
@@ -211,7 +211,7 @@ describe('refund_processed', () => {
 
   it('still emails, without a credit note, when the payment was never invoiced', async () => {
     issueCreditNoteForRefundMock.mockResolvedValueOnce({ outcome: 'skipped_no_original', documentId: null, documentNumber: null });
-    const refund = { id: 'refund-1', amount_minor: 53100 };
+    const refund = { id: 'refund-1', amount_minor: 53100, currency_code: 'INR' };
     const ctx = fakeCtx({ billing_refunds: { data: refund, error: null } });
 
     const result = await processor(fakeJob({ kind: 'refund_processed', payment_id: null, refund_id: 'refund-1' }), ctx);
@@ -306,7 +306,7 @@ describe('renewal_reminder', () => {
 
   it('quotes the latest charged amount for this subscription', async () => {
     resolvePlanLineItemFieldsMock.mockResolvedValueOnce({ planName: 'Kissago Pro', billingInterval: 'annual' });
-    const sub = { id: 'sub-1', plan_version_id: 'plan-version-1', current_period_end: '2026-12-25T00:00:00.000Z' };
+    const sub = { id: 'sub-1', plan_version_id: 'plan-version-1', current_period_end: '2026-12-25T00:00:00.000Z', currency_code: 'INR' };
     const ctx = fakeCtx({
       billing_subscriptions: { data: sub, error: null },
       billing_payments: { data: { gross_minor: 199900 }, error: null },
@@ -321,7 +321,7 @@ describe('renewal_reminder', () => {
 
   it('throws PermanentBillingJobError when there is no charged payment to quote', async () => {
     resolvePlanLineItemFieldsMock.mockResolvedValueOnce({ planName: 'Kissago Pro', billingInterval: 'annual' });
-    const sub = { id: 'sub-1', plan_version_id: 'plan-version-1', current_period_end: '2026-12-25T00:00:00.000Z' };
+    const sub = { id: 'sub-1', plan_version_id: 'plan-version-1', current_period_end: '2026-12-25T00:00:00.000Z', currency_code: 'INR' };
     const ctx = fakeCtx({
       billing_subscriptions: { data: sub, error: null },
       billing_payments: { data: null, error: null },

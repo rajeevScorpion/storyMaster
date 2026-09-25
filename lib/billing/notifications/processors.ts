@@ -150,6 +150,7 @@ async function processPaymentReceipt(job: BillingNotificationJobRow, ctx: Billin
     itemLabel,
     planName,
     grossMinor: payment.gross_minor,
+    currencyCode: payment.currency_code,
     hasInvoice,
   });
 
@@ -192,6 +193,7 @@ async function processRefundProcessed(job: BillingNotificationJobRow, ctx: Billi
   const content = buildRefundProcessedEmail({
     appUrl: ctx.appUrl,
     grossMinor: refund.amount_minor,
+    currencyCode: refund.currency_code,
     hasCreditNote,
   });
 
@@ -300,7 +302,13 @@ async function processRenewalReminder(job: BillingNotificationJobRow, ctx: Billi
     throw new PermanentBillingJobError('no charged amount to quote');
   }
 
-  const content = buildRenewalReminderEmail({ appUrl: ctx.appUrl, planName, renewsAt, grossMinor });
+  const content = buildRenewalReminderEmail({
+    appUrl: ctx.appUrl,
+    planName,
+    renewsAt,
+    grossMinor,
+    currencyCode: subscription.currency_code,
+  });
   const delivery = await deliverJobEmail(job, content);
 
   return { emailStatus: delivery.emailStatus, providerMessageId: delivery.providerMessageId };

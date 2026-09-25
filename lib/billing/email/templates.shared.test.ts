@@ -7,25 +7,35 @@ import {
   buildRenewalReminderEmail,
   buildSubscriptionEndedEmail,
   buildSubscriptionPaymentFailedEmail,
-  formatInr,
+  formatMoney,
 } from './templates.shared';
 
 const APP_URL = 'https://kissago.cc';
 const XSS_NAME = '<script>alert(1)</script>&"\'';
 const XSS_ESCAPED = '&lt;script&gt;alert(1)&lt;/script&gt;&amp;&quot;&#39;';
 
-describe('formatInr', () => {
+describe('formatMoney', () => {
   it('always shows two decimal places, even on a whole rupee', () => {
-    expect(formatInr(53100)).toBe('₹531.00');
-    expect(formatInr(100)).toBe('₹1.00');
+    expect(formatMoney(53100, 'INR')).toBe('₹531.00');
+    expect(formatMoney(100, 'INR')).toBe('₹1.00');
   });
 
   it('shows paise for a non-round amount', () => {
-    expect(formatInr(53182)).toBe('₹531.82');
+    expect(formatMoney(53182, 'INR')).toBe('₹531.82');
   });
 
   it('never throws on a non-finite amount', () => {
-    expect(formatInr(Number.NaN)).toBe('₹0.00');
+    expect(formatMoney(Number.NaN, 'INR')).toBe('₹0.00');
+  });
+
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): a US amount, always two decimals too,
+  // in en-US grouping.
+  it('formats a USD amount, even on a whole dollar', () => {
+    expect(formatMoney(2900, 'USD')).toBe('$29.00');
+  });
+
+  it('shows cents for a non-round USD amount', () => {
+    expect(formatMoney(2999, 'USD')).toBe('$29.99');
   });
 });
 
@@ -36,6 +46,7 @@ describe('buildPaymentReceiptEmail', () => {
       variant: 'receipt',
       itemLabel: '120 Coins',
       grossMinor: 53100,
+      currencyCode: 'INR',
       hasInvoice: true,
     });
     expect(result.subject).toBe('Payment received — ₹531.00');
@@ -48,12 +59,29 @@ describe('buildPaymentReceiptEmail', () => {
     expect(result.text).toContain(`${APP_URL}/account/billing`);
   });
 
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): a US receipt quotes its own
+  // currency, not a hardcoded ₹.
+  it('quotes USD for a non-INR payment', () => {
+    const result = buildPaymentReceiptEmail({
+      appUrl: APP_URL,
+      variant: 'receipt',
+      itemLabel: '120 Coins',
+      grossMinor: 2900,
+      currencyCode: 'USD',
+      hasInvoice: true,
+    });
+    expect(result.subject).toBe('Payment received — $29.00');
+    expect(result.html).toContain('$29.00');
+    expect(result.html).not.toContain('₹');
+  });
+
   it('omits the invoice line when the document was not issued', () => {
     const result = buildPaymentReceiptEmail({
       appUrl: APP_URL,
       variant: 'receipt',
       itemLabel: '120 Coins',
       grossMinor: 53100,
+      currencyCode: 'INR',
       hasInvoice: false,
     });
     expect(result.html).not.toContain('invoice is attached');
@@ -67,6 +95,7 @@ describe('buildPaymentReceiptEmail', () => {
       itemLabel: 'Kissago Pro plan',
       planName: XSS_NAME,
       grossMinor: 19900,
+      currencyCode: 'INR',
       hasInvoice: true,
     });
     // subject/text are plain text (a mail client's subject line, a text/plain body) -- escaping them
@@ -80,14 +109,14 @@ describe('buildPaymentReceiptEmail', () => {
 
 describe('buildRefundProcessedEmail', () => {
   it('mentions the bank timeline and the amount', () => {
-    const result = buildRefundProcessedEmail({ appUrl: APP_URL, grossMinor: 53100, hasCreditNote: false });
+    const result = buildRefundProcessedEmail({ appUrl: APP_URL, grossMinor: 53100, currencyCode: 'INR', hasCreditNote: false });
     expect(result.subject).toBe('Refund of ₹531.00 processed');
     expect(result.html).toContain('5-7 working days');
     expect(result.html).not.toContain('credit note is attached');
   });
 
   it('mentions the credit note when one was issued', () => {
-    const result = buildRefundProcessedEmail({ appUrl: APP_URL, grossMinor: 53100, hasCreditNote: true });
+    const result = buildRefundProcessedEmail({ appUrl: APP_URL, grossMinor: 53100, currencyCode: 'INR', hasCreditNote: true });
     expect(result.html).toContain('The credit note is attached to this email.');
     expect(result.text).toContain('The credit note is attached to this email.');
   });
@@ -154,6 +183,7 @@ describe('buildRenewalReminderEmail', () => {
       planName: 'Kissago Pro',
       renewsAt: '2026-12-25T00:00:00.000Z',
       grossMinor: 199900,
+      currencyCode: 'INR',
     });
     expect(result.subject).toBe('Your Kissago Pro plan renews on 25 Dec 2026 for ₹1,999.00');
     expect(result.html).toContain(`${APP_URL}/account/billing`);
@@ -165,6 +195,7 @@ describe('buildRenewalReminderEmail', () => {
       planName: XSS_NAME,
       renewsAt: '2026-12-25T00:00:00.000Z',
       grossMinor: 199900,
+      currencyCode: 'INR',
     });
     expect(result.subject).toBe(`Your ${XSS_NAME} plan renews on 25 Dec 2026 for ₹1,999.00`);
     expect(result.html).toContain(XSS_ESCAPED);
@@ -191,7 +222,7 @@ describe('Payments Phase 6 C2 template fix -- subject/text are never escaped', (
 
   it('buildPaymentReceiptEmail (renewal)', () => {
     const result = buildPaymentReceiptEmail({
-      appUrl: APP_URL, variant: 'renewal', itemLabel: 'x', planName: AMPERSAND_NAME, grossMinor: 100, hasInvoice: false,
+      appUrl: APP_URL, variant: 'renewal', itemLabel: 'x', planName: AMPERSAND_NAME, grossMinor: 100, currencyCode: 'INR', hasInvoice: false,
     });
     expect(result.subject).not.toContain('&amp;');
     expect(result.text).not.toContain('&amp;');
@@ -216,7 +247,7 @@ describe('Payments Phase 6 C2 template fix -- subject/text are never escaped', (
 
   it('buildRenewalReminderEmail', () => {
     const result = buildRenewalReminderEmail({
-      appUrl: APP_URL, planName: AMPERSAND_NAME, renewsAt: '2026-12-25T00:00:00.000Z', grossMinor: 100,
+      appUrl: APP_URL, planName: AMPERSAND_NAME, renewsAt: '2026-12-25T00:00:00.000Z', grossMinor: 100, currencyCode: 'INR',
     });
     expect(result.subject).not.toContain('&amp;');
     expect(result.text).not.toContain('&amp;');

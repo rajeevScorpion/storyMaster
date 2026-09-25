@@ -21,10 +21,15 @@
  * heading twice where a kind's heading carries untrusted data: once raw (subject/text) and once
  * escaped (the html heading) -- see `templates.shared.test.ts`'s "subject/text stay unescaped" cases.
  *
- * `formatInr` always shows two decimal places ("₹531.00"), unlike wallet-tax.shared.ts's
+ * `formatMoney` always shows two decimal places ("₹531.00", "$29.00"), unlike wallet-tax.shared.ts's
  * `formatCurrencyMinor`, which drops the fraction on a whole rupee -- the plan's own copy examples
  * ("Payment received — ₹531.00") show paise unconditionally, and a receipt is a legal-adjacent
  * document where consistent formatting matters more than shortening a round number.
+ *
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): `formatMoney` replaces the old
+ * INR-only `formatInr` -- every builder that quotes an amount now takes the payment/refund/
+ * subscription row's own `currencyCode` rather than assuming INR, so a US receipt reads "$29.00", not
+ * "₹29.00".
  */
 
 import { formatIstDate } from '@/lib/billing/documents/document-view.shared';
@@ -45,13 +50,14 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-/** Always two decimal places, always the ₹ symbol -- see the file header for why this differs from
- * wallet-tax.shared.ts's conditional formatter. */
-export function formatInr(amountMinor: number): string {
+/** Always two decimal places -- see the file header for why this differs from wallet-tax.shared.ts's
+ * conditional formatter. en-IN for INR (comma grouping, "₹531.00"), en-US otherwise ("$29.00"). */
+export function formatMoney(amountMinor: number, currencyCode: string): string {
   const amount = Number.isFinite(amountMinor) ? amountMinor / 100 : 0;
-  return new Intl.NumberFormat('en-IN', {
+  const locale = currencyCode === 'INR' ? 'en-IN' : 'en-US';
+  return new Intl.NumberFormat(locale, {
     style: 'currency',
-    currency: 'INR',
+    currency: currencyCode,
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(amount);
@@ -145,13 +151,16 @@ export interface PaymentReceiptEmailInput {
   /** Required only for the renewal heading; ignored for 'receipt'. */
   planName?: string | null;
   grossMinor: number;
+  /** Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): the payment row's own
+   * currency_code -- 'INR' for every India payment, unchanged. */
+  currencyCode: string;
   /** False when billing_document_issuing_enabled was off at issue time -- the receipt still sends,
    * just without the "invoice attached" line or an attachment (plan §6). */
   hasInvoice: boolean;
 }
 
 export function buildPaymentReceiptEmail(input: PaymentReceiptEmailInput): EmailContent {
-  const amount = formatInr(input.grossMinor);
+  const amount = formatMoney(input.grossMinor, input.currencyCode);
   const itemLabel = escapeHtml(input.itemLabel);
   const planNameRaw = input.planName ?? 'Kissago';
   // subject/text carry the raw name (an email client renders them as plain text, so escaping would
@@ -188,13 +197,16 @@ export function buildPaymentReceiptEmail(input: PaymentReceiptEmailInput): Email
 export interface RefundProcessedEmailInput {
   appUrl: string;
   grossMinor: number;
+  /** Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): the refund row's own
+   * currency_code. */
+  currencyCode: string;
   /** False when the payment was never invoiced (plan §2: "a credit note needs an issued original
    * invoice") -- the refund still emails, just with no credit note attached. */
   hasCreditNote: boolean;
 }
 
 export function buildRefundProcessedEmail(input: RefundProcessedEmailInput): EmailContent {
-  const amount = formatInr(input.grossMinor);
+  const amount = formatMoney(input.grossMinor, input.currencyCode);
   const heading = `Refund of ${amount} processed`;
   const creditNoteHtml = input.hasCreditNote ? ' The credit note is attached to this email.' : '';
   const creditNoteText = input.hasCreditNote ? ' The credit note is attached to this email.' : '';
@@ -320,11 +332,14 @@ export interface RenewalReminderEmailInput {
   /** ISO timestamp -- the upcoming renewal date (the annual sweep fires 6-8 days ahead). */
   renewsAt: string;
   grossMinor: number;
+  /** Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): the subscription row's own
+   * currency_code. */
+  currencyCode: string;
 }
 
 export function buildRenewalReminderEmail(input: RenewalReminderEmailInput): EmailContent {
   const renewDate = formatIstDate(input.renewsAt);
-  const amount = formatInr(input.grossMinor);
+  const amount = formatMoney(input.grossMinor, input.currencyCode);
   const heading = `Your ${input.planName} plan renews on ${renewDate} for ${amount}`;
   const htmlHeading = `Your ${escapeHtml(input.planName)} plan renews on ${renewDate} for ${amount}`;
 
