@@ -29,6 +29,11 @@ export default async function PlansPage() {
       initialCurrentPlanKey={context.snapshot.planKey}
       initialUserId={context.userId}
       initialFreeDailyWatchQuota={context.controls.freeDailyWatchQuota}
+      // Payments Phase 7 (docs/payments/phase-7-plan.md §8, Unit B2): the named-account rollout.
+      // `context` already carries the per-user override (getPricingRuntimeContext), so this is the
+      // same value PlansComparison's own usePricingRuntime() hook will reconcile to once it loads --
+      // just the first-paint value, same pattern as initialFreeDailyWatchQuota above.
+      initialPricingCheckoutEnabled={context.controls.pricingCheckoutEnabled}
     />
   );
 }

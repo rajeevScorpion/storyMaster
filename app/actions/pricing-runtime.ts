@@ -17,6 +17,7 @@ import { buildPricingRuntimeContextData } from '@/lib/pricing/snapshot';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { getFeatureFlag } from '@/lib/ai/model-config';
+import { isCheckoutOpenForUser } from '@/lib/billing/checkout-allowlist';
 import { loadBillingProfile, toBillingProfileDTO } from '@/lib/billing/billing-profile';
 import { getPublishedTaxRule, type TaxRuleLookupResult } from '@/lib/billing/tax-rules';
 import { resolveActiveViewerProfile } from '@/lib/viewer-profile';
@@ -36,6 +37,7 @@ import type {
   PlanKey,
   PricingMarketKey,
   PricingRuntimeContext,
+  PricingRuntimeControls,
   PricingWalletActivityItem,
   PricingWalletPageData,
   PricingPlanOfferCard,
@@ -173,7 +175,7 @@ export async function getPricingRuntimeContext(
     }
   }
 
-  const { controls, snapshot } = buildPricingRuntimeContextData({
+  const { controls: rawControls, snapshot } = buildPricingRuntimeContextData({
     pricingMarketKey: input.pricingMarketKey ?? null,
     countryCode: input.countryCode ?? null,
     plans: globals.plans,
@@ -186,6 +188,22 @@ export async function getPricingRuntimeContext(
     entitlementOverridePlanKey,
     isAdmin: isAdminUserId(userId),
   });
+
+  // Payments Phase 7 (docs/payments/phase-7-plan.md §8, Unit B2, decision R3): the named-account
+  // rollout narrows the *global* pricingCheckoutEnabled control to this one user. Short-circuits on
+  // the global flag first, so a listed user still sees checkout as closed while the kill switch is
+  // off, and an unlisted/signed-out visitor never triggers the allowlist read once the kill switch
+  // has already decided the answer. `rawControls` itself is left untouched -- it comes from
+  // buildPricingRuntimeContextData, whose `featureFlags` input is the process-wide, non-per-user
+  // cache in lib/pricing/enforcement.ts (loadCachedPricingGlobals). Baking a per-user decision into
+  // that function's own output would leak one user's allowlist result into every other user's read.
+  // `controls` below is a fresh object built per call and only cached under a userId-scoped key
+  // (runtime-context-cache.ts's buildPricingRuntimeCacheKey), so overriding a field on the copy here
+  // is safe.
+  const controls: PricingRuntimeControls = {
+    ...rawControls,
+    pricingCheckoutEnabled: rawControls.pricingCheckoutEnabled && (await isCheckoutOpenForUser(userId)),
+  };
 
   const context: PricingRuntimeContext = {
     userId,

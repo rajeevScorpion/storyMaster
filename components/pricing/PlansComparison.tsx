@@ -26,6 +26,10 @@ interface PlansComparisonProps {
   initialCurrentPlanKey: PlanKey;
   initialUserId: string | null;
   initialFreeDailyWatchQuota: number;
+  /** Payments Phase 7 (docs/payments/phase-7-plan.md §8, Unit B2, decision R3): the named-account
+   * rollout narrows this per user -- see getPricingRuntimeContext's own comment. Same
+   * loading-vs-live pattern as initialFreeDailyWatchQuota below. */
+  initialPricingCheckoutEnabled: boolean;
 }
 
 /**
@@ -39,6 +43,7 @@ export default function PlansComparison({
   initialCurrentPlanKey,
   initialUserId,
   initialFreeDailyWatchQuota,
+  initialPricingCheckoutEnabled,
 }: PlansComparisonProps) {
   const { openAuthDialog } = useAuth();
   const { data: pricingData, isLoading: pricingLoading } = usePricingRuntime();
@@ -56,6 +61,11 @@ export default function PlansComparison({
   const currentPlanKey = pricingLoading ? initialCurrentPlanKey : pricingData.snapshot.planKey;
   const userId = pricingLoading ? initialUserId : pricingData.userId;
   const freeDailyWatchQuota = pricingLoading ? initialFreeDailyWatchQuota : pricingData.controls.freeDailyWatchQuota;
+  // Payments Phase 7 (docs/payments/phase-7-plan.md §8, Unit B2): without this, an unlisted user
+  // (or anyone while the global kill switch is off) saw a live "Choose <plan>" link that only
+  // refused on click. Same source as WalletPage's own checkoutEnabled -- usePricingRuntime()'s
+  // controls, already narrowed per user by getPricingRuntimeContext.
+  const checkoutEnabled = pricingLoading ? initialPricingCheckoutEnabled : pricingData.controls.pricingCheckoutEnabled;
 
   const loadOffers = useCallback(async () => {
     setOffersRefreshing(true);
@@ -209,7 +219,7 @@ export default function PlansComparison({
                 {offers.map((offer) => (
                   <td key={offer.planKey} className="px-5 py-5 align-top">
                     <PlanCta
-                      cta={resolvePlansCta({ offer, currentPlanKey, userId })}
+                      cta={resolvePlansCta({ offer, currentPlanKey, userId, checkoutEnabled })}
                       onSignIn={() => openAuthDialog('sign_in', '/plans')}
                     />
                   </td>
@@ -221,7 +231,7 @@ export default function PlansComparison({
 
         <div data-testid="plans-cards" className="grid gap-4 md:hidden">
           {offers.map((offer) => {
-            const cta = resolvePlansCta({ offer, currentPlanKey, userId });
+            const cta = resolvePlansCta({ offer, currentPlanKey, userId, checkoutEnabled });
             const features = buildPlanFeatures(offer, walletData, offers);
             return (
               <article

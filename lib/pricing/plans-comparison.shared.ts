@@ -5,10 +5,14 @@
  * unit-tested without mounting `PlansComparison`.
  *
  * CTA priority mirrors the execution spec's own order: Free first (it has no price row and no CTA),
- * then a missing/₹0 price on a paid plan ("Coming soon", never "₹0"), then sign-in, then the three
+ * then a missing/₹0 price on a paid plan ("Coming soon", never "₹0"), then sign-in, then the
  * signed-in states. `switchAfter` covers both an upgrade and a downgrade candidate alike -- P2 (owner
  * decision, phase-5-plan.md §3) is (a): no in-place plan change this phase, so any paid-to-paid move
- * goes through cancel-in-Billing-then-resubscribe regardless of direction.
+ * goes through cancel-in-Billing-then-resubscribe regardless of direction. Last, Payments Phase 7
+ * (docs/payments/phase-7-plan.md §8, Unit B2): a free-tier signed-in user who would otherwise get a
+ * live checkout link gets "Coming soon" instead while checkout is closed for them (globally, or by
+ * the named-account rollout) -- the same state a missing price already used, since both mean
+ * "nothing to click yet".
  */
 
 import type { PlanKey, VideoExportPreset } from '@/lib/types/pricing';
@@ -33,8 +37,13 @@ export function resolvePlansCta(input: {
   offer: PlansCtaOffer;
   currentPlanKey: PlanKey;
   userId: string | null;
+  /** Payments Phase 7 (docs/payments/phase-7-plan.md §8, Unit B2, decision R3): the global kill
+   * switch AND the named-account rollout, already combined by getPricingRuntimeContext's
+   * `controls.pricingCheckoutEnabled`. Without this, an unlisted user (or anyone while the kill
+   * switch is off) saw a live "Choose <plan>" link that only refused on click. */
+  checkoutEnabled: boolean;
 }): PlansCtaState {
-  const { offer, currentPlanKey, userId } = input;
+  const { offer, currentPlanKey, userId, checkoutEnabled } = input;
 
   if (offer.planKey === 'free') {
     return { kind: 'free' };
@@ -54,6 +63,10 @@ export function resolvePlansCta(input: {
 
   if (currentPlanKey !== 'free') {
     return { kind: 'switch_after', label: 'Switch after your plan ends' };
+  }
+
+  if (!checkoutEnabled) {
+    return { kind: 'coming_soon' };
   }
 
   return { kind: 'checkout', label: `Choose ${offer.name}`, planVersionId: offer.monthlyPlanVersionId };

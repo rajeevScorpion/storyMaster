@@ -20,25 +20,25 @@ function offer(overrides: Partial<PlansCtaOffer> & Pick<PlansCtaOffer, 'planKey'
 describe('resolvePlansCta', () => {
   it('Free has no price and no CTA regardless of sign-in or price fields', () => {
     const free = offer({ planKey: 'free', monthlyPlanVersionId: null, monthlyPriceMinor: 0 });
-    expect(resolvePlansCta({ offer: free, currentPlanKey: 'free', userId: null })).toEqual({ kind: 'free' });
-    expect(resolvePlansCta({ offer: free, currentPlanKey: 'free', userId: 'user-1' })).toEqual({ kind: 'free' });
+    expect(resolvePlansCta({ offer: free, currentPlanKey: 'free', userId: null, checkoutEnabled: true })).toEqual({ kind: 'free' });
+    expect(resolvePlansCta({ offer: free, currentPlanKey: 'free', userId: 'user-1', checkoutEnabled: true })).toEqual({ kind: 'free' });
   });
 
   it('a paid plan with a missing plan version is Coming soon, not ₹0', () => {
     const audience = offer({ planKey: 'audience', monthlyPlanVersionId: null });
-    expect(resolvePlansCta({ offer: audience, currentPlanKey: 'free', userId: 'user-1' })).toEqual({ kind: 'coming_soon' });
+    expect(resolvePlansCta({ offer: audience, currentPlanKey: 'free', userId: 'user-1', checkoutEnabled: true })).toEqual({ kind: 'coming_soon' });
   });
 
   it('a paid plan with a null or ₹0 price is Coming soon, not ₹0', () => {
     const nullPrice = offer({ planKey: 'studio', monthlyPriceMinor: null });
     const zeroPrice = offer({ planKey: 'studio', monthlyPriceMinor: 0 });
-    expect(resolvePlansCta({ offer: nullPrice, currentPlanKey: 'free', userId: 'user-1' })).toEqual({ kind: 'coming_soon' });
-    expect(resolvePlansCta({ offer: zeroPrice, currentPlanKey: 'free', userId: 'user-1' })).toEqual({ kind: 'coming_soon' });
+    expect(resolvePlansCta({ offer: nullPrice, currentPlanKey: 'free', userId: 'user-1', checkoutEnabled: true })).toEqual({ kind: 'coming_soon' });
+    expect(resolvePlansCta({ offer: zeroPrice, currentPlanKey: 'free', userId: 'user-1', checkoutEnabled: true })).toEqual({ kind: 'coming_soon' });
   });
 
   it('signed out: "Sign in to choose <Plan>"', () => {
     const audience = offer({ planKey: 'audience', name: 'Audience' });
-    expect(resolvePlansCta({ offer: audience, currentPlanKey: 'free', userId: null })).toEqual({
+    expect(resolvePlansCta({ offer: audience, currentPlanKey: 'free', userId: null, checkoutEnabled: true })).toEqual({
       kind: 'sign_in',
       label: 'Sign in to choose Audience',
     });
@@ -46,7 +46,7 @@ describe('resolvePlansCta', () => {
 
   it('signed in, current plan: "Your plan", disabled', () => {
     const plus = offer({ planKey: 'plus', isCurrentPlan: true });
-    expect(resolvePlansCta({ offer: plus, currentPlanKey: 'plus', userId: 'user-1' })).toEqual({
+    expect(resolvePlansCta({ offer: plus, currentPlanKey: 'plus', userId: 'user-1', checkoutEnabled: true })).toEqual({
       kind: 'current',
       label: 'Your plan',
     });
@@ -54,7 +54,7 @@ describe('resolvePlansCta', () => {
 
   it('signed in, no paid plan: a checkout link carrying the monthly plan version id', () => {
     const plus = offer({ planKey: 'plus', name: 'Plus', monthlyPlanVersionId: 'plan-version-plus' });
-    expect(resolvePlansCta({ offer: plus, currentPlanKey: 'free', userId: 'user-1' })).toEqual({
+    expect(resolvePlansCta({ offer: plus, currentPlanKey: 'free', userId: 'user-1', checkoutEnabled: true })).toEqual({
       kind: 'checkout',
       label: 'Choose Plus',
       planVersionId: 'plan-version-plus',
@@ -64,13 +64,45 @@ describe('resolvePlansCta', () => {
   it('signed in, already on a different paid plan (P2(a)): "Switch after your plan ends", for both an upgrade and a downgrade candidate', () => {
     const studio = offer({ planKey: 'studio' });
     const audience = offer({ planKey: 'audience' });
-    expect(resolvePlansCta({ offer: studio, currentPlanKey: 'plus', userId: 'user-1' })).toEqual({
+    expect(resolvePlansCta({ offer: studio, currentPlanKey: 'plus', userId: 'user-1', checkoutEnabled: true })).toEqual({
       kind: 'switch_after',
       label: 'Switch after your plan ends',
     });
-    expect(resolvePlansCta({ offer: audience, currentPlanKey: 'plus', userId: 'user-1' })).toEqual({
+    expect(resolvePlansCta({ offer: audience, currentPlanKey: 'plus', userId: 'user-1', checkoutEnabled: true })).toEqual({
       kind: 'switch_after',
       label: 'Switch after your plan ends',
+    });
+  });
+
+  // Payments Phase 7 (docs/payments/phase-7-plan.md §8, Unit B2, decision R3): the global kill
+  // switch and the named-account rollout both collapse into this one boolean by the time it
+  // reaches here (getPricingRuntimeContext / controls.pricingCheckoutEnabled).
+  describe('checkoutEnabled = false (kill switch off, or this account is not in the rollout)', () => {
+    it('is Coming soon for a free-tier signed-in user who would otherwise get a checkout link', () => {
+      const plus = offer({ planKey: 'plus', name: 'Plus', monthlyPlanVersionId: 'plan-version-plus' });
+      expect(resolvePlansCta({ offer: plus, currentPlanKey: 'free', userId: 'user-1', checkoutEnabled: false })).toEqual({
+        kind: 'coming_soon',
+      });
+    });
+
+    it('still shows Free, sign-in, current, and switch-after unchanged -- those are not gated on checkout', () => {
+      const free = offer({ planKey: 'free', monthlyPlanVersionId: null, monthlyPriceMinor: 0 });
+      const plus = offer({ planKey: 'plus', isCurrentPlan: true });
+      const studio = offer({ planKey: 'studio' });
+
+      expect(resolvePlansCta({ offer: free, currentPlanKey: 'free', userId: 'user-1', checkoutEnabled: false })).toEqual({ kind: 'free' });
+      expect(resolvePlansCta({ offer: plus, currentPlanKey: 'free', userId: null, checkoutEnabled: false })).toEqual({
+        kind: 'sign_in',
+        label: 'Sign in to choose Plus',
+      });
+      expect(resolvePlansCta({ offer: plus, currentPlanKey: 'plus', userId: 'user-1', checkoutEnabled: false })).toEqual({
+        kind: 'current',
+        label: 'Your plan',
+      });
+      expect(resolvePlansCta({ offer: studio, currentPlanKey: 'plus', userId: 'user-1', checkoutEnabled: false })).toEqual({
+        kind: 'switch_after',
+        label: 'Switch after your plan ends',
+      });
     });
   });
 });
