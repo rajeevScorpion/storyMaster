@@ -50,6 +50,8 @@ const INK = rgb(0.13, 0.13, 0.15);
 const MUTED = rgb(0.42, 0.42, 0.46);
 const RULE = rgb(0.82, 0.82, 0.85);
 const TEST_RED = rgb(0.72, 0.11, 0.11);
+const BLACK = rgb(0, 0, 0);
+const WHITE = rgb(1, 1, 1);
 
 interface Cursor {
   page: PDFPage;
@@ -140,6 +142,32 @@ function rightAlignedText(
   });
 }
 
+/**
+ * The Kissago mark (the favicon's "k" in a circle, lib/brand/kissago-mark.tsx) and the wordmark, in
+ * black and white, ending at `rightEdge` on `baseline`. Drawn as vectors and embedded-font glyphs rather
+ * than an image, so the page stays byte-for-byte reproducible and prints cleanly in monochrome.
+ */
+function drawLogo(page: PDFPage, fonts: Fonts, rightEdge: number, baseline: number): void {
+  const word = 'kissago';
+  const wordSize = 16;
+  const wordWidth = fonts.bold.widthOfTextAtSize(word, wordSize);
+  page.drawText(word, { x: rightEdge - wordWidth, y: baseline, size: wordSize, font: fonts.bold, color: BLACK });
+
+  const radius = 10;
+  const centerX = rightEdge - wordWidth - 6 - radius;
+  const centerY = baseline + 5.5;
+  page.drawCircle({ x: centerX, y: centerY, size: radius, color: BLACK });
+  const markSize = 14;
+  const markWidth = fonts.bold.widthOfTextAtSize('k', markSize);
+  page.drawText('k', {
+    x: centerX - markWidth / 2,
+    y: centerY - markSize * 0.36,
+    size: markSize,
+    font: fonts.bold,
+    color: WHITE,
+  });
+}
+
 function hr(cursor: Cursor, rightEdge: number): void {
   cursor.page.drawLine({
     start: { x: MARGIN, y: cursor.y },
@@ -193,14 +221,11 @@ export async function renderDocumentPdf(
     cursor.y -= 42;
   }
 
+  drawLogo(page, fonts, rightEdge, cursor.y);
   text(cursor, fonts, view.title.toUpperCase(), { bold: true, size: 18, dy: 22 });
-  rightAlignedText(
-    { page, y: cursor.y + 22 },
-    fonts,
-    view.copyLabel,
-    rightEdge,
-    { size: 9, color: MUTED }
-  );
+  // The logo holds the title row's right end, so the copy label sits under it.
+  rightAlignedText({ page, y: cursor.y + 4 }, fonts, view.copyLabel, rightEdge, { size: 9, color: MUTED });
+  cursor.y -= 10;
 
   // Seller / buyer, side by side.
   const columnWidth = (rightEdge - MARGIN - 24) / 2;
@@ -327,6 +352,7 @@ export async function renderDocumentPdf(
   cursor.y = Math.max(cursor.y, MARGIN + 40);
   hr(cursor, rightEdge);
   text(cursor, fonts, view.footerNote, { size: 8.5, color: MUTED, dy: 12 });
+  text(cursor, fonts, view.jurisdictionNote, { size: 8.5, color: MUTED, dy: 12 });
 
   return pdfDoc.save();
 }

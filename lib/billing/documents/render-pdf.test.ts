@@ -140,16 +140,15 @@ describe('renderDocumentPdf -- determinism', () => {
   });
 });
 
-describe('renderDocumentPdf -- India unchanged (Payments Phase 8 §9, Unit D)', () => {
-  // The plan's own acceptance step: an export/foreign document may now add lines this row never
-  // triggers (the endorsement, the region-code city line, the country line), so this fixes a real
-  // Indian invoice's bytes to the SHA-256 captured from the pre-Unit-D code -- a change here means an
-  // India document moved, which the plan says must never happen.
-  it('renders byte-identical to the pre-Unit-D hash for an unchanged Indian row', async () => {
+describe('renderDocumentPdf -- India layout pinned', () => {
+  // Pins a real Indian invoice's bytes, so an export-only change (the endorsement, the region-code city
+  // line, the country line) can never move an India document by accident. Re-pinned on purpose on
+  // 2026-09-26, when every document gained the logo and the CA's jurisdiction footer.
+  it('renders byte-identical to the pinned hash for an Indian row', async () => {
     const bytes = await renderDocumentPdf(sampleRow());
     const hash = crypto.createHash('sha256').update(Buffer.from(bytes)).digest('hex');
-    expect(bytes.length).toBe(18213);
-    expect(hash).toBe('8f58fcb488ed4a93c50d46b5cc2601e083bf277d3bdacd54ae0db3af9e8a7551');
+    expect(bytes.length).toBe(18621);
+    expect(hash).toBe('29406512dd3a63af09c52caf632f525c55e61954a262ef12aa7ee6e101b95e33');
   });
 });
 

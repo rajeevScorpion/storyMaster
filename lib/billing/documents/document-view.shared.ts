@@ -22,7 +22,7 @@ import type {
 import type { TaxBreakdown } from '@/lib/billing/tax.shared';
 import { indiaStateName } from '@/lib/billing/india-states.shared';
 import { billingCountryName } from '@/lib/billing/international.shared';
-import { LEGAL_LUT_ARN } from '@/lib/legal/business-config';
+import { JURISDICTION_CITY, LEGAL_LUT_ARN } from '@/lib/legal/business-config';
 
 export interface DocumentViewLineItem {
   description: string;
@@ -78,6 +78,8 @@ export interface DocumentView {
   amountInWords: string;
   reverseCharge: 'No';
   footerNote: string;
+  /** The CA's footer line (2026-09-26), on every document. */
+  jurisdictionNote: string;
   testBanner: string | null;
   /** Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): Rule 46's export-under-LUT wording,
    * only for a document whose tax_breakdown_json.supplyType is 'export' -- null for every India
@@ -192,13 +194,14 @@ export function amountInWordsUsd(grossMinor: number): string {
 }
 
 /** Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): Rule 46's export-under-LUT
- * endorsement, with the LUT ARN appended only once the owner has filed one (business-config.ts's
- * LEGAL_LUT_ARN, empty by default). A separate function from buildDocumentView so a test can exercise
- * both the with- and without-ARN wording directly, without needing to mock business-config's constant
- * import. */
+ * endorsement, then the CA's own sentence (2026-09-26), with the LUT ARN appended only once the owner
+ * has filed one (business-config.ts's LEGAL_LUT_ARN, empty by default). A separate function from
+ * buildDocumentView so a test can exercise both the with- and without-ARN wording directly, without
+ * needing to mock business-config's constant import. */
 export function buildExportEndorsement(lutArn: string): string {
-  const base = 'Supply meant for export under LUT without payment of IGST';
-  return lutArn ? `${base}. LUT ARN: ${lutArn}` : `${base}.`;
+  const base =
+    'Supply meant for export under LUT without payment of IGST. Opted for LUT under the GST Act, so no GST is charged.';
+  return lutArn ? `${base} LUT ARN: ${lutArn}` : base;
 }
 
 function documentTitle(documentType: BillingDocumentRow['document_type']): string {
@@ -357,6 +360,7 @@ export function buildDocumentView(
     amountInWords: row.currency_code === 'INR' ? amountInWordsIndian(row.gross_minor) : amountInWordsUsd(row.gross_minor),
     reverseCharge: 'No',
     footerNote: `Computer-generated document. Authorised signatory: ${sellerLegalName}`,
+    jurisdictionNote: `Subject to ${JURISDICTION_CITY} Jurisdiction`,
     testBanner: row.provider_mode === 'test' ? 'TEST — not a tax document' : null,
     exportEndorsement: isExport ? buildExportEndorsement(LEGAL_LUT_ARN) : null,
   };

@@ -175,6 +175,7 @@ describe('buildDocumentView -- Rule 46 particulars', () => {
     // Signature / authorised signatory.
     expect(view.footerNote).toContain('Authorised signatory');
     expect(view.footerNote).toContain('Aavriti Design Studio');
+    expect(view.jurisdictionNote).toBe('Subject to Gandhinagar Jurisdiction');
   });
 
   it('shows the recipient GSTIN when the buyer is registered, regardless of value', () => {
@@ -384,12 +385,14 @@ describe('amountInWordsUsd', () => {
 
 describe('buildExportEndorsement', () => {
   it('reads the plain LUT wording when no ARN has been filed', () => {
-    expect(buildExportEndorsement('')).toBe('Supply meant for export under LUT without payment of IGST.');
+    expect(buildExportEndorsement('')).toBe(
+      'Supply meant for export under LUT without payment of IGST. Opted for LUT under the GST Act, so no GST is charged.'
+    );
   });
 
   it('appends the ARN once one is set', () => {
     expect(buildExportEndorsement('AD290920001234')).toBe(
-      'Supply meant for export under LUT without payment of IGST. LUT ARN: AD290920001234'
+      'Supply meant for export under LUT without payment of IGST. Opted for LUT under the GST Act, so no GST is charged. LUT ARN: AD290920001234'
     );
   });
 });
@@ -414,7 +417,9 @@ describe('buildDocumentView -- export supply (Payments Phase 8 §9, Unit D)', ()
 
   it('carries the export endorsement, empty ARN by default', () => {
     const view = buildDocumentView(exportRow());
-    expect(view.exportEndorsement).toBe('Supply meant for export under LUT without payment of IGST.');
+    expect(view.exportEndorsement).toBe(
+      'Supply meant for export under LUT without payment of IGST. Opted for LUT under the GST Act, so no GST is charged.'
+    );
   });
 
   it('prints the buyer state as the region code, not the state name, and the country name', () => {
