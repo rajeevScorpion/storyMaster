@@ -49,12 +49,21 @@ where id = '7105eec1-95e0-4081-835b-9f649dd53967';
 **Next:**
 1. The deferred items in runbook §1.1: the OTP session (subscribe, cancel and reconcile, plus the
    Phase 6 step 7 emails), the Unit 0 probe, the phone look, and the CA answers.
-2. **Phase 8 is planned: `phase-8-plan.md`** (2026-09-25).
-   - Two units: **P8-A** (Sonnet) is a checkout guard for a latent defect, G1. **P8-B** (Opus) is
-     `international-readiness.md`.
-   - Decisions I1 (code scope) and I2 (research timing) gate it.
+2. **Phase 8 is planned: `phase-8-plan.md`** (2026-09-25). **The scope changed: the US goes through
+   Razorpay International.**
+   - **Owner decisions (I1-I3):**
+     - no adapter (the contract is documented only);
+     - Razorpay International for the US;
+     - build now, behind the market lock, and switch the US on later.
+   - **Units:** M (migration 138), A (provider and country guard), B (international billing details),
+     C (export tax), D (documents and copy), E (the walk), F (the readiness doc).
+   - **Open decisions:**
+     - U1: the US only (recommended);
+     - U2: USD prices, which are needed only at switch-on;
+     - U3: the invoice series.
    - **G1:** checkout never checks an item's provider. Only the market lock stops a `stripe`-tagged ROW
      item from being sent to Razorpay.
+   - **Six CA questions for the US** (plan §6) go to the CA with the six from runbook §1.2.
    - No deferred item blocks Phase 8, or the other way round.
 
 **Earlier block (2026-09-25 late, Phase 7 build) follows.**
