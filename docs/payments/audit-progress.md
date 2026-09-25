@@ -3,6 +3,48 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
+## Next session starts here (updated 2026-09-26 — payments merged to dev; deferred subscription walk done)
+
+**`payments` is merged into `dev`** (`9c23ef6`, `--no-ff`) for tester smoke tests in Razorpay test mode. It
+stays open for more work.
+- **The dev webhook:** Razorpay test mode → `https://dev.kissago.cc/api/billing/razorpay/webhook`, with the same
+  secret as the `payments` one. Verified: a POST reached the `dev` deployment with a 200 at 19:35 UTC.
+- **Tester switches on dev** (owner, 2026-09-26): the allowlist, invoices, emails and admin refunds are on.
+  **The allowlist holds only `testuser`.** The example emails matched no one, so testers and the owner are
+  refused checkout until the owner re-runs the setup SQL with real emails.
+
+**The deferred subscription walk (runbook §1.1), 2026-09-26, on the `payments` Preview:**
+- **An international card on an India plan needs no OTP**, even with an Indian phone on the profile.
+  - The card `5104 0600 0000 0008` bought Audience monthly at ₹236 (₹200 + IGST ₹36). Razorpay's
+    currency screen offers TND or INR; the walk picked INR.
+  - Invoice TEST-KG/26-27/000010 was issued, and the receipt email was sent.
+  - The sheet read "Renews monthly on the 26th", and the cancel dialog "until October 26". The IST dates
+    agree.
+- **The customer cancel: pass.** `cancel_at_period_end` was set, and the "cancel scheduled" email was sent
+  once.
+- **"Cancels on" survives a reconcile: pass.** The reconcile only takes subscriptions near their boundary.
+- **Unit 0 probe: done** → `research/11-cycle-end-cancel-probe.md`.
+  - Razorpay marks nothing after a cycle-end cancel, and sends no webhook.
+  - So a dashboard cancel is invisible until the period ends, and there's no undo.
+- **Found and fixed:** an admin refund that ends a subscription sent the refund email but never "Your plan has
+  ended". The refund path wrote `cancelled` directly, so the sync's transition rule never fired. It now queues
+  `subscription_ended` itself, with the same dedupe key. Unit-tested; **not yet seen live.**
+- **Left running on purpose:** `testuser`'s Audience `sub_TgNsjQ1NgKLjNy`, cancelled at cycle end.
+  **REMINDER: check on 2026-10-26 (IST).**
+  - Razorpay must not charge on `charge_at` 1792953000.
+  - The `subscription.cancelled` webhook should arrive, and the "plan ended" email go out once.
+- **Not walkable in test mode:** the "payment failed" renewal email (a renewal can't be forced). It rests on
+  unit tests.
+- A test top-up on `dev.kissago.cc` with the domestic card stalled on Razorpay's save-card prompt (a script
+  problem, not the app). Razorpay failed it, and the order was recorded `failed` correctly.
+
+**Reminders for the owner:**
+- the LUT (deferred);
+- the Razorpay currency-conversion question (research online first);
+- the US-address e2e test (later);
+- republish Terms (still 1.0.0 on dev);
+- **2026-10-26: the lapsed-subscription check above.**
+
 ## Next session starts here (updated 2026-09-25 late night — Phase 8 walked on the Preview; passes)
 
 **P8-E ran on the Preview** (`43e8dfd`, dev DB, Razorpay test). Opus drove it with Playwright:
