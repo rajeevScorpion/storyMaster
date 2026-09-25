@@ -161,6 +161,20 @@ describe('payment_receipt', () => {
     expect(result.documentOutcome).toBe('issuing_disabled');
   });
 
+  it('does not claim an attachment when the issued document has no PDF', async () => {
+    issueInvoiceForPaymentMock.mockResolvedValueOnce({ outcome: 'issued', documentId: 'doc-1', documentNumber: 'KG/26-27/000001' });
+    ensureDocumentPdfMock.mockResolvedValueOnce(null);
+    const payment = { id: 'payment-1', kind: 'topup', gross_minor: 53100, plan_version_id: null, purchase_snapshot_json: { packName: '120 Coins' } };
+    const ctx = fakeCtx({ billing_payments: { data: payment, error: null } });
+
+    const result = await processor(fakeJob(), ctx);
+
+    const [, content, attachment] = deliverJobEmailMock.mock.calls[0];
+    expect(attachment).toBeUndefined();
+    expect(content.html).not.toContain('invoice is attached');
+    expect(result.documentId).toBe('doc-1');
+  });
+
   it('throws PermanentBillingJobError when the payment no longer exists', async () => {
     issueInvoiceForPaymentMock.mockResolvedValueOnce({ outcome: 'not_found', documentId: null, documentNumber: null });
     const ctx = fakeCtx({});

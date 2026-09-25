@@ -125,13 +125,14 @@ async function processPaymentReceipt(job: BillingNotificationJobRow, ctx: Billin
   }
 
   const documentId = ISSUED_OUTCOMES.has(issueResult.outcome) ? issueResult.documentId : null;
-  const hasInvoice = documentId != null;
 
   let attachment: EmailAttachment | undefined;
   if (documentId) {
     const pdf = await ensureDocumentPdf(documentId);
     if (pdf) attachment = buildDocumentAttachment(pdf.row.document_number, pdf.bytes);
   }
+  // The copy says "attached", so it follows the attachment, not the document.
+  const hasInvoice = attachment != null;
 
   let itemLabel: string;
   let planName: string | null = null;
@@ -180,13 +181,13 @@ async function processRefundProcessed(job: BillingNotificationJobRow, ctx: Billi
   }
 
   const documentId = ISSUED_OUTCOMES.has(issueResult.outcome) ? issueResult.documentId : null;
-  const hasCreditNote = documentId != null;
 
   let attachment: EmailAttachment | undefined;
   if (documentId) {
     const pdf = await ensureDocumentPdf(documentId);
     if (pdf) attachment = buildDocumentAttachment(pdf.row.document_number, pdf.bytes);
   }
+  const hasCreditNote = attachment != null;
 
   const content = buildRefundProcessedEmail({
     appUrl: ctx.appUrl,
