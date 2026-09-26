@@ -22,13 +22,14 @@ Keep this file current. When you finish a pack, move it out of "pending"; when y
 | | Supabase project | Notes |
 |---|---|---|
 | Development | `dxbwzcpbfacrwrauhdbk` | Named **kissagoStage**, ap-southeast-1. Where migrations get applied first. Used by local dev and every Vercel Preview deployment. |
-| Production | `pddjsopcemsfiwyvhlkr` | Named **kissago**, ap-northeast-1. `www.kissago.cc` / `kissago.cc` |
+| Production | `wsahcyzgyfnpdmscnvxj` | Named **kissagoProduction**, ap-southeast-1 (Singapore), since 2026-09-26. `www.kissago.cc` / `kissago.cc` |
+| Old production | `pddjsopcemsfiwyvhlkr` | Named **kissago**, ap-northeast-1 (Tokyo). Replaced on 2026-09-26 and paused as the fallback (restorable for 90 days, to about 2026-12-25). Not in use. |
 
-**Vercel function region** (`vercel.json` `regions`, per branch): `sin1` on `payments`/`dev` since 2026-09-26,
-next to the dev database. `main` has no setting yet, so it runs in Washington (`iad1`), far from prod's Tokyo
-database. The owner's direction is that servers and database sit together and near the customers: Singapore
-for India, a US region for the US. Where prod lives is a release-gating decision in
-`docs/payments/go-live-runbook.md` §1.4, and the dev → main merge must set prod's region (§2).
+**Everything runs in Singapore since 2026-09-26:** both databases, and the Vercel functions (`sin1`). Dev and
+Preview take it from `vercel.json`; production takes it from the Vercel project setting (Settings → Functions),
+and from `vercel.json` too once `dev` is merged into `main`. The owner's direction is that servers and database
+sit together and near the customers: Singapore for India, a US region for the US
+(`docs/payments/go-live-runbook.md` §1.4). The prod move and its measurements are in the runbook's §1.4.
 
 An agent working here has **read-only** database visibility on both, via two separately named Supabase MCP
 servers: `supabase` (dev) and `supabase-prod`. The names are distinct so touching production is always a
@@ -242,7 +243,10 @@ the Terms (`terms`, §7) already use non-hardcoded language ("usage limits commu
 precisely so that feature can land later without a Terms rewrite. Design the viewer entitlement as a parallel
 dimension to `PlanKey` (not a repurposing of it) when that feature is actually scoped.
 
-### Production (`pddjsopcemsfiwyvhlkr`)
+### Production (`wsahcyzgyfnpdmscnvxj` since 2026-09-26; before that `pddjsopcemsfiwyvhlkr`)
+
+**Moved to Singapore on 2026-09-26** by a full copy (schema, data, users, files), verified table by table. The
+migration state moved with it unchanged: **102-114 and 116-123 applied, 115 and 124+ not**.
 
 **Promoted 2026-09-16.** `main` is at `084c2ed` (a `--no-ff` merge of 238 dev commits across 332 files),
 deployed and live on `kissago.cc`. Migrations **102-114 and 116-123 are applied**; **115 is not** and is the

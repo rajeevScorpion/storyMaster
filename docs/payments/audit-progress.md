@@ -72,15 +72,15 @@ where flag_key in ('billing_document_issuing_enabled','billing_emails_enabled','
 
 **Open, in order:**
 1. **The India go-live gate:**
-   - **server location (runbook §1.4; owner: "very important").** Move prod's database to Singapore, or keep
-     Tokyo? Then set prod's function region in the dev → main merge (§2). Raise it again at GTM for the US;
+   - ~~server location~~ **done 2026-09-26:** prod's database and functions moved to Singapore (runbook §1.4).
+     The US location still needs deciding at GTM (§12);
    - the CA's India answers (runbook §1.2: numbering, Rule 48, credit-note timing, turnover/SAC, series start);
    - publish Terms (dev is still on 1.0.0);
    - the Phase 7 allowlist re-run;
    - a look at the checkout sheet on a phone;
    - tester feedback.
-2. **The release:** runbook §2-§8. Check prod's ledger first; the runbook says prod is at 124. Then:
-   - apply 125-138 one at a time;
+2. **The release:** runbook §2-§8. Prod's ledger is at **123** (124 is not applied; checked 2026-09-26), so apply 124-138. Then:
+   - apply 124-138 one at a time;
    - live keys (Production scope only), and the live webhook → `kissago.cc`;
    - switches off, the owner's real-money smoke test, then open.
 3. **2026-10-26 (IST): check the lapsed subscription** `sub_TgNsjQ1NgKLjNy` (details below).

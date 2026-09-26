@@ -297,8 +297,9 @@ A page makes several Supabase queries one after another. Each one is a round tri
 the database. From Washington to Singapore that is about a quarter-second, so a page pays seconds before any
 code matters. Measured 2026-09-26 on the same build, where only the region changed: gallery first byte
 4.0 s → 0.7 s, billing page 13.5 s → 1.8 s. The region is `vercel.json`'s `regions`. It must match the
-database of the deployment it builds, and `dev` (Singapore) and prod (Tokyo) differ. That's why the
-dev → main merge sets it by hand (go-live runbook §2). Before blaming a query, check where the function ran:
+database of the deployment it builds. Since 2026-09-26 both databases are in Singapore and every deployment
+runs in `sin1`. If they ever differ again, the dev → main merge must set prod's region by hand (go-live
+runbook §2). Before blaming a query, check where the function ran:
 the deployment's `regions` in Vercel. Cutting sequential awaits into one `Promise.all` helps, but only by
 the number of round trips saved.
 

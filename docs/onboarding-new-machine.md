@@ -136,7 +136,7 @@ None of these are recoverable from the repo. Make sure the new machine can sign 
 
 | Service | Used for |
 |---|---|
-| **Supabase** | Two projects: dev `dxbwzcpbfacrwrauhdbk`, prod `pddjsopcemsfiwyvhlkr`. All migrations are applied by hand in the SQL editor here. |
+| **Supabase** | Two projects: dev `dxbwzcpbfacrwrauhdbk`, prod `wsahcyzgyfnpdmscnvxj` (Singapore, since 2026-09-26; the old Tokyo `pddjsopcemsfiwyvhlkr` is paused). All migrations are applied by hand in the SQL editor here. |
 | **Vercel** | Hosting, env vars, the daily reconcile cron, deployment skew protection. |
 | **Cloudflare** | R2 buckets and the `media-stage.kissago.cc` / `media.kissago.cc` domains. |
 | **Google AI Studio** | Gemini API key |
