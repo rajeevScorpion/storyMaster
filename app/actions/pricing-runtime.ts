@@ -17,6 +17,12 @@ import { buildPricingRuntimeContextData } from '@/lib/pricing/snapshot';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { getFeatureFlag } from '@/lib/ai/model-config';
+import { isCheckoutOpenForUser } from '@/lib/billing/checkout-allowlist';
+import { loadBillingProfile, toBillingProfileDTO } from '@/lib/billing/billing-profile';
+import { getPublishedTaxRule, type TaxRuleLookupResult } from '@/lib/billing/tax-rules';
+import { resolveActiveViewerProfile } from '@/lib/viewer-profile';
+import { loadWalletActivityPage } from '@/lib/pricing/wallet-activity';
+import { isWalletActivityCursor } from '@/lib/pricing/wallet-activity.shared';
 import type {
   DbBeatGrant,
   DbBeatSpendReservation,
@@ -26,16 +32,20 @@ import type {
   DbPricingPlan,
   DbPricingPlanVersion,
   DbPricingTopupPack,
-  DbBeatUsageEvent,
 } from '@/lib/types/database';
 import type {
+  BillingProfileDTO,
   PlanKey,
   PricingMarketKey,
   PricingRuntimeContext,
+  PricingRuntimeControls,
   PricingWalletActivityItem,
+  WalletActivityCursor,
+  WalletActivityPage,
   PricingWalletPageData,
   PricingPlanOfferCard,
   PricingTopupOfferCard,
+  WalletTaxPreview,
 } from '@/lib/types/pricing';
 import { COINS_PER_BEAT, normalizeVideoExportPreset } from '@/lib/types/pricing';
 
@@ -168,7 +178,7 @@ export async function getPricingRuntimeContext(
     }
   }
 
-  const { controls, snapshot } = buildPricingRuntimeContextData({
+  const { controls: rawControls, snapshot } = buildPricingRuntimeContextData({
     pricingMarketKey: input.pricingMarketKey ?? null,
     countryCode: input.countryCode ?? null,
     plans: globals.plans,
@@ -181,6 +191,22 @@ export async function getPricingRuntimeContext(
     entitlementOverridePlanKey,
     isAdmin: isAdminUserId(userId),
   });
+
+  // Payments Phase 7 (docs/payments/phase-7-plan.md §8, Unit B2, decision R3): the named-account
+  // rollout narrows the *global* pricingCheckoutEnabled control to this one user. Short-circuits on
+  // the global flag first, so a listed user still sees checkout as closed while the kill switch is
+  // off, and an unlisted/signed-out visitor never triggers the allowlist read once the kill switch
+  // has already decided the answer. `rawControls` itself is left untouched -- it comes from
+  // buildPricingRuntimeContextData, whose `featureFlags` input is the process-wide, non-per-user
+  // cache in lib/pricing/enforcement.ts (loadCachedPricingGlobals). Baking a per-user decision into
+  // that function's own output would leak one user's allowlist result into every other user's read.
+  // `controls` below is a fresh object built per call and only cached under a userId-scoped key
+  // (runtime-context-cache.ts's buildPricingRuntimeCacheKey), so overriding a field on the copy here
+  // is safe.
+  const controls: PricingRuntimeControls = {
+    ...rawControls,
+    pricingCheckoutEnabled: rawControls.pricingCheckoutEnabled && (await isCheckoutOpenForUser(userId)),
+  };
 
   const context: PricingRuntimeContext = {
     userId,
@@ -210,7 +236,14 @@ export async function getPricingWalletPageData(
   const supabase = createAdminClient();
   const currentPlanKey: PlanKey = input.currentPlanKey ?? 'free';
 
-  const [plansResult, planVersionsResult, topupsResult, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled] = await Promise.all([
+  const [
+    plansResult,
+    planVersionsResult,
+    topupsResult,
+    freePlusCharacterSheetsEnabled,
+    creatorCharacterSheetsEnabled,
+    viewerProfile,
+  ] = await Promise.all([
     supabase
       .from('pricing_plans')
       .select('*')
@@ -231,6 +264,9 @@ export async function getPricingWalletPageData(
       .order('beat_amount', { ascending: true }),
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
+    // Payments Phase 5 (docs/payments/phase-5-plan.md §5, Unit E1, owner decision P6): resolveActiveViewerProfile
+    // never throws -- it fails closed to the implicit 'all' default -- so this needs no try/catch of its own.
+    resolveActiveViewerProfile(),
   ]);
 
   throwIfQueryFailed(plansResult.error, 'Failed to load wallet plan offers');
@@ -238,23 +274,15 @@ export async function getPricingWalletPageData(
   throwIfQueryFailed(topupsResult.error, 'Failed to load wallet top-up offers');
 
   let recentActivity: PricingWalletActivityItem[] = [];
+  let recentActivityNextCursor: WalletActivityCursor | null = null;
   let storyCount = 0;
   let storylineCount = 0;
+  let billingProfile: BillingProfileDTO | null = null;
+  let taxPreview: WalletTaxPreview | null = null;
 
   if (userId) {
-    const [grantsResult, usageResult, storiesCountResult, storylinesCountResult] = await Promise.all([
-      supabase
-        .from('beat_grants')
-        .select('*')
-        .eq('user_id', userId)
-        .order('granted_at', { ascending: false })
-        .limit(10),
-      supabase
-        .from('beat_usage_events')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(10),
+    const [activityPage, storiesCountResult, storylinesCountResult, taxRuleResult, billingProfileResult] = await Promise.all([
+      loadWalletActivityPage(supabase, userId, null),
       supabase
         .from('stories')
         .select('*', { count: 'exact', head: true })
@@ -264,19 +292,32 @@ export async function getPricingWalletPageData(
         .from('storylines')
         .select('*', { count: 'exact', head: true })
         .eq('user_id', userId),
+      // Payments Phase 2, Unit B2a: the wallet's headline is top-ups, so that is the rule kind asked
+      // for here; a market with different subscription rates can ask separately later. Neither of
+      // these two lookups may throw out of the wallet load -- a missing tax line or billing profile
+      // is far better than the whole wallet failing to open -- so both are wrapped and logged rather
+      // than allowed to reject the Promise.all.
+      getPublishedTaxRule(input.pricingMarketKey, 'topup').catch((err): TaxRuleLookupResult => {
+        console.error('getPricingWalletPageData: getPublishedTaxRule threw:', err);
+        return { status: 'unavailable' };
+      }),
+      loadBillingProfile(supabase, userId).catch((err) => {
+        console.error('getPricingWalletPageData: loadBillingProfile threw:', err);
+        return { status: 'unavailable' as const };
+      }),
     ]);
 
-    throwIfQueryFailed(grantsResult.error, 'Failed to load wallet grant activity');
-    throwIfQueryFailed(usageResult.error, 'Failed to load wallet spend activity');
     throwIfQueryFailed(storiesCountResult.error, 'Failed to load wallet story count');
     throwIfQueryFailed(storylinesCountResult.error, 'Failed to load wallet storyline count');
 
-    recentActivity = buildWalletActivity(
-      (grantsResult.data ?? []) as DbBeatGrant[],
-      (usageResult.data ?? []) as DbBeatUsageEvent[]
-    );
+    recentActivity = activityPage.items;
+    recentActivityNextCursor = activityPage.nextCursor;
     storyCount = storiesCountResult.count ?? 0;
     storylineCount = storylinesCountResult.count ?? 0;
+    taxPreview = buildWalletTaxPreview(taxRuleResult);
+    billingProfile = billingProfileResult.status === 'ok' && billingProfileResult.profile
+      ? toBillingProfileDTO(billingProfileResult.profile)
+      : null;
   }
 
   return {
@@ -291,7 +332,41 @@ export async function getPricingWalletPageData(
     ),
     topupOffers: buildTopupOffers((topupsResult.data ?? []) as DbPricingTopupPack[]),
     recentActivity,
+    recentActivityNextCursor,
+    billingProfile,
+    taxPreview,
+    audienceMode: viewerProfile.audienceMode,
   };
+}
+
+/**
+ * Payments Phase 2, Unit B2a (docs/payments/phase-2-unit-b2-plan.md §3): maps a tax rule lookup to
+ * what the wallet needs to know. 'unavailable' (migration 125 absent) becomes `null` so the wallet
+ * renders exactly as it does today; 'not_found' (125 applied, nothing published) still reports the
+ * label so a future "tax rules are being configured" message has somewhere to hang, but leaves
+ * `requiresBillingState: false` since checkout's existing refusal for that case is not a new message
+ * this unit should invent.
+ */
+function buildWalletTaxPreview(result: TaxRuleLookupResult): WalletTaxPreview | null {
+  if (result.status === 'unavailable') {
+    return null;
+  }
+  if (result.status === 'not_found') {
+    return { ratePercent: null, taxLabel: 'GST', requiresBillingState: false };
+  }
+  return {
+    ratePercent: result.rule.taxRegime === 'in_gst' ? result.rule.ratePercent : null,
+    taxLabel: 'GST',
+    requiresBillingState: true,
+  };
+}
+
+/** The wallet's "Older" button: the page of activity after `cursor`, for the signed-in user only. */
+export async function getWalletActivityPage(cursor: unknown): Promise<WalletActivityPage> {
+  if (!isWalletActivityCursor(cursor)) return { items: [], nextCursor: null };
+  const userId = await getCurrentUserId();
+  if (!userId) return { items: [], nextCursor: null };
+  return loadWalletActivityPage(createAdminClient(), userId, cursor);
 }
 
 async function getCurrentUserId(): Promise<string | null> {
@@ -344,6 +419,8 @@ function buildPlanOffers(
       canAccessDownloads: Boolean(plan.feature_flags_json?.canAccessDownloads ?? false),
       canAccessUnbrandedExports: Boolean(plan.feature_flags_json?.canAccessUnbrandedExports ?? false),
       creatorControls: Boolean(plan.feature_flags_json?.creatorControls ?? false),
+      // Defaults true, not false -- see PricingPlanFeatureFlags.unlimitedWatching.
+      unlimitedWatching: Boolean(plan.feature_flags_json?.unlimitedWatching ?? true),
       videoExportPreset: normalizeVideoExportPreset(plan.feature_flags_json?.videoExportPreset),
       isCurrentPlan: plan.plan_key === currentPlanKey,
     };
@@ -360,107 +437,6 @@ function buildTopupOffers(topups: DbPricingTopupPack[]): PricingTopupOfferCard[]
     coinAmount: beatsToCoins(pack.beat_amount),
     provider: pack.provider,
   }));
-}
-
-function buildWalletActivity(
-  grants: DbBeatGrant[],
-  usageEvents: DbBeatUsageEvent[]
-): PricingWalletActivityItem[] {
-  const grantItems: PricingWalletActivityItem[] = grants.map((grant) => ({
-    id: `grant:${grant.id}`,
-    kind: 'grant',
-    title: getGrantTitle(grant.source_type),
-    subtitle: getGrantSubtitle(grant.source_type),
-    coinsDelta: beatsToCoins(asBeatAmount(grant.beats_total)),
-    occurredAt: grant.granted_at,
-  }));
-
-  const spendItems: PricingWalletActivityItem[] = usageEvents.map((event) => ({
-    id: `spend:${event.id}`,
-    kind: 'spend',
-    title: getSpendTitle(event.action_key),
-    subtitle: 'Used while creating in Kissago',
-    coinsDelta: -beatsToCoins(asBeatAmount(event.beat_cost)),
-    occurredAt: event.created_at,
-  }));
-
-  return [...grantItems, ...spendItems]
-    .sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime())
-    .slice(0, 20);
-}
-
-function getGrantTitle(sourceType: DbBeatGrant['source_type']): string {
-  switch (sourceType) {
-    case 'free_allowance':
-      return 'Welcome coins added';
-    case 'subscription':
-    case 'carry_forward':
-      return 'Monthly refill';
-    case 'topup':
-      return 'Top-up added';
-    case 'promotion':
-      return 'Bonus coins added';
-    case 'migration_grant':
-      return 'Welcome coins added';
-    case 'admin_adjustment':
-      return 'Coins adjusted';
-    default:
-      return 'Coins added';
-  }
-}
-
-function getGrantSubtitle(sourceType: DbBeatGrant['source_type']): string {
-  switch (sourceType) {
-    case 'free_allowance':
-      return 'One-time credit for joining Kissago';
-    case 'subscription':
-      return 'Included with your active plan';
-    case 'carry_forward':
-      return 'Unused coins carried into the new period';
-    case 'topup':
-      return 'Purchased coin pack';
-    case 'promotion':
-      return 'Campaign or bonus reward';
-    case 'migration_grant':
-      return 'Internal rollout goodwill grant';
-    case 'admin_adjustment':
-      return 'Manual support adjustment';
-    default:
-      return 'Wallet credit';
-  }
-}
-
-function getSpendTitle(actionKey: string): string {
-  switch (actionKey) {
-    case 'start_story_initial_beat':
-      return 'Started a story';
-    case 'start_story_initial_beat_prompt_only':
-      return 'Started a prompt-only story';
-    case 'start_reel_full_generation':
-      return 'Generated a reel';
-    case 'start_reel_full_generation_prompt_only':
-      return 'Generated a prompt-only reel';
-    case 'continue_story_new_beat':
-      return 'Added a new beat';
-    case 'continue_story_new_beat_prompt_only':
-      return 'Added a prompt-only beat';
-    case 'preview_seed_plan':
-      return 'Previewed a seed plan';
-    case 'regenerate_image':
-      return 'Regenerated an image';
-    case 'regenerate_narration':
-      return 'Regenerated narration';
-    case 'generate_social_share_cover':
-      return 'Generated a share cover';
-    case 'generate_audio_story_cover':
-      return 'Generated an audio story cover';
-    case 'generate_reel_thumbnail':
-      return 'Generated a reel thumbnail';
-    case 'export_video_future':
-      return 'Exported a video';
-    default:
-      return 'Used coins in Kissago';
-  }
 }
 
 function beatsToCoins(value: number): number {

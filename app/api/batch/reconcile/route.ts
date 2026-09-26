@@ -7,6 +7,9 @@ import { cleanupExpiredOriginals } from '@/lib/media/cleanup';
 import { cleanupAbandonedReferenceSetups } from '@/lib/references/reference-cleanup';
 import { drainAgentRuns } from '@/lib/agentic/orchestrator';
 import { getAgenticFlags } from '@/lib/agentic/flags';
+import { reconcilePendingRefunds, reconcileRazorpayBilling } from '@/lib/billing/razorpay-reconcile';
+import { sweepMissingReceiptJobs, sweepRenewalReminders } from '@/lib/billing/notifications/sweeps';
+import { runBillingJobsOnce } from '@/lib/billing/notifications/runner';
 
 // Reconciliation downloads + compresses images; give it room but stay bounded.
 export const maxDuration = 300;
@@ -60,7 +63,7 @@ async function handle(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   try {
-    const [images, narration, imageJobs, adoptionJobs, agenticRuns] = await Promise.all([
+    const [images, narration, imageJobs, adoptionJobs, agenticRuns, billingReconcile] = await Promise.all([
       reconcileActiveImageBatches(),
       reconcileActiveNarrationJobs().catch((error) => {
         console.error('Narration reconcile failed:', error instanceof Error ? error.message : error);
@@ -86,6 +89,12 @@ async function handle(request: Request): Promise<Response> {
         console.error('Agentic scheduler drain rejected unexpectedly (reconcile continues regardless):', error instanceof Error ? error.message : error);
         return { processed: 0 };
       }),
+      // Razorpay money backstop: gated behind billing_reconcile_enabled inside the function itself, so
+      // this is a zero-result no-op until the owner turns it on. Never allowed to reach this Promise.all.
+      reconcileRazorpayBilling().catch((error) => {
+        console.error('Razorpay billing reconcile failed:', error instanceof Error ? error.message : error);
+        return { checkouts: 0, subscriptions: 0, topups: 0, webhooks: 0 };
+      }),
     ]);
     // Retention cleanup after the reconcile work (no-ops when disabled).
     const cleanup = await cleanupExpiredOriginals().catch((error) => {
@@ -96,6 +105,30 @@ async function handle(request: Request): Promise<Response> {
     const referenceCleanup = await cleanupAbandonedReferenceSetups().catch((error) => {
       console.error('Reference cleanup failed:', error instanceof Error ? error.message : error);
       return { setupsScanned: 0, sourcesDeleted: 0, adoptionsDeleted: 0, objectsDeleted: 0 };
+    });
+    // Payments Phase 6 (docs/payments/phase-6-plan.md §4 Unit A2): the pending-refund backstop, run
+    // after everything above. Gated behind billing_reconcile_enabled inside the function itself, so
+    // this is a zero-result no-op until the owner turns it on -- and, like billingReconcile above,
+    // never allowed to reach (or fail) this route.
+    const pendingRefundsProcessed = await reconcilePendingRefunds().catch((error) => {
+      console.error('Pending refund reconcile failed:', error instanceof Error ? error.message : error);
+      return 0;
+    });
+    // Payments Phase 6 (docs/payments/phase-6-plan.md §10, Unit C2, "Sweeps"): the notification-job
+    // backstops, run after the money reconciles above -- each independently .catch-wrapped so one
+    // failing (or the worker run after them) never fails this route or blocks the others. Both
+    // sweeps are themselves best-effort (never throw), but this route must never depend on that.
+    const missingReceiptJobsSwept = await sweepMissingReceiptJobs().catch((error) => {
+      console.error('Missing-receipt sweep failed:', error instanceof Error ? error.message : error);
+      return 0;
+    });
+    const renewalRemindersSwept = await sweepRenewalReminders().catch((error) => {
+      console.error('Renewal-reminder sweep failed:', error instanceof Error ? error.message : error);
+      return 0;
+    });
+    const billingJobsRun = await runBillingJobsOnce().catch((error) => {
+      console.error('Billing notification job run failed:', error instanceof Error ? error.message : error);
+      return { processed: 0, failed: 0, remaining: 0 };
     });
     return NextResponse.json({
       ok: true,
@@ -108,6 +141,11 @@ async function handle(request: Request): Promise<Response> {
       agenticRunsProcessed: agenticRuns.processed,
       originalsDeleted: cleanup.deleted,
       referenceSourcesDeleted: referenceCleanup.sourcesDeleted,
+      billingReconcile,
+      pendingRefundsProcessed,
+      missingReceiptJobsSwept,
+      renewalRemindersSwept,
+      billingJobsRun,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Reconcile failed.';

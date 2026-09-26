@@ -79,6 +79,25 @@ packaging.
 `EBADENGINE` warning and no observed runtime failure, but a fresh machine should install **Node 22.13+ or 24**
 and sidestep the question.
 
+### Cross-origin isolation blocks Razorpay Checkout — the wallet is exempt
+
+Every route sends `Cross-Origin-Embedder-Policy: credentialless` and `Cross-Origin-Opener-Policy: same-origin`
+so ffmpeg.wasm video export gets `SharedArrayBuffer`. Under COEP, Chrome and Firefox refuse any cross-origin
+frame that doesn't send COEP itself, and Razorpay's checkout frame doesn't. The symptom is a Razorpay window
+reading "api.razorpay.com refused to connect", `net::ERR_BLOCKED_BY_RESPONSE` on `api.razorpay.com/v1/checkout/public`,
+and nothing in the page console. Checkout was blocked like this from April to 2026-09-17, production included.
+
+**The fix has three parts; keep all three:**
+- `next.config.ts` leaves `/wallet` out of the header rule. The pattern must match
+  `lib/navigation/cross-origin-isolation.shared.ts`.
+- Headers belong to the document, so a client-side hop into or out of the wallet keeps the wrong ones. A boundary
+  component in `Providers` reloads when that happens.
+- That reload would drop an in-memory story session, so story surfaces open the wallet in a **new tab** (the
+  account menu's `openWalletInNewTab`, the "Open Wallet" error action, and StoryScreen's own links).
+
+Any new third-party frame (another payment provider, an embed) hits the same wall on isolated routes. The e2e
+smoke suite checks both sides of the boundary.
+
 ---
 
 ## Next.js server/client boundary
@@ -271,6 +290,18 @@ setting, characterVisuals, must-not-inherit, per-panel story function) live in a
 a field to the shared schema changes reel generation too.
 
 ## Data & performance
+
+### Latency is where the function runs, not what it runs
+
+A page makes several Supabase queries one after another. Each one is a round trip from the Vercel function to
+the database. From Washington to Singapore that is about a quarter-second, so a page pays seconds before any
+code matters. Measured 2026-09-26 on the same build, where only the region changed: gallery first byte
+4.0 s → 0.7 s, billing page 13.5 s → 1.8 s. The region is `vercel.json`'s `regions`. It must match the
+database of the deployment it builds. Since 2026-09-26 both databases are in Singapore and every deployment
+runs in `sin1`. If they ever differ again, the dev → main merge must set prod's region by hand (go-live
+runbook §2). Before blaming a query, check where the function ran:
+the deployment's `regions` in Vercel. Cutting sequential awaits into one `Promise.all` helps, but only by
+the number of round trips saved.
 
 ### Signed URLs churn defeats every image cache
 
@@ -505,6 +536,17 @@ Related traps from the same build:
   `snapshot.entitlementPlanKey` is what feature gates read. Resolution is promote-only
   (`max(billing, override)`). A promoted user still pays catalog price and can still hit
   `insufficient_balance`.
+- **Every billing lookup that reaches across a user's rows must be scoped by `provider_mode`.** Test and live
+  Razorpay data share the same tables. 124's checkout RPC matched an existing subscription on
+  `(user_id, provider)` alone, so a tester's test-mode subscription refused their own first live purchase
+  with `subscription_exists` — the people who test are the people who buy first. Migration 130 scopes it.
+  `provider_mode` is on `billing_orders` and `billing_subscriptions`; treat an unscoped one as a bug.
+- **A `payment.dispute.closed` event carries no money outcome — never collapse it into won or lost.** Razorpay
+  debits the merchant *only* when a dispute is lost, and `closed` normally arrives **after** the `won`/`lost`
+  event that settled it. Treating all `payment.dispute.*` alike left won disputes marked `disputed` with a
+  `pending` reversal row for good, in a record kept eight years. Read the outcome from the dispute entity's
+  own `status` (`lib/billing/dispute-status.shared.ts`), and remember webhooks retry out of order: a
+  still-`pending` event must never overwrite a settlement already recorded.
 
 ---
 

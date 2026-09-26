@@ -12,3 +12,6 @@ coverage/
 # Agent-owned build dirs and dev-server state (see scripts/agent-dev.mjs)
 .next-*/
 .agent/
+
+# Supabase CLI scratch output (the CLI is not used here -- see WORKING_AGREEMENTS)
+supabase/.temp/

@@ -49,8 +49,11 @@ export const REFERENCE_FLAG_KEYS = {
   inputMode: 'reference_input_mode',
 } as const;
 
+// Payments Phase 3, Unit A: Audience mirrors Free's limits exactly here (decision 12 --
+// Audience takes the Free branch everywhere this unit doesn't explicitly widen).
 export const DEFAULT_REFERENCE_TIER_LIMITS: Record<PlanKey, ReferenceTierLimits> = {
   free: { enabled: true, maxCharacterRefs: 2, maxWorldRefs: 1, worldAdoptionMode: 'description_only' },
+  audience: { enabled: true, maxCharacterRefs: 2, maxWorldRefs: 1, worldAdoptionMode: 'description_only' },
   plus: { enabled: true, maxCharacterRefs: 3, maxWorldRefs: 3, worldAdoptionMode: 'description_plus_canonical_visual' },
   studio: { enabled: true, maxCharacterRefs: 3, maxWorldRefs: 3, worldAdoptionMode: 'description_plus_canonical_visual' },
 };

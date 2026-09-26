@@ -21,8 +21,15 @@ Keep this file current. When you finish a pack, move it out of "pending"; when y
 
 | | Supabase project | Notes |
 |---|---|---|
-| Development | `dxbwzcpbfacrwrauhdbk` | Named **kissagoStage**, ap-southeast-1. Where migrations get applied first. |
-| Production | `pddjsopcemsfiwyvhlkr` | Named **kissago**, ap-northeast-1. `www.kissago.cc` / `kissago.cc` |
+| Development | `dxbwzcpbfacrwrauhdbk` | Named **kissagoStage**, ap-southeast-1. Where migrations get applied first. Used by local dev and every Vercel Preview deployment. |
+| Production | `wsahcyzgyfnpdmscnvxj` | Named **kissagoProduction**, ap-southeast-1 (Singapore), since 2026-09-26. `www.kissago.cc` / `kissago.cc` |
+| Old production | `pddjsopcemsfiwyvhlkr` | Named **kissago**, ap-northeast-1 (Tokyo). Replaced on 2026-09-26 and paused as the fallback (restorable for 90 days, to about 2026-12-25). Not in use. |
+
+**Everything runs in Singapore since 2026-09-26:** both databases, and the Vercel functions (`sin1`). Dev and
+Preview take it from `vercel.json`; production takes it from the Vercel project setting (Settings → Functions),
+and from `vercel.json` too once `dev` is merged into `main`. The owner's direction is that servers and database
+sit together and near the customers: Singapore for India, a US region for the US
+(`docs/payments/go-live-runbook.md` §1.4). The prod move and its measurements are in the runbook's §1.4.
 
 An agent working here has **read-only** database visibility on both, via two separately named Supabase MCP
 servers: `supabase` (dev) and `supabase-prod`. The names are distinct so touching production is always a
@@ -37,7 +44,17 @@ caused one production incident (batch narration 500ing because `069_narration_ac
 to prod).
 
 Media: Cloudflare R2, staging bucket `kissago-media-staging` behind `media-stage.kissago.cc`, with Supabase
-Storage as fallback. Deployment: Vercel (Hobby — which is why the reconcile cron can only run daily).
+Storage as fallback.
+
+**Deployment** (confirmed 2026-09-17): one Vercel project, `kissago` under `rajeevscorpions-projects`, on Hobby —
+which is why the reconcile cron can only run daily.
+- `main` deploys to **Production** (`kissago.cc`), with Production-scoped env vars and the prod database.
+- Every other pushed branch gets a **Preview** deployment, with Preview-scoped env vars and the dev database. Each
+  branch has a stable address, `https://kissago-git-<branch>-rajeevscorpions-projects.vercel.app`; `dev` is at
+  `kissago-git-dev-…`. Preview addresses are public, with no Vercel login in front, so webhooks reach them directly.
+- Vercel crons run only on Production. On a preview, call `/api/batch/reconcile` by hand with `CRON_SECRET`.
+- A changed env var reaches only new builds: set it before pushing, or redeploy.
+- The old separate staging project, `kissagostage.vercel.app`, no longer exists.
 
 ---
 
@@ -141,6 +158,7 @@ for what has actually run.
 |---|---|---|---|---|
 | 122 | `image_prompt_budget_target` | raises `capabilities.promptCompiler.promptBudgetChars` from 2,800 to 3,000 on every `image_model_registry` row still at the 081 default — 7 rows on dev (1 Gemini, 6 Runware, 3 of those reel rows) | **Applied** 2026-09-16 by the owner. **Frozen** — further budget changes ship as a new migration. The number is a *target*, not a ceiling: compiler-v2 may exceed it up to a hard 5,000 cap in code, and reference-image binding lines are already reserved from it, so never lower it to make room for them | **Applied 2026-09-16 09:34:00+00** |
 | 123 | `image_prompt_budget_3800` | raises the same target from 3,000 to 3,800 on rows still at 122's value | **Applied** 2026-09-16 08:50:33+00, verified against the ledger and the data: all 7 budgeted rows now read 3,800. **Frozen.** Pairs with the composer brevity rules in the same change: real beats compile to ~3,150–3,450 characters, so a 3,000 target made `over_target` fire on every beat | **Applied 2026-09-16 09:34:18+00.** All 7 budgeted rows read 3,800. ⚠ Has **no observable effect yet** — prod's compiler mode is `shadow`, so nothing reads the budget |
+| 124 | `billing_money_correctness` | Payments Phase 1: unique index `uq_beat_grants_purchase_source` (one grant per purchase); `provider_mode` on `billing_orders`/`billing_subscriptions` and `provider_price_ref_mode` on plan versions (existing rows backfilled `test`); `purchase_snapshot_json`; `first_charge_confirmed_at`; webhook `attempt_count`/`last_attempt_at`/`outcome`; RPC `billing_begin_subscription_checkout`; flag `billing_reconcile_enabled` (false). Code on `payments` requires it. Plan: `docs/payments/phase-1-plan.md` | **Applied** 2026-09-17 by the owner. Verified by query the same day: the grant index exists, the ledger row is present, and all 12 `billing_orders` rows are `test`. **Frozen** — further changes ship as a new migration | **Not applied.** Confirm no live Razorpay key was ever set before applying (backfill assumes `test`) |
 
 #### Promoting the agentic system to production — checklist
 
@@ -225,12 +243,22 @@ the Terms (`terms`, §7) already use non-hardcoded language ("usage limits commu
 precisely so that feature can land later without a Terms rewrite. Design the viewer entitlement as a parallel
 dimension to `PlanKey` (not a repurposing of it) when that feature is actually scoped.
 
-### Production (`pddjsopcemsfiwyvhlkr`)
+### Production (`wsahcyzgyfnpdmscnvxj` since 2026-09-26; before that `pddjsopcemsfiwyvhlkr`)
+
+**Moved to Singapore on 2026-09-26** by a full copy (schema, data, users, files), verified table by table. The
+migration state moved with it unchanged: **102-114 and 116-123 applied, 115 and 124+ not**.
 
 **Promoted 2026-09-16.** `main` is at `084c2ed` (a `--no-ff` merge of 238 dev commits across 332 files),
 deployed and live on `kissago.cc`. Migrations **102-114 and 116-123 are applied**; **115 is not** and is the
 only gap. The signed-out gallery was verified populated after 116, and a prompt-only beat generated cleanly
 on a real account.
+
+**Storyline sign-in return promoted 2026-09-16** (`main` at `897a205`, no migrations; plan
+`docs/storyline-signin-return-plan.md`). A signed-out visitor picking a story gets the sign-in dialog on the
+gallery with no loader and lands on the story afterwards; a direct storyline link opens the dialog by itself.
+Owner-verified on dev before promotion; e2e covers the email/password path. If Google sign-in ever lands on `/`
+again, check Supabase Auth → URL Configuration first: an address missing from Redirect URLs silently falls back
+to the Site URL.
 
 Still outstanding on production after that promotion:
 
@@ -439,14 +467,6 @@ with the branch.
 
 Work that is built and merged but has **not** been QA'd in a browser. The owner does this manually.
 
-- **Storyline sign-in return** (`fix/storyline-signin-return`, merged into `dev` 2026-09-16; not on production;
-  plan `docs/storyline-signin-return-plan.md`). A signed-out visitor picking a story now gets the sign-in dialog
-  on the gallery with no loader, and lands on the story after signing in; a direct storyline link opens the
-  dialog by itself. E2E-proven for email/password (`e2e/storyline-signin-return.spec.ts`). **Owner to check by
-  hand:** Google sign-in on dev and prod, and the email-confirmation link for a new sign-up. If Google still lands
-  on `/`, the cause is Supabase Auth URL configuration, not code — Supabase silently falls back to the Site URL
-  when the callback address isn't allowed. Both environments need `/auth/callback` allowed for every host
-  actually served (`kissago.cc` **and** `www.kissago.cc` on prod; localhost on dev), e.g. `https://kissago.cc/**`.
 - **Gallery OTT pack** (rails, hero billboard, kids mode, viewer profiles) — browser QA never done.
 - **Expanding rail cards + series/episodes** — hover-expand, touch-tap, series collapse, next-episode
   countdown. Note: only one published storyline currently has a `series_id`, so the Series rail correctly
@@ -743,6 +763,25 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   graphic style extraction, voice selection and novelty assessment on 3.8 Low — compare on real calls.
 
 **Billing and cost**
+- **Payments are not live for real money yet.** As of 2026-09-26, Phases 1-8 are built and walked in Razorpay
+  test mode. **`payments` is merged into `dev`** (`--no-ff`) for tester smoke tests in test mode, and it stays
+  open for further work. **Not on `main`.** Migrations 124-138 are applied on dev. The go-live steps are
+  `docs/payments/go-live-runbook.md`, and the living handoff is `docs/payments/audit-progress.md`.
+  Older detail follows. As of 2026-09-23: Phases 1-4 are code-complete;
+  **migrations 124-133 are applied on dev and none on prod**.
+  **133 applied on dev 2026-09-23.** Phase 4 shipped the first code that can move money out of the
+  business, now with its admin UI; its kill switch `billing_admin_actions_enabled` is off everywhere. The
+  payments migrations are tracked in that handoff rather than in the table above, which stops at 124 on purpose
+  while the branch is unmerged — `schema_migration_ledger` is the authority for either.
+- **The money walk has started (2026-09-22).** One real test top-up flowed end to end on the Preview: charged
+  price + GST, one ledger row, one grant, webhook processed, no double credit. Subscription, refunds and the
+  reconcile backstop are still unwalked — `docs/payments/money-walk-runbook.md` steps 4-8.
+- **Phase 5 (user billing & checkout UX) is planned** in `docs/payments/phase-5-plan.md` (2026-09-23), built
+  on the owner's requirements in `docs/payments/phase-5-owner-requirements.md`. Owner decisions P1-P7 are answered
+  (2026-09-23). It adds migration 134 (cancel request on `billing_subscriptions`).
+  Planning found:
+  - `billing_payments` updates can rewrite a past charge's tax split and blank its method;
+  - adult attestation and the kids checkout block (owner decision 6) were never built.
 - The Story Bible LLM call is **unbilled** — it consumes tokens without a coin charge.
 - The full `ImageModelSnapshot` — including both `providerCost*Usd` fields — still reaches the client inside
   `beat.imageGenerationMetadata.imageModelSnapshot`. The picker leak was fixed by splitting

@@ -15,6 +15,7 @@ import {
   type ImageTaskKey,
 } from '@/lib/ai/image-models.shared';
 import type { PlanKey } from '@/lib/types/pricing';
+import { isPlanKey } from '@/lib/pricing/entitlement-tier.shared';
 
 interface ImageModelRegistryRow {
   id: string;
@@ -41,11 +42,10 @@ interface ImageModelRegistryRow {
   updated_at: string;
 }
 
-const DEFAULT_ALLOWED_PLANS: PlanKey[] = ['free', 'plus', 'studio'];
+const DEFAULT_ALLOWED_PLANS: PlanKey[] = ['free', 'audience', 'plus', 'studio'];
 
 function normalizePlanKeys(value: string[] | null | undefined): PlanKey[] {
-  const normalized = (value ?? [])
-    .filter((item): item is PlanKey => item === 'free' || item === 'plus' || item === 'studio');
+  const normalized = (value ?? []).filter(isPlanKey);
   return normalized.length > 0 ? normalized : DEFAULT_ALLOWED_PLANS;
 }
 

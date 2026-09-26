@@ -1,0 +1,358 @@
+import 'server-only';
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { PDFDocument, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
+
+import { buildDocumentView, type DocumentView } from '@/lib/billing/documents/document-view.shared';
+import type { BillingDocumentRow, OriginalDocumentReference } from '@/lib/billing/documents/types.shared';
+
+/**
+ * Payments Phase 6 (docs/payments/phase-6-plan.md §4, Unit B3): draws one A4 page from
+ * buildDocumentView's pure output. Every value that could vary between two renders of the SAME row --
+ * the current wall clock, a random internal PDF object name, a random file identifier -- is pinned
+ * explicitly, so re-rendering an issued document (storage.ts's cache-miss path, or a future re-render
+ * after a lost R2 object) reproduces the exact bytes already handed to a customer. See render-pdf.test.ts.
+ *
+ * Determinism traps found while writing this (kept here since they're invisible in the diff otherwise):
+ * - `PDFDocument.create()` stamps CreationDate/ModDate/Producer from `new Date()` in its constructor;
+ *   `updateMetadata: false` skips that so only the explicit setCreationDate/setModificationDate/
+ *   setProducer calls below ever touch the info dict, and nothing else (no Title/Author/Keywords).
+ * - `embedFont(bytes, { subset: true })` without a `customName` names the embedded font resource with
+ *   `context.addRandomSuffix(...)` -- a fresh random suffix every render. Both fonts are embedded with
+ *   a fixed `customName` to remove that.
+ */
+
+const FONTS_DIR = path.join(process.cwd(), 'lib/billing/documents/fonts');
+const PAGE_WIDTH = 595.28; // A4, points
+const PAGE_HEIGHT = 841.89;
+const MARGIN = 48;
+
+let cachedRegularBytes: Buffer | null = null;
+let cachedBoldBytes: Buffer | null = null;
+
+function readFontBytes(filename: string): Buffer {
+  return fs.readFileSync(path.join(FONTS_DIR, filename));
+}
+
+function regularFontBytes(): Buffer {
+  if (!cachedRegularBytes) cachedRegularBytes = readFontBytes('NotoSans-Regular.ttf');
+  return cachedRegularBytes;
+}
+
+function boldFontBytes(): Buffer {
+  if (!cachedBoldBytes) cachedBoldBytes = readFontBytes('NotoSans-Bold.ttf');
+  return cachedBoldBytes;
+}
+
+const INK = rgb(0.13, 0.13, 0.15);
+const MUTED = rgb(0.42, 0.42, 0.46);
+const RULE = rgb(0.82, 0.82, 0.85);
+const TEST_RED = rgb(0.72, 0.11, 0.11);
+const BLACK = rgb(0, 0, 0);
+const WHITE = rgb(1, 1, 1);
+
+interface Cursor {
+  page: PDFPage;
+  y: number;
+}
+
+interface Fonts {
+  regular: PDFFont;
+  bold: PDFFont;
+}
+
+/** Always two decimals on a tax document ("₹450.00"), unlike the wallet's "₹450". */
+function money(view: DocumentView, minor: number): string {
+  return new Intl.NumberFormat(view.currencyCode === 'INR' ? 'en-IN' : 'en-US', {
+    style: 'currency',
+    currency: view.currencyCode,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(minor / 100);
+}
+
+function text(
+  cursor: Cursor,
+  fonts: Fonts,
+  value: string,
+  opts: { x?: number; size?: number; bold?: boolean; color?: ReturnType<typeof rgb>; dy?: number } = {}
+): void {
+  const size = opts.size ?? 10;
+  cursor.page.drawText(value, {
+    x: opts.x ?? MARGIN,
+    y: cursor.y,
+    size,
+    font: opts.bold ? fonts.bold : fonts.regular,
+    color: opts.color ?? INK,
+  });
+  cursor.y -= opts.dy ?? size + 4;
+}
+
+/**
+ * Word-wraps one line to `maxWidth` points. pdf-lib's drawText never wraps, so an unwrapped long address
+ * ran off the page and a long line-item description printed over the SAC and Qty columns. A single word
+ * wider than the column is broken by character. Exported for render-pdf.test.ts.
+ */
+export function wrapLine(value: string, maxWidth: number, measure: (s: string) => number): string[] {
+  const words = value.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [];
+  const lines: string[] = [];
+  let current = '';
+  const pushWord = (word: string) => {
+    let rest = word;
+    while (measure(rest) > maxWidth && rest.length > 1) {
+      let cut = rest.length - 1;
+      while (cut > 1 && measure(rest.slice(0, cut)) > maxWidth) cut -= 1;
+      lines.push(rest.slice(0, cut));
+      rest = rest.slice(cut);
+    }
+    current = rest;
+  };
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (measure(candidate) <= maxWidth) {
+      current = candidate;
+    } else {
+      if (current) lines.push(current);
+      pushWord(word);
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+function rightAlignedText(
+  cursor: Cursor,
+  fonts: Fonts,
+  value: string,
+  rightEdge: number,
+  opts: { size?: number; bold?: boolean; color?: ReturnType<typeof rgb> } = {}
+): void {
+  const size = opts.size ?? 10;
+  const font = opts.bold ? fonts.bold : fonts.regular;
+  const width = font.widthOfTextAtSize(value, size);
+  cursor.page.drawText(value, {
+    x: rightEdge - width,
+    y: cursor.y,
+    size,
+    font,
+    color: opts.color ?? INK,
+  });
+}
+
+/**
+ * The Kissago mark (the favicon's "k" in a circle, lib/brand/kissago-mark.tsx) and the wordmark, in
+ * black and white, ending at `rightEdge` on `baseline`. Drawn as vectors and embedded-font glyphs rather
+ * than an image, so the page stays byte-for-byte reproducible and prints cleanly in monochrome.
+ */
+function drawLogo(page: PDFPage, fonts: Fonts, rightEdge: number, baseline: number): void {
+  const word = 'kissago';
+  const wordSize = 16;
+  const wordWidth = fonts.bold.widthOfTextAtSize(word, wordSize);
+  page.drawText(word, { x: rightEdge - wordWidth, y: baseline, size: wordSize, font: fonts.bold, color: BLACK });
+
+  const radius = 10;
+  const centerX = rightEdge - wordWidth - 6 - radius;
+  const centerY = baseline + 5.5;
+  page.drawCircle({ x: centerX, y: centerY, size: radius, color: BLACK });
+  const markSize = 14;
+  const markWidth = fonts.bold.widthOfTextAtSize('k', markSize);
+  page.drawText('k', {
+    x: centerX - markWidth / 2,
+    y: centerY - markSize * 0.36,
+    size: markSize,
+    font: fonts.bold,
+    color: WHITE,
+  });
+}
+
+function hr(cursor: Cursor, rightEdge: number): void {
+  cursor.page.drawLine({
+    start: { x: MARGIN, y: cursor.y },
+    end: { x: rightEdge, y: cursor.y },
+    thickness: 0.75,
+    color: RULE,
+  });
+  cursor.y -= 12;
+}
+
+/**
+ * Renders one `billing_documents` row to PDF bytes. `originalDoc` is the Rule 53 reference for a
+ * credit note (see buildDocumentView) -- the caller (storage.ts / the download route) loads it.
+ */
+export async function renderDocumentPdf(
+  row: BillingDocumentRow,
+  originalDoc?: OriginalDocumentReference | null
+): Promise<Uint8Array> {
+  const view = buildDocumentView(row, originalDoc ?? null);
+
+  const pdfDoc = await PDFDocument.create({ updateMetadata: false });
+  pdfDoc.registerFontkit(fontkit);
+
+  const regular = await pdfDoc.embedFont(regularFontBytes(), { subset: true, customName: 'KissagoDocSans' });
+  const bold = await pdfDoc.embedFont(boldFontBytes(), { subset: true, customName: 'KissagoDocSansBold' });
+  const fonts: Fonts = { regular, bold };
+
+  // The stored/emailed PDF must reproduce byte-for-byte on a later re-render (storage.ts's cache-miss
+  // path), so every date on the page is pinned to the row's own issued_at -- never the real clock.
+  const issuedAt = new Date(row.issued_at);
+  pdfDoc.setCreationDate(issuedAt);
+  pdfDoc.setModificationDate(issuedAt);
+  pdfDoc.setProducer('Kissago');
+
+  const page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+  const rightEdge = PAGE_WIDTH - MARGIN;
+  const cursor: Cursor = { page, y: PAGE_HEIGHT - MARGIN };
+
+  if (view.testBanner) {
+    page.drawRectangle({
+      x: MARGIN,
+      y: cursor.y - 18,
+      width: rightEdge - MARGIN,
+      height: 22,
+      color: rgb(0.98, 0.92, 0.92),
+      borderColor: TEST_RED,
+      borderWidth: 1,
+    });
+    // The baseline sits inside the 22pt box (cursor.y - 18 .. cursor.y + 4), not on its top edge.
+    text({ page, y: cursor.y - 11 }, fonts, view.testBanner, { x: MARGIN + 8, bold: true, color: TEST_RED, size: 11 });
+    cursor.y -= 42;
+  }
+
+  drawLogo(page, fonts, rightEdge, cursor.y);
+  text(cursor, fonts, view.title.toUpperCase(), { bold: true, size: 18, dy: 22 });
+  // The logo holds the title row's right end, so the copy label sits under it.
+  rightAlignedText({ page, y: cursor.y + 4 }, fonts, view.copyLabel, rightEdge, { size: 9, color: MUTED });
+  cursor.y -= 10;
+
+  // Seller / buyer, side by side.
+  const columnWidth = (rightEdge - MARGIN - 24) / 2;
+  const sellerX = MARGIN;
+  const buyerX = MARGIN + columnWidth + 24;
+  const blockTop = cursor.y;
+
+  text({ page, y: blockTop }, fonts, 'From', { x: sellerX, size: 9, color: MUTED, dy: 14 });
+  let sellerY = blockTop - 14;
+  const sellerLines = [
+    view.seller.legalName ?? '',
+    `GSTIN ${view.seller.gstin ?? '—'}`,
+    ...view.seller.addressLines,
+    [view.seller.city, view.seller.state, view.seller.postalCode].filter(Boolean).join(', '),
+    view.seller.country ?? '',
+  ].filter((line) => line.trim().length > 0);
+  for (const [i, line] of sellerLines.entries()) {
+    const font = i === 0 ? fonts.bold : fonts.regular;
+    for (const part of wrapLine(line, columnWidth, (s) => font.widthOfTextAtSize(s, 10))) {
+      text({ page, y: sellerY }, fonts, part, { x: sellerX, size: 10, bold: i === 0, dy: 13 });
+      sellerY -= 13;
+    }
+  }
+
+  let buyerY = blockTop;
+  text({ page, y: buyerY }, fonts, 'Bill to', { x: buyerX, size: 9, color: MUTED, dy: 14 });
+  buyerY -= 14;
+  const buyerLines: string[] = [];
+  if (view.buyer.legalName) buyerLines.push(view.buyer.legalName);
+  if (view.buyer.gstin) buyerLines.push(`GSTIN ${view.buyer.gstin}`);
+  buyerLines.push(...view.buyer.addressLines);
+  const cityLine = [view.buyer.city, view.buyer.state, view.buyer.postalCode].filter(Boolean).join(', ');
+  if (cityLine) buyerLines.push(cityLine);
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): a country line only for an export
+  // document -- view.exportEndorsement is non-null exactly then, so it doubles as the gate here.
+  // India's buyer block never printed a country line and must not start now.
+  if (view.exportEndorsement && view.buyer.country) buyerLines.push(view.buyer.country);
+  if (buyerLines.length === 0) buyerLines.push('Unregistered recipient');
+  for (const [i, line] of buyerLines.entries()) {
+    const font = i === 0 ? fonts.bold : fonts.regular;
+    for (const part of wrapLine(line, columnWidth, (s) => font.widthOfTextAtSize(s, 10))) {
+      text({ page, y: buyerY }, fonts, part, { x: buyerX, size: 10, bold: i === 0, dy: 13 });
+      buyerY -= 13;
+    }
+  }
+
+  cursor.y = Math.min(sellerY, buyerY) - 8;
+  hr(cursor, rightEdge);
+
+  // Document meta.
+  const metaRows: Array<[string, string]> = [
+    [`${view.title} No.`, view.documentNumber],
+    ['Date', view.documentDate],
+    ['Financial year', view.financialYear],
+    ['Place of supply', view.placeOfSupply],
+    ['Reverse charge', view.reverseCharge],
+  ];
+  if (view.originalReference) {
+    metaRows.push(['Original invoice no.', view.originalReference.documentNumber]);
+    metaRows.push(['Original invoice date', view.originalReference.issuedAt]);
+  }
+  if (view.reference) {
+    metaRows.push([view.reference.kind === 'refund' ? 'Refund ref.' : 'Payment ref.', view.reference.id]);
+  }
+  for (const [label, value] of metaRows) {
+    text(cursor, fonts, label, { size: 9.5, color: MUTED, dy: 0 });
+    rightAlignedText(cursor, fonts, value, rightEdge, { size: 9.5 });
+    cursor.y -= 14;
+  }
+  cursor.y -= 6;
+  hr(cursor, rightEdge);
+
+  // Line items table.
+  const colDesc = MARGIN;
+  const colSac = rightEdge - 220;
+  const colQty = rightEdge - 150;
+  const colValue = rightEdge;
+  text(cursor, fonts, 'Description', { x: colDesc, size: 9, color: MUTED, dy: 0 });
+  text(cursor, fonts, 'SAC', { x: colSac, size: 9, color: MUTED, dy: 0 });
+  text(cursor, fonts, 'Qty', { x: colQty, size: 9, color: MUTED, dy: 0 });
+  rightAlignedText(cursor, fonts, 'Taxable value', colValue, { size: 9, color: MUTED });
+  cursor.y -= 16;
+  hr(cursor, rightEdge);
+
+  const descWidth = colSac - colDesc - 12;
+  for (const item of view.lineItems) {
+    const descLines = wrapLine(item.description, descWidth, (s) => fonts.regular.widthOfTextAtSize(s, 10));
+    text(cursor, fonts, item.sac ?? '—', { x: colSac, size: 10, dy: 0 });
+    text(cursor, fonts, `${item.quantity} ${item.unit}`, { x: colQty, size: 10, dy: 0 });
+    rightAlignedText(cursor, fonts, money(view, item.taxableValueMinor), colValue, { size: 10 });
+    for (const part of descLines) {
+      text(cursor, fonts, part, { x: colDesc, size: 10, dy: 13 });
+    }
+    cursor.y -= descLines.length > 0 ? 5 : 18;
+  }
+  hr(cursor, rightEdge);
+
+  // Totals block, right-aligned.
+  const totalsRows: Array<[string, string]> = [
+    ['Taxable value', money(view, view.netMinor)],
+    ...view.taxRows.map((row): [string, string] => [`${row.label} @ ${row.ratePercent}%`, money(view, row.amountMinor)]),
+    ['Total', money(view, view.grossMinor)],
+  ];
+  for (const [label, value] of totalsRows) {
+    const isTotal = label === 'Total';
+    text(cursor, fonts, label, { x: rightEdge - 220, size: isTotal ? 11 : 10, bold: isTotal, dy: 0 });
+    rightAlignedText(cursor, fonts, value, rightEdge, { size: isTotal ? 11 : 10, bold: isTotal });
+    cursor.y -= isTotal ? 18 : 15;
+  }
+  cursor.y -= 6;
+
+  // Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): the export-under-LUT endorsement,
+  // under the totals and above the amount in words -- null (and so skipped entirely) for every India
+  // document, keeping that render byte-identical.
+  if (view.exportEndorsement) {
+    for (const part of wrapLine(view.exportEndorsement, rightEdge - MARGIN, (s) => fonts.regular.widthOfTextAtSize(s, 9.5))) {
+      text(cursor, fonts, part, { size: 9.5, color: MUTED, dy: 13 });
+    }
+    cursor.y -= 4;
+  }
+
+  text(cursor, fonts, `Amount in words: ${view.amountInWords}`, { size: 9.5, color: MUTED, dy: 20 });
+
+  cursor.y = Math.max(cursor.y, MARGIN + 40);
+  hr(cursor, rightEdge);
+  text(cursor, fonts, view.footerNote, { size: 8.5, color: MUTED, dy: 12 });
+  text(cursor, fonts, view.jurisdictionNote, { size: 8.5, color: MUTED, dy: 12 });
+
+  return pdfDoc.save();
+}

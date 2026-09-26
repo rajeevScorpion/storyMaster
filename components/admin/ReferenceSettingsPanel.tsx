@@ -30,7 +30,7 @@ const INPUT_MODES: { value: ReferenceInputMode; label: string; help: string }[] 
   },
 ];
 
-const TIER_LABELS: Record<PlanKey, string> = { free: 'Free', plus: 'Plus', studio: 'Studio' };
+const TIER_LABELS: Record<PlanKey, string> = { free: 'Free', audience: 'Audience', plus: 'Plus', studio: 'Studio' };
 
 const GLOBAL_TOGGLES: { key: keyof ReferencePersonalizationSettings; label: string; help: string }[] = [
   { key: 'charactersEnabled', label: 'Character references', help: 'Allow uploading and adopting character references.' },

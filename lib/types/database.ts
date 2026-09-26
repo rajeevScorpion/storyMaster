@@ -1,9 +1,20 @@
 import type {
+  AccountDeletionActor,
+  AccountDeletionStatus,
   BeatGrantSourceType,
   BeatReservationStatus,
+  BillingDocumentStatus,
+  BillingDocumentType,
   BillingInterval,
+  BillingMethodCategory,
   BillingOrderType,
+  BillingPaymentKind,
+  BillingPaymentStatus,
   BillingProvider,
+  BillingRefundInitiator,
+  BillingRefundStatus,
+  BillingTaxRegime,
+  BillingTaxRuleAppliesTo,
   BillingWebhookEventStatus,
   PlanKey,
   PricingActionKey,
@@ -615,6 +626,13 @@ export interface DbPricingPlanVersion {
   grace_period_days: number;
   provider_product_ref: string | null;
   provider_price_ref: string | null;
+  /** Mode `provider_price_ref` was created under; a cached ref from the other mode must not be reused. */
+  provider_price_ref_mode: 'test' | 'live' | null;
+  /** Migration 126 (payments Phase 2, Unit B): the gross amount `provider_price_ref` was created at.
+   * Absent (not just null) on a database without 126 -- callers must structurally probe for the key
+   * (`'provider_price_ref_gross_minor' in version`) rather than assume it exists, so the plan-ref
+   * cache falls back to reuse-on-mode-alone exactly as before 126. */
+  provider_price_ref_gross_minor?: number | null;
   extensions_json: Record<string, unknown>;
   published_at: string | null;
   published_by: string | null;
@@ -714,7 +732,11 @@ export interface DbBillingCustomer {
 
 export interface DbBillingSubscription {
   id: string;
-  user_id: string;
+  /** Nullable since migration 125 (payments Phase 2): SET NULL on account deletion, matched to the
+   * anonymised subject via `subject_ref`. Always non-null for a live, un-deleted customer. */
+  user_id: string | null;
+  /** Migration 125: absent (not just null) on a database without 125 -- see billing_orders.subject_ref. */
+  subject_ref?: string | null;
   plan_version_id: string;
   provider: BillingProvider;
   provider_subscription_id: string;
@@ -728,13 +750,24 @@ export interface DbBillingSubscription {
   grace_period_ends_at: string | null;
   last_webhook_at: string | null;
   raw_provider_state_json: Record<string, unknown>;
+  /** Test/live the subscription was created under; reconcile and grants must not mix modes. */
+  provider_mode: 'test' | 'live';
+  /** Set once a paid invoice has ever been seen for this subscription; gates `authenticated`/grace entitlement. */
+  first_charge_confirmed_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface DbBillingOrder {
   id: string;
-  user_id: string;
+  /** Nullable since migration 125 (payments Phase 2): SET NULL on account deletion, matched to the
+   * anonymised subject via `subject_ref`. Always non-null for a live, un-deleted customer. */
+  user_id: string | null;
+  /** Migration 125: a stable id (copied from user_id at migration time, and set explicitly by
+   * checkout going forward) that survives account deletion. Absent (not just null) on a database
+   * without 125 -- `select('*')` simply omits an unknown column rather than erroring, so callers
+   * that need to know whether 125 is applied structurally probe for the key. */
+  subject_ref?: string | null;
   provider: BillingProvider;
   order_type: BillingOrderType;
   provider_checkout_session_id: string | null;
@@ -746,6 +779,10 @@ export interface DbBillingOrder {
   plan_version_id: string | null;
   topup_pack_id: string | null;
   raw_provider_payload_json: Record<string, unknown>;
+  /** Test/live this order was created under. */
+  provider_mode: 'test' | 'live';
+  /** What was actually sold at checkout time, read by grants instead of the (possibly since-changed) catalog. */
+  purchase_snapshot_json: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }
@@ -763,6 +800,151 @@ export interface DbBillingWebhookEvent {
   received_at: string;
   processed_at: string | null;
   error_message: string | null;
+  attempt_count: number;
+  last_attempt_at: string | null;
+  outcome: string | null;
+}
+
+// Payments Phase 2 (docs/payments/phase-2-plan.md, migration 125): the durable payment/refund/
+// document ledger, its GST rules, and retention-safe deletion tracking. `subject_ref` is a stable
+// id (copied from user_id) that survives account deletion; `user_id` is nulled at that point.
+
+export interface DbBillingProfile {
+  id: string;
+  user_id: string;
+  legal_name: string | null;
+  billing_email: string | null;
+  phone: string | null;
+  company_name: string | null;
+  gstin: string | null;
+  state_code: string;
+  country_code: string;
+  /** Payments Phase 8 (docs/payments/phase-8-plan.md §8, Unit B, migration 138): a foreign customer's
+   * state/province. Null for an Indian profile, and absent from the row entirely on a database that
+   * hasn't applied 138 -- callers read it as `row.region ?? null`, never assume the key exists. */
+  region: string | null;
+  address_line_1: string | null;
+  address_line_2: string | null;
+  city: string | null;
+  postal_code: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbBillingTaxRule {
+  id: string;
+  market_key: string;
+  applies_to: BillingTaxRuleAppliesTo;
+  tax_regime: BillingTaxRegime;
+  rate_percent: number;
+  sac_code: string | null;
+  supplier_state_code: string;
+  status: PricingCatalogStatus;
+  effective_from: string;
+  effective_to: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbBillingPayment {
+  id: string;
+  subject_ref: string;
+  user_id: string | null;
+  provider: BillingProvider;
+  provider_mode: 'test' | 'live';
+  provider_payment_id: string;
+  provider_order_id: string | null;
+  provider_subscription_id: string | null;
+  provider_invoice_id: string | null;
+  billing_order_id: string | null;
+  billing_subscription_id: string | null;
+  plan_version_id: string | null;
+  topup_pack_id: string | null;
+  kind: BillingPaymentKind;
+  status: BillingPaymentStatus;
+  currency_code: string;
+  net_minor: number;
+  tax_minor: number;
+  gross_minor: number;
+  tax_breakdown_json: Record<string, unknown>;
+  method_category: BillingMethodCategory | null;
+  provider_fee_minor: number | null;
+  provider_tax_minor: number | null;
+  cycle_start: string | null;
+  cycle_end: string | null;
+  purchase_snapshot_json: Record<string, unknown> | null;
+  customer_snapshot_json: Record<string, unknown> | null;
+  webhook_event_id: string | null;
+  captured_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbBillingRefund {
+  id: string;
+  subject_ref: string | null;
+  payment_id: string | null;
+  provider: BillingProvider;
+  provider_mode: 'test' | 'live';
+  provider_refund_id: string;
+  provider_payment_id: string | null;
+  amount_minor: number;
+  net_minor: number | null;
+  tax_minor: number | null;
+  currency_code: string;
+  status: BillingRefundStatus;
+  reason: string | null;
+  initiated_by: BillingRefundInitiator | null;
+  actor_user_ref: string | null;
+  coin_adjustment_json: Record<string, unknown> | null;
+  raw_payload_json: Record<string, unknown>;
+  processed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbBillingDocument {
+  id: string;
+  subject_ref: string;
+  document_type: BillingDocumentType;
+  document_number: string;
+  financial_year: string;
+  issued_at: string;
+  payment_id: string | null;
+  refund_id: string | null;
+  currency_code: string;
+  net_minor: number;
+  tax_minor: number;
+  gross_minor: number;
+  tax_breakdown_json: Record<string, unknown>;
+  customer_snapshot_json: Record<string, unknown>;
+  business_snapshot_json: Record<string, unknown>;
+  status: BillingDocumentStatus;
+  void_reason: string | null;
+  storage_ref: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbBillingDocumentSequence {
+  financial_year: string;
+  document_type: string;
+  prefix: string;
+  next_number: number;
+  updated_at: string;
+}
+
+export interface DbAccountDeletionEvent {
+  id: string;
+  subject_ref: string;
+  actor: AccountDeletionActor;
+  status: AccountDeletionStatus;
+  requested_at: string;
+  completed_at: string | null;
+  removed_summary_json: Record<string, unknown>;
+  retained_summary_json: Record<string, unknown>;
+  failure_reason: string | null;
 }
 
 export interface DbBeatGrant {

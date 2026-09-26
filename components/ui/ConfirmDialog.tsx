@@ -13,6 +13,7 @@ export default function ConfirmDialog({
   cancelLabel = 'Cancel',
   tone = 'default',
   busy = false,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }: {
@@ -23,6 +24,8 @@ export default function ConfirmDialog({
   cancelLabel?: string;
   tone?: 'default' | 'danger';
   busy?: boolean;
+  /** Keeps the confirm button inert until the caller's own validation (e.g. a required reason) passes. */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -93,7 +96,7 @@ export default function ConfirmDialog({
               <button
                 type="button"
                 onClick={onConfirm}
-                disabled={busy}
+                disabled={busy || confirmDisabled}
                 className={`inline-flex flex-1 items-center justify-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition-colors disabled:opacity-50 sm:flex-none ${
                   isDanger
                     ? 'bg-rose-500 text-white hover:bg-rose-400'

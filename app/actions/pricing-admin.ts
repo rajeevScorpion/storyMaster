@@ -40,6 +40,12 @@ import {
 } from '@/lib/types/pricing';
 import { listImageModelRegistry } from '@/lib/ai/image-models';
 import type { ImageModelRegistryRecord } from '@/lib/ai/image-models.shared';
+import { isMissingBillingSchemaError } from '@/lib/billing/schema-availability.shared';
+import {
+  countLiveSubscriberRows,
+  type RawSubscriberStatusRow,
+  type SubscriberImpactCount,
+} from '@/lib/pricing/catalog-guardrails.shared';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -1055,6 +1061,12 @@ function normalizePricingPlanFeatureFlags(input?: PricingPlanFeatureFlags | null
     canAccessDownloads: Boolean(input?.canAccessDownloads ?? false),
     canAccessUnbrandedExports: Boolean(input?.canAccessUnbrandedExports ?? false),
     creatorControls: Boolean(input?.creatorControls ?? false),
+    // Payments Phase 3, Unit B (docs/payments/phase-3-plan.md §5, B0): the one capability that
+    // must default true, not false. Every other flag here defaults false because absence should
+    // mean "no access" -- but absence of this one means "no quota row configured yet", and a
+    // false default would switch a daily watch limit on for every paying account the moment this
+    // ships, before any admin has touched a toggle. Do not "fix" this to match its neighbours.
+    unlimitedWatching: Boolean(input?.unlimitedWatching ?? true),
     videoExportPreset: normalizeVideoExportPreset(input?.videoExportPreset),
   };
 }
@@ -1115,6 +1127,72 @@ async function upsertPricingPlanBase(supabase: AdminClient, input: SavePricingPl
   }
 
   return data as DbPricingPlan;
+}
+
+export interface PricingPlanSubscriberImpact {
+  /** null means the count could not be determined -- see countLiveBillingSubscribersForVersionIds. */
+  liveSubscriberCount: SubscriberImpactCount;
+}
+
+/**
+ * Payments Phase 4, Unit E: how many live billing_subscriptions point at one of these plan versions,
+ * by the same predicate admin_list_users and selectActiveBillingSubscriptionForPlanKey use
+ * (lib/admin/user-management.shared.ts) -- never a third definition. This backs the pricing studio's
+ * "informed confirmation" ahead of an archive/deactivate/publish-that-archives action (owner decision
+ * 14, docs/payments/audit-progress.md); it is advisory only and never blocks the action.
+ *
+ * billing_subscriptions exists on every environment (migration 016), but this deliberately selects
+ * only columns that have been there since 016 -- provider_mode and subject_ref are 124/125 and not on
+ * production. Any read failure here, whether a missing migration (isMissingBillingSchemaError) or
+ * anything else, degrades to an "unavailable" (null) count rather than throwing: unlike the read-only
+ * billing panel (Unit B), this read gates a confirmation in front of a mutation, and a failed count
+ * must never be the reason a catalogue change cannot proceed. Never probe error message text.
+ */
+async function countLiveBillingSubscribersForVersionIds(
+  supabase: AdminClient,
+  versionIds: string[]
+): Promise<PricingPlanSubscriberImpact> {
+  if (versionIds.length === 0) {
+    return { liveSubscriberCount: 0 };
+  }
+
+  const { data, error } = await supabase
+    .from('billing_subscriptions')
+    .select('status, current_period_end, grace_period_ends_at')
+    .in('plan_version_id', versionIds);
+
+  if (error) {
+    if (!isMissingBillingSchemaError(error)) {
+      console.error('Failed to count live billing subscribers for catalogue guardrail:', error.message);
+    }
+    return { liveSubscriberCount: null };
+  }
+
+  return { liveSubscriberCount: countLiveSubscriberRows((data ?? []) as RawSubscriberStatusRow[]) };
+}
+
+export async function getPricingPlanVersionSubscriberImpact(versionId: string): Promise<PricingPlanSubscriberImpact> {
+  await verifyAdmin();
+  const supabase = createAdminClient();
+  return countLiveBillingSubscribersForVersionIds(supabase, [versionId]);
+}
+
+/** Scopes the count across every version of the plan -- used when the base plan itself (is_active) is being deactivated. */
+export async function getPricingPlanSubscriberImpact(planId: string): Promise<PricingPlanSubscriberImpact> {
+  await verifyAdmin();
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('pricing_plan_versions')
+    .select('id')
+    .eq('plan_id', planId);
+
+  if (error) {
+    throw new Error(`Failed to load plan versions for catalogue guardrail: ${error.message}`);
+  }
+
+  const versionIds = ((data ?? []) as Array<{ id: string }>).map((row) => row.id);
+  return countLiveBillingSubscribersForVersionIds(supabase, versionIds);
 }
 
 async function getPlanVersionById(supabase: AdminClient, versionId: string): Promise<DbPricingPlanVersion | null> {

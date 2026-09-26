@@ -154,6 +154,32 @@ input:autofill {
   display: none;
 }
 
+/* Neutral thin scrollbar for dense data tables (e.g. the admin Billing panel). The global thin
+   scrollbar above is still emerald -- fine for a page-level rail, but a short horizontal bar under
+   a data table reads as a thick green stripe. This overrides it to a subtler neutral tone. */
+.admin-table-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(163, 163, 163, 0.35) transparent;
+}
+
+.admin-table-scroll::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.admin-table-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.admin-table-scroll::-webkit-scrollbar-thumb {
+  background: rgba(163, 163, 163, 0.35);
+  border-radius: 3px;
+}
+
+.admin-table-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(163, 163, 163, 0.55);
+}
+
 /* Subtle mobile scene movement for the foreground story image. */
 .mobile-scene-shuttle {
   transform-origin: center;

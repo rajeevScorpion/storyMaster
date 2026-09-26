@@ -46,6 +46,36 @@ test('cross-origin isolation holds, so ffmpeg.wasm keeps SharedArrayBuffer', asy
   expect(isolated, 'crossOriginIsolated must be true or video export loses SharedArrayBuffer').toBe(true);
 });
 
+test('the wallet is served without isolation, so Razorpay Checkout can load its frame', async ({ page }) => {
+  const response = await page.goto('/wallet', { waitUntil: 'domcontentloaded' });
+  const headers = response?.headers() ?? {};
+
+  expect(headers['cross-origin-embedder-policy']).toBeUndefined();
+  expect(headers['cross-origin-opener-policy']).toBeUndefined();
+  expect(await page.evaluate(() => window.crossOriginIsolated)).toBe(false);
+});
+
+test('a client-side hop across the wallet boundary reloads into the right isolation', async ({ page }) => {
+  type NextWindow = Window & { next?: { router?: { push: (href: string) => void } } };
+  // Evaluating while the boundary reload is in flight throws; poll through it.
+  const isolated = () => page.evaluate(() => window.crossOriginIsolated).catch(() => null);
+  const pushRoute = async (href: string) => {
+    await page.waitForFunction(() => Boolean((window as NextWindow).next?.router));
+    await page.evaluate((target) => (window as NextWindow).next!.router!.push(target), href);
+  };
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  expect(await isolated()).toBe(true);
+
+  await pushRoute('/wallet');
+  await page.waitForURL((url) => url.pathname === '/wallet');
+  await expect.poll(isolated, { message: 'checkout needs the wallet unisolated' }).toBe(false);
+
+  await pushRoute('/');
+  await page.waitForURL((url) => url.pathname === '/');
+  await expect.poll(isolated, { message: 'video export needs isolation back' }).toBe(true);
+});
+
 test('the authoring composer renders at /create', async ({ page }) => {
   const pageErrors = trackPageErrors(page);
 

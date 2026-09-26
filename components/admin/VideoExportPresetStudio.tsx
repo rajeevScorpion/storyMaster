@@ -20,6 +20,7 @@ import { PLAN_KEYS, type PlanKey } from '@/lib/types/pricing';
 
 const PLAN_LABELS: Record<PlanKey, string> = {
   free: 'Free',
+  audience: 'Audience',
   plus: 'Plus',
   studio: 'Studio',
 };

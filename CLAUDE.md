@@ -14,7 +14,7 @@ Kissago (kissago.cc) is an AI-powered interactive branching-story platform built
 
 It is positioned as a platform you come to **watch** stories on, not only to write them: the public discovery gallery is the front door, and authoring is an opt-in second act. Finished stories can be published, browsed by others, narrated, turned into vertical reels, and exported to video.
 
-Durable state lives in **Supabase** (Postgres + auth + RLS). Media lives in **Cloudflare R2** with Supabase Storage as fallback. Payments run through **Razorpay**. Deployment is **Vercel**.
+Durable state lives in **Supabase** (Postgres + auth + RLS). Media lives in **Cloudflare R2** with Supabase Storage as fallback. Payments run through **Razorpay**. Deployment is **Vercel**: one project, where `main` is Production (prod database) and every other pushed branch gets a Preview deployment on the dev database. Details in PROJECT_STATE.
 
 ## Commands
 

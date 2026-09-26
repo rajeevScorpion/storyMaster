@@ -1,31 +1,12 @@
 import { NextResponse } from 'next/server';
-import { fetchRazorpaySubscription, verifyRazorpayWebhookSignature } from '@/lib/billing/razorpay';
-import { grantTopupIfMissing, syncRazorpaySubscriptionState } from '@/lib/billing/razorpay-sync';
+import { RazorpayConfigError, verifyRazorpayWebhookSignature } from '@/lib/billing/razorpay';
+import { redactRazorpayPayload } from '@/lib/billing/razorpay-redact.shared';
+import { isUniqueViolation } from '@/lib/billing/razorpay-sync';
+import { processRazorpayWebhookEvent, type RazorpayWebhookPayload } from '@/lib/billing/razorpay-webhook';
 import { createAdminClient } from '@/lib/supabase/admin';
-import type { DbBillingOrder, DbBillingSubscription, DbPricingPlanVersion, DbPricingTopupPack } from '@/lib/types/database';
+import type { DbBillingWebhookEvent } from '@/lib/types/database';
 
-interface RazorpayWebhookPayload {
-  event: string;
-  account_id?: string | null;
-  payload?: {
-    subscription?: {
-      entity?: {
-        id?: string;
-      };
-    };
-    order?: {
-      entity?: {
-        id?: string;
-      };
-    };
-    payment?: {
-      entity?: {
-        id?: string;
-        order_id?: string;
-      };
-    };
-  };
-}
+const DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 
 export async function POST(request: Request) {
   const rawBody = await request.text();
@@ -36,7 +17,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Missing Razorpay webhook headers' }, { status: 400 });
   }
 
-  if (!verifyRazorpayWebhookSignature(rawBody, signature)) {
+  let signatureValid: boolean;
+  try {
+    signatureValid = verifyRazorpayWebhookSignature(rawBody, signature);
+  } catch (err) {
+    if (err instanceof RazorpayConfigError) {
+      console.error('[razorpay.webhook] config_error', { reason: err.reason });
+      return NextResponse.json({ error: 'Webhook is not configured' }, { status: 500 });
+    }
+    throw err;
+  }
+
+  if (!signatureValid) {
     return NextResponse.json({ error: 'Invalid Razorpay webhook signature' }, { status: 400 });
   }
 
@@ -45,41 +37,71 @@ export async function POST(request: Request) {
 
   const existingResult = await admin
     .from('billing_webhook_events')
-    .select('id, status')
+    .select('*')
     .eq('provider', 'razorpay')
     .eq('provider_event_id', eventId)
     .maybeSingle();
 
   throwIfQueryFailed(existingResult.error, 'Failed to check existing webhook');
 
-  if (existingResult.data) {
-    return NextResponse.json({ ok: true, duplicate: true });
+  const existing = (existingResult.data ?? null) as DbBillingWebhookEvent | null;
+  let webhookEventId: string;
+
+  if (existing) {
+    if (existing.status === 'processed' || existing.status === 'ignored') {
+      return NextResponse.json({ ok: true, duplicate: true });
+    }
+
+    const receivedRecently = Date.now() - new Date(existing.received_at).getTime() < DUPLICATE_WINDOW_MS;
+    if (existing.status === 'received' && receivedRecently) {
+      return NextResponse.json({ ok: true, duplicate: true });
+    }
+
+    const reopenResult = await admin
+      .from('billing_webhook_events')
+      .update({
+        status: 'received',
+        attempt_count: existing.attempt_count + 1,
+        last_attempt_at: new Date().toISOString(),
+        error_message: null,
+      })
+      .eq('id', existing.id);
+
+    throwIfQueryFailed(reopenResult.error, 'Failed to reopen webhook event for reprocessing');
+    webhookEventId = existing.id;
+  } else {
+    const insertResult = await admin
+      .from('billing_webhook_events')
+      .insert({
+        provider: 'razorpay',
+        event_type: payload.event,
+        provider_event_id: eventId,
+        provider_account_id: payload.account_id ?? null,
+        status: 'received',
+        payload_json: redactRazorpayPayload(payload as unknown as Record<string, unknown>),
+        last_attempt_at: new Date().toISOString(),
+      })
+      .select('id')
+      .single();
+
+    if (insertResult.error) {
+      if (isUniqueViolation(insertResult.error)) {
+        return NextResponse.json({ ok: true, duplicate: true });
+      }
+      throwIfQueryFailed(insertResult.error, 'Failed to insert webhook event');
+    }
+
+    webhookEventId = insertResult.data!.id;
   }
 
-  const insertResult = await admin
-    .from('billing_webhook_events')
-    .insert({
-      provider: 'razorpay',
-      event_type: payload.event,
-      provider_event_id: eventId,
-      provider_account_id: payload.account_id ?? null,
-      status: 'received',
-      payload_json: payload as unknown as Record<string, unknown>,
-    })
-    .select('id')
-    .single();
-
-  throwIfQueryFailed(insertResult.error, 'Failed to insert webhook event');
-
-  const webhookEventId = insertResult.data!.id;
-
   try {
-    const processResult = await processWebhookPayload(admin, payload);
+    const processResult = await processRazorpayWebhookEvent({ supabase: admin, payload });
 
     const updateResult = await admin
       .from('billing_webhook_events')
       .update({
         status: processResult.status,
+        outcome: processResult.outcome,
         related_user_id: processResult.relatedUserId,
         related_subscription_id: processResult.relatedSubscriptionId,
         processed_at: new Date().toISOString(),
@@ -90,214 +112,20 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true });
   } catch (err: any) {
+    const message = String(err?.message ?? 'Webhook processing failed').slice(0, 500);
     const failResult = await admin
       .from('billing_webhook_events')
       .update({
         status: 'failed',
-        error_message: err?.message ?? 'Webhook processing failed',
+        error_message: message,
         processed_at: new Date().toISOString(),
       })
       .eq('id', webhookEventId);
 
     throwIfQueryFailed(failResult.error, 'Failed to update failed webhook event');
 
-    return NextResponse.json({ error: err?.message ?? 'Webhook processing failed' }, { status: 500 });
+    return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 });
   }
-}
-
-async function processWebhookPayload(
-  supabase: ReturnType<typeof createAdminClient>,
-  payload: RazorpayWebhookPayload
-): Promise<{
-  status: 'processed' | 'ignored';
-  relatedUserId: string | null;
-  relatedSubscriptionId: string | null;
-}> {
-  const subscriptionId = payload.payload?.subscription?.entity?.id ?? null;
-  if (subscriptionId) {
-    const existingSubscriptionResult = await supabase
-      .from('billing_subscriptions')
-      .select('*')
-      .eq('provider', 'razorpay')
-      .eq('provider_subscription_id', subscriptionId)
-      .maybeSingle();
-
-    throwIfQueryFailed(existingSubscriptionResult.error, 'Failed to load existing subscription for webhook');
-
-    const existingSubscription = (existingSubscriptionResult.data ?? null) as DbBillingSubscription | null;
-    const orderResult = await supabase
-      .from('billing_orders')
-      .select('*')
-      .eq('provider', 'razorpay')
-      .eq('provider_checkout_session_id', subscriptionId)
-      .maybeSingle();
-
-    throwIfQueryFailed(orderResult.error, 'Failed to load Razorpay subscription order');
-
-    const subscriptionOrder = (orderResult.data ?? null) as DbBillingOrder | null;
-    const userId = existingSubscription?.user_id ?? subscriptionOrder?.user_id ?? null;
-    const planVersionId = existingSubscription?.plan_version_id ?? subscriptionOrder?.plan_version_id ?? null;
-
-    if (!userId || !planVersionId) {
-      return { status: 'ignored', relatedUserId: null, relatedSubscriptionId: null };
-    }
-
-    const planVersion = await loadPlanVersion(supabase, planVersionId);
-    const subscription = await fetchRazorpaySubscription(subscriptionId);
-    const syncResult = await syncRazorpaySubscriptionState({
-      supabase,
-      userId,
-      pricingMarketKey: planVersion.pricing_market_key,
-      countryCode: planVersion.pricing_market_key === 'IN' ? 'IN' : null,
-      planVersion,
-      subscription,
-      rawPayload: {
-        kind: 'subscription_webhook',
-        event: payload.event,
-        payload,
-      },
-    });
-
-    if (subscriptionOrder) {
-      const updateResult = await supabase
-        .from('billing_orders')
-        .update({
-          status: subscription.status,
-          provider_payment_id:
-            payload.payload?.payment?.entity?.id ?? subscriptionOrder.provider_payment_id,
-          raw_provider_payload_json: {
-            ...(subscriptionOrder.raw_provider_payload_json ?? {}),
-            webhookEvent: payload.event,
-            latestSubscription: subscription,
-          },
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', subscriptionOrder.id);
-
-      throwIfQueryFailed(updateResult.error, 'Failed to update subscription order from webhook');
-    }
-
-    return {
-      status: 'processed',
-      relatedUserId: userId,
-      relatedSubscriptionId: syncResult.billingSubscriptionId,
-    };
-  }
-
-  const providerOrderId = payload.payload?.order?.entity?.id ?? payload.payload?.payment?.entity?.order_id ?? null;
-  if (providerOrderId) {
-    const orderResult = await supabase
-      .from('billing_orders')
-      .select('*')
-      .eq('provider', 'razorpay')
-      .eq('provider_order_id', providerOrderId)
-      .maybeSingle();
-
-    throwIfQueryFailed(orderResult.error, 'Failed to load Razorpay order for webhook');
-
-    const billingOrder = (orderResult.data ?? null) as DbBillingOrder | null;
-    if (!billingOrder) {
-      return { status: 'ignored', relatedUserId: null, relatedSubscriptionId: null };
-    }
-
-    if (billingOrder.order_type === 'topup_checkout' && billingOrder.topup_pack_id) {
-      const paymentId =
-        payload.payload?.payment?.entity?.id ?? billingOrder.provider_payment_id ?? null;
-      const nextOrderStatus = getTopupOrderStatusFromWebhookEvent(payload.event, billingOrder.status);
-      const isSuccessfulTopupEvent = isSuccessfulTopupWebhookEvent(payload.event);
-      let grantedCoins = 0;
-
-      if (isSuccessfulTopupEvent) {
-        const topupPack = await loadTopupPack(supabase, billingOrder.topup_pack_id);
-        grantedCoins = await grantTopupIfMissing({
-          supabase,
-          billingOrder,
-          topupPack,
-          paymentId: paymentId ?? 'webhook',
-          rawPayload: payload as unknown as Record<string, unknown>,
-        });
-      }
-
-      const updateResult = await supabase
-        .from('billing_orders')
-        .update({
-          provider_payment_id: paymentId,
-          status: nextOrderStatus,
-          raw_provider_payload_json: {
-            ...(billingOrder.raw_provider_payload_json ?? {}),
-            webhookEvent: payload.event,
-          },
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', billingOrder.id);
-
-      throwIfQueryFailed(updateResult.error, 'Failed to update top-up order from webhook');
-    }
-
-    return {
-      status: 'processed',
-      relatedUserId: billingOrder.user_id,
-      relatedSubscriptionId: null,
-    };
-  }
-
-  return { status: 'ignored', relatedUserId: null, relatedSubscriptionId: null };
-}
-
-function isSuccessfulTopupWebhookEvent(event: string): boolean {
-  return event === 'payment.captured' || event === 'order.paid';
-}
-
-function getTopupOrderStatusFromWebhookEvent(event: string, currentStatus: string): string {
-  if (event === 'payment.failed') {
-    return currentStatus === 'paid' ? currentStatus : 'failed';
-  }
-
-  if (isSuccessfulTopupWebhookEvent(event)) {
-    return 'paid';
-  }
-
-  return currentStatus;
-}
-
-async function loadPlanVersion(
-  supabase: ReturnType<typeof createAdminClient>,
-  planVersionId: string
-): Promise<DbPricingPlanVersion> {
-  const result = await supabase
-    .from('pricing_plan_versions')
-    .select('*')
-    .eq('id', planVersionId)
-    .maybeSingle();
-
-  throwIfQueryFailed(result.error, 'Failed to load plan version for webhook');
-
-  const version = (result.data ?? null) as DbPricingPlanVersion | null;
-  if (!version) {
-    throw new Error('Plan version not found for webhook');
-  }
-
-  return version;
-}
-
-async function loadTopupPack(
-  supabase: ReturnType<typeof createAdminClient>,
-  topupPackId: string
-): Promise<DbPricingTopupPack> {
-  const result = await supabase
-    .from('pricing_topup_packs')
-    .select('*')
-    .eq('id', topupPackId)
-    .maybeSingle();
-
-  throwIfQueryFailed(result.error, 'Failed to load top-up pack for webhook');
-
-  const topup = (result.data ?? null) as DbPricingTopupPack | null;
-  if (!topup) {
-    throw new Error('Top-up pack not found for webhook');
-  }
-
-  return topup;
 }
 
 function throwIfQueryFailed(error: { message: string } | null, context: string): void {

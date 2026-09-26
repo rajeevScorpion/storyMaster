@@ -16,10 +16,12 @@ const nextConfig: NextConfig = {
   // Required for ffmpeg.wasm — enables SharedArrayBuffer via COOP/COEP headers.
   // Using 'credentialless' for COEP to avoid breaking external resources (fonts, images)
   // that lack Cross-Origin-Resource-Policy headers.
+  // The wallet is left out: COEP blocks Razorpay Checkout's cross-origin frame. Keep this
+  // pattern matching lib/navigation/cross-origin-isolation.shared.ts.
   async headers() {
     return [
       {
-        source: '/(.*)',
+        source: '/:path((?!wallet(?:/|$)).*)',
         headers: [
           { key: 'Cross-Origin-Embedder-Policy', value: 'credentialless' },
           { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
@@ -99,6 +101,9 @@ const nextConfig: NextConfig = {
   // bundle so /admin/help can fs.readFile it at runtime.
   outputFileTracingIncludes: {
     '/admin/help': ['./docs/admin-settings-manual.md'],
+    // Payments Phase 6 Unit B: render-pdf.ts fs.readFiles these TTFs at runtime, and Next's
+    // dependency trace can't see through that dynamic path.join() read to know they're needed.
+    '/api/billing/**': ['./lib/billing/documents/fonts/**'],
   },
   transpilePackages: ['motion'],
 };

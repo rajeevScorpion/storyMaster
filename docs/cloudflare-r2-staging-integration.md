@@ -11,11 +11,12 @@
 ## Kissago Environment Model
 
 - Local feature branches are tested locally first.
-- The `dev` branch is the staging release branch and is deployed as production on the staging Vercel project: `https://kissagostage.vercel.app`.
-- Staging uses a separate Supabase project from production.
-- Staging R2 activation relies on `R2_ENVIRONMENT=staging`; this permits R2 even though Vercel reports the staging project's promoted deployment as `production`.
-- The `main` branch is production and is deployed on the production Vercel project: `https://kissago.cc`.
-- Production uses a separate Supabase project from staging.
+- There is one Vercel project, `kissago`. (Until 2026-09 staging was a separate project at `kissagostage.vercel.app`; that project no longer exists.)
+- The `main` branch is production and deploys to that project's Production environment: `https://kissago.cc`.
+- Every other pushed branch gets a Preview deployment. The `dev` branch is the staging release branch; its preview is at `https://kissago-git-dev-rajeevscorpions-projects.vercel.app`.
+- Previews use Preview-scoped env vars, which point at the dev Supabase project. Staging R2 values belong in that same Preview scope.
+- Staging R2 is allowed on previews because Vercel reports them as `preview`, not `production`. `R2_ENVIRONMENT=staging` is still set as an explicit label.
+- Production uses a separate Supabase project and its own Production-scoped env values.
 - Migrations are applied to staging first, verified on web/mobile, then applied to production Supabase after rollout confidence.
 - R2 is enabled only for staging in this phase. Production R2 remains guarded by `R2_PRODUCTION_ENABLED=false` until a future explicit rollout.
 
@@ -29,7 +30,7 @@
 - Server load paths convert private R2 refs to short-lived signed GET URLs.
 - Save paths normalize any private R2 signed GET URL back to `r2://...` before writing Supabase.
 - Public published covers use stable `https://media-stage.kissago.cc/...` URLs.
-- Staging app origin is `https://kissagostage.vercel.app` and is explicitly allowed in R2 CORS.
+- Preview origins are allowed in R2 CORS through `https://*.vercel.app`.
 
 ## Existing Supabase Fallback Behavior
 
@@ -50,7 +51,7 @@
 
 ## Env Variables Added
 
-See `cloudflare/r2/README.md` for the full Vercel staging env list.
+See `cloudflare/r2/README.md` for the full Vercel Preview env list.
 
 ## Cloudflare Setup Steps
 

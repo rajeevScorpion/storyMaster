@@ -5,13 +5,20 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { shareTokensEqual } from '@/lib/story/visibility';
 import { signStoryMapAssetUrls, signStorylineBeatsUrls } from '@/lib/media/storage-url-signing';
-import type { StorySession, StoryMap, StoryBeat, StoryNode } from '@/lib/types/story';
+import type {
+  StorySession,
+  StoryMap,
+  StoryBeat,
+  StoryNode,
+  LoadStorylineWithBeatsResult,
+} from '@/lib/types/story';
 import type { DbBeat, DbStory } from '@/lib/types/database';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { normalizeBeatMediaFields } from '@/lib/types/beat-media';
 import { repairMissingReadyBeatImageUrls } from '@/app/actions/persistence';
 import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
 import { readerSafeImageError } from '@/lib/media/image-failure.shared';
+import { consumeWatchSlot } from '@/lib/pricing/watch-quota';
 
 /**
  * Convert a DbBeat row back into a StoryNode for the client StoryMap.
@@ -440,27 +447,23 @@ export async function listExploredStories(): Promise<Array<{
 export async function loadStorylineWithBeats(
   storylineId: string,
   options: { shareToken?: string | null } = {}
-): Promise<{
-  storyline: {
-    id: string;
-    story_id: string;
-    title: string;
-    beat_count: number;
-    cover_image_url: string | null;
-    is_vertical_story: boolean;
-    aspect_ratio: string;
-    author_name: string | null;
-    is_public: boolean;
-    created_at: string;
-    source_updated_at: string;
-    story_transition: ReturnType<typeof normalizeStoryConfig>['storyTransition'];
-  };
-  beats: StoryBeat[];
-  choices: { fromBeat: number; optionLabel: string }[];
-}> {
+): Promise<LoadStorylineWithBeatsResult> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
+
+  // Payments Phase 3, Unit B (docs/payments/phase-3-plan.md §5, B4): the Free daily watch quota's
+  // one enforcement point (docs/payments/phase-3-hardcoding-audit.md, watch-path appendix). After
+  // auth so a signed-out caller still gets "Not authenticated"; before the storyline fetch so a
+  // refusal costs one indexed query, not the whole payload.
+  const watchSlot = await consumeWatchSlot({ userId: user.id, storylineId });
+  if (!watchSlot.allowed) {
+    // Returned, not thrown: a production build replaces a thrown server action's message with a
+    // generic string, so any marker carried on the error reaches the browser only in local dev
+    // (GOTCHAS.md, "Browser callers get gateway failures as data"). See
+    // LoadStorylineWithBeatsResult in lib/types/story.ts.
+    return { status: 'watch_quota_exhausted' };
+  }
 
   const storylineSelect = 'id, story_id, title, beat_count, cover_image_url, is_vertical_story, aspect_ratio, author_name, is_public, created_at, node_path, beats, choices, publish_quality, stories(story_map, story_config, story_kind, is_vertical_story, aspect_ratio, updated_at)';
 
@@ -599,6 +602,7 @@ export async function loadStorylineWithBeats(
     const signedBeats = await signStorylineBeatsUrls(client, beats);
 
     return {
+      status: 'ok',
       storyline: {
         id: storyline.id,
         story_id: storyline.story_id,
@@ -636,6 +640,7 @@ export async function loadStorylineWithBeats(
   const signedLegacyBeats = await signStorylineBeatsUrls(client, legacyBeats);
 
   return {
+    status: 'ok',
     storyline: {
       id: storyline.id,
       story_id: storyline.story_id,

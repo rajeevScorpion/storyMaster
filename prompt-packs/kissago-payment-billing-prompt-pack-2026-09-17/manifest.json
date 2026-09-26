@@ -1,0 +1,40 @@
+{
+  "pack_name": "Kissago Payment, Billing, Invoicing & Consumption Monetisation AI Coder Prompt Pack",
+  "prepared": "2026-09-17",
+  "included_files": [
+    "00_MASTER_DIRECTIVE.md",
+    "01_OWNER_DECISIONS_AND_PRODUCT_MODEL.md",
+    "02_DISCOVERY_REVALIDATION_GATE.md",
+    "03_PHASE_1_MONEY_CORRECTNESS.md",
+    "04_PHASE_2_DURABLE_BILLING_LEDGER.md",
+    "05_PHASE_3_PLANS_ENTITLEMENTS_CONSUMPTION.md",
+    "06_PHASE_4_ADMIN_SUPPORT_OPERATIONS.md",
+    "07_PHASE_5_USER_BILLING_CHECKOUT_UX.md",
+    "08_PHASE_6_INVOICES_RECEIPTS_EMAILS.md",
+    "09_PHASE_7_COMPLIANCE_AND_GO_LIVE.md",
+    "10_PHASE_8_INTERNATIONAL_READINESS.md",
+    "11_QA_SECURITY_FAILURE_MATRIX.md",
+    "12_HANDOFF_COMMITS_ROLLBACK.md",
+    "13_ACCEPTANCE_CRITERIA.md",
+    "14_DECISION_GATE_TEMPLATE.md",
+    "15_PHASE_EXECUTION_PROMPT.md",
+    "KISSAGO_PAYMENT_BILLING_IMPLEMENTATION_MASTER.md",
+    "README.md",
+    "SOURCE_REFERENCES.md",
+    "STARTER_PROMPT.md"
+  ],
+  "excluded_existing_repo_sources": [
+    "docs/payments/audit-progress.md",
+    "docs/payments/billing-audit-2026-09-17.md",
+    "docs/payments/billing-plan-2026-09-17.md",
+    "docs/payments/research/01-checkout-and-payment-capture.md",
+    "docs/payments/research/02-entitlements-grants-and-coin-value.md",
+    "docs/payments/research/03-data-model-and-live-db-state.md",
+    "docs/payments/research/04-admin-tools-and-operations.md",
+    "docs/payments/research/05-docs-vs-code-and-compliance-surfaces.md",
+    "docs/payments/research/06-razorpay-capabilities.md",
+    "docs/payments/research/07-india-tax-and-consumer-compliance.md",
+    "docs/payments/research/08-billing-ux-benchmarks-and-stripe-readiness.md"
+  ],
+  "note": "Existing audit/research files are intentionally not bundled. The coder must read them from the repo paths above."
+}

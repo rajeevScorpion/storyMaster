@@ -62,3 +62,11 @@ export const ACCOUNT_HOLDER_MINIMUM_AGE = 18;
 
 export const PRIMARY_MARKET = 'India';
 export const INTERNATIONAL_EXPANSION_PLANNED = true;
+
+/**
+ * Payments Phase 8 (docs/payments/phase-8-plan.md §9, Unit D): the LUT's Application Reference
+ * Number, printed on an export invoice as "LUT ARN: <value>" once the owner files it. Empty until
+ * then -- issuing an export document never refuses over it (§9: "issuing never refuses"), it just
+ * prints the endorsement without an ARN line. Setting this is on the US switch-on checklist (§6).
+ */
+export const LEGAL_LUT_ARN = '';
