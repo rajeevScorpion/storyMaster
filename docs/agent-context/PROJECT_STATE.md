@@ -27,7 +27,7 @@ Keep this file current. When you finish a pack, move it out of "pending"; when y
 
 **Everything runs in Singapore since 2026-09-26:** both databases, and the Vercel functions (`sin1`). Dev and
 Preview take it from `vercel.json`; production takes it from the Vercel project setting (Settings → Functions),
-and from `vercel.json` too once `dev` is merged into `main`. The owner's direction is that servers and database
+and from `vercel.json` too since `dev` was merged into `main` (2026-09-26). The owner's direction is that servers and database
 sit together and near the customers: Singapore for India, a US region for the US
 (`docs/payments/go-live-runbook.md` §1.4). The prod move and its measurements are in the runbook's §1.4.
 
@@ -158,7 +158,7 @@ for what has actually run.
 |---|---|---|---|---|
 | 122 | `image_prompt_budget_target` | raises `capabilities.promptCompiler.promptBudgetChars` from 2,800 to 3,000 on every `image_model_registry` row still at the 081 default — 7 rows on dev (1 Gemini, 6 Runware, 3 of those reel rows) | **Applied** 2026-09-16 by the owner. **Frozen** — further budget changes ship as a new migration. The number is a *target*, not a ceiling: compiler-v2 may exceed it up to a hard 5,000 cap in code, and reference-image binding lines are already reserved from it, so never lower it to make room for them | **Applied 2026-09-16 09:34:00+00** |
 | 123 | `image_prompt_budget_3800` | raises the same target from 3,000 to 3,800 on rows still at 122's value | **Applied** 2026-09-16 08:50:33+00, verified against the ledger and the data: all 7 budgeted rows now read 3,800. **Frozen.** Pairs with the composer brevity rules in the same change: real beats compile to ~3,150–3,450 characters, so a 3,000 target made `over_target` fire on every beat | **Applied 2026-09-16 09:34:18+00.** All 7 budgeted rows read 3,800. ⚠ Has **no observable effect yet** — prod's compiler mode is `shadow`, so nothing reads the budget |
-| 124 | `billing_money_correctness` | Payments Phase 1: unique index `uq_beat_grants_purchase_source` (one grant per purchase); `provider_mode` on `billing_orders`/`billing_subscriptions` and `provider_price_ref_mode` on plan versions (existing rows backfilled `test`); `purchase_snapshot_json`; `first_charge_confirmed_at`; webhook `attempt_count`/`last_attempt_at`/`outcome`; RPC `billing_begin_subscription_checkout`; flag `billing_reconcile_enabled` (false). Code on `payments` requires it. Plan: `docs/payments/phase-1-plan.md` | **Applied** 2026-09-17 by the owner. Verified by query the same day: the grant index exists, the ledger row is present, and all 12 `billing_orders` rows are `test`. **Frozen** — further changes ship as a new migration | **Not applied.** Confirm no live Razorpay key was ever set before applying (backfill assumes `test`) |
+| 124 | `billing_money_correctness` | Payments Phase 1: unique index `uq_beat_grants_purchase_source` (one grant per purchase); `provider_mode` on `billing_orders`/`billing_subscriptions` and `provider_price_ref_mode` on plan versions (existing rows backfilled `test`); `purchase_snapshot_json`; `first_charge_confirmed_at`; webhook `attempt_count`/`last_attempt_at`/`outcome`; RPC `billing_begin_subscription_checkout`; flag `billing_reconcile_enabled` (false). Code on `payments` requires it. Plan: `docs/payments/phase-1-plan.md` | **Applied** 2026-09-17 by the owner. Verified by query the same day: the grant index exists, the ledger row is present, and all 12 `billing_orders` rows are `test`. **Frozen** — further changes ship as a new migration | **Applied 2026-09-26** with 125-138, verified against the ledger |
 
 #### Promoting the agentic system to production — checklist
 
@@ -247,6 +247,13 @@ dimension to `PlanKey` (not a repurposing of it) when that feature is actually s
 
 **Moved to Singapore on 2026-09-26** by a full copy (schema, data, users, files), verified table by table. The
 migration state moved with it unchanged: **102-114 and 116-123 applied, 115 and 124+ not**.
+
+**Promoted 2026-09-26, money off** (runbook §2-§3, push "(a)"). `main` is at `caf342d` (a `--no-ff` merge of
+229 dev commits: payments Phases 1-8, the wallet/billing UX, `sin1`). The Production deployment is Ready in
+`sin1`. The owner took a `supabase db dump` first, then applied **124-138**, and the prod ledger reads 138.
+Prod's billing and pricing columns and public functions hash identical to dev's. Every billing switch is off or
+absent, so all billing code is dormant. **115 is still the only gap.** Real money is runbook §4-§8, still
+gated on §1.
 
 **Promoted 2026-09-16.** `main` is at `084c2ed` (a `--no-ff` merge of 238 dev commits across 332 files),
 deployed and live on `kissago.cc`. Migrations **102-114 and 116-123 are applied**; **115 is not** and is the
@@ -765,7 +772,8 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
 **Billing and cost**
 - **Payments are not live for real money yet.** As of 2026-09-26, Phases 1-8 are built and walked in Razorpay
   test mode. **`payments` is merged into `dev`** (`--no-ff`) for tester smoke tests in test mode, and it stays
-  open for further work. **Not on `main`.** Migrations 124-138 are applied on dev. The go-live steps are
+  open for further work. **On `main` since 2026-09-26 (`caf342d`), dormant:** migrations 124-138 are applied on
+  dev and prod, and every prod billing switch is off. The go-live steps are
   `docs/payments/go-live-runbook.md`, and the living handoff is `docs/payments/audit-progress.md`.
   Older detail follows. As of 2026-09-23: Phases 1-4 are code-complete;
   **migrations 124-133 are applied on dev and none on prod**.

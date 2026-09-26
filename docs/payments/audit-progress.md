@@ -3,7 +3,26 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-26, evening — next: the dev → production push)
+## Next session starts here (updated 2026-09-26, night — code is on production with money off)
+
+**Done this session:** push (a), code with money off.
+- `dev` → `main` as `caf342d` (`--no-ff`). The Production deployment is Ready in `sin1`. Signed-out pages
+  answer 200, warm in about 0.3-0.4 s, with no runtime errors in Vercel.
+- The owner took the prod dump (roles, schema, data) before migrating.
+- The owner applied **124-138** on kissagoProduction. The prod ledger reads 138.
+- Prod's billing and pricing columns (281) and public functions (71) hash identical to dev's.
+- Every billing switch on prod is off:
+  - `pricing_checkout_enabled`, `billing_checkout_allowlist`, `billing_reconcile_enabled` and
+    `billing_emails_enabled` are off;
+  - `billing_admin_actions_enabled` and `billing_document_issuing_enabled` have no row, which reads as off.
+    They're admin toggles, not seeded by a migration.
+- **Not yet checked:** a signed-in look at `/wallet`, `/plans` and Billing on prod (the owner's account).
+- Rollback: `git revert -m 1 caf342d` for the code. The migrations are additive, so leave them.
+
+**Next:** the §1 gates, then runbook §4-§8 (push (b)). The watch-outs below still apply (§7.5 vs decision 13;
+the 2026-10-26 reminder). Policy pages (§1.3) can now be published, since the release is on Production.
+
+## Earlier: 2026-09-26, evening (before the dev → production push)
 
 **The owner's goal for the next session:** push `dev` to production (`main`). Read this section, then
 `go-live-runbook.md` §1-§8, before touching anything.
