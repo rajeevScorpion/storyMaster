@@ -37,6 +37,27 @@ export function formatBillingDayMonth(value: string | Date | null | undefined): 
   return `${ist.getUTCDate()} ${SHORT_MONTHS[ist.getUTCMonth()]}`;
 }
 
+/**
+ * The span a page of history covers, oldest first: "26 Sep 2026" for one day, "25 Sep – 26 Sep 2026"
+ * within a year, "30 Dec 2025 – 2 Jan 2026" across one. Takes the two ends in either order.
+ */
+export function formatBillingDateRange(
+  first: string | Date | null | undefined,
+  second: string | Date | null | undefined
+): string | null {
+  const a = first ? istFields(first) : null;
+  const b = second ? istFields(second) : null;
+  if (!a || !b) return formatBillingDateShort(first ?? second);
+  const [from, to] = a.getTime() <= b.getTime() ? [a, b] : [b, a];
+  const day = (d: Date) => `${d.getUTCDate()} ${SHORT_MONTHS[d.getUTCMonth()]}`;
+
+  if (from.getUTCFullYear() !== to.getUTCFullYear()) {
+    return `${day(from)} ${from.getUTCFullYear()} – ${day(to)} ${to.getUTCFullYear()}`;
+  }
+  if (day(from) === day(to)) return `${day(to)} ${to.getUTCFullYear()}`;
+  return `${day(from)} – ${day(to)} ${to.getUTCFullYear()}`;
+}
+
 /** "October 25, 2026" -- the account pages' style. */
 export function formatBillingDateLong(value: string | Date | null | undefined): string | null {
   if (!value) return null;

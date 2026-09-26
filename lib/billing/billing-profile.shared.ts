@@ -342,6 +342,18 @@ export function billingProfileAddressSummary(profile: BillingProfileDTO): string
   return `${stateLabel}${gstinSuffix}`;
 }
 
+/** The postal address, one line per row as it would sit on an envelope: street lines, city with
+ * postcode, state or region, country. Blank parts are dropped. */
+export function billingProfileAddressLines(profile: BillingProfileDTO): string[] {
+  const foreign = isForeignBillingCountry(profile.countryCode);
+  const state = foreign ? profile.region : indiaStateName(profile.stateCode) ?? profile.stateCode;
+  const country = billingCountryName(profile.countryCode) ?? profile.countryCode;
+  const cityLine = [profile.city, profile.postalCode].filter(Boolean).join(' ');
+  return [profile.addressLine1, profile.addressLine2, cityLine, state, country]
+    .map((line) => (line ?? '').trim())
+    .filter(Boolean);
+}
+
 /** The P7 gate: a saved profile is "complete" only once it satisfies validateBillingProfile for its
  * own type, not merely "has a state" (the old rule). Used by the wallet and by checkout to decide
  * whether the billing dialog must reopen before payment. */

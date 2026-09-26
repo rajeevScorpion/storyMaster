@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { CalendarClock, ChevronLeft, ChevronRight, Hourglass, Loader2, Plus, RotateCcw, Sparkles } from 'lucide-react';
+import { CalendarClock, Hourglass, Loader2, Plus, RotateCcw, Sparkles } from 'lucide-react';
+import HistoryPager from '@/components/ui/HistoryPager';
 import { getWalletActivityPage } from '@/app/actions/pricing-runtime';
-import { formatBillingDateShort } from '@/lib/billing/billing-dates.shared';
+import { formatBillingDateRange, formatBillingDateShort } from '@/lib/billing/billing-dates.shared';
 import type { PricingWalletActivityItem, WalletActivityCursor } from '@/lib/types/pricing';
 
 const KIND_ICONS: Record<PricingWalletActivityItem['kind'], typeof Plus> = {
@@ -155,31 +156,15 @@ export default function WalletActivityList({ initialItems, initialCursor, loadin
         })}
       </ul>
 
-      {(pageIndex > 0 || hasOlder) && (
-        <nav aria-label="Activity pages" className="mt-4 flex items-center justify-between gap-3">
-          <p className="text-xs text-neutral-500">Page {pageIndex + 1}</p>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setPageIndex(pageIndex - 1)}
-              disabled={pageIndex === 0 || pageLoading}
-              className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <ChevronLeft className="h-3.5 w-3.5" />
-              Newer
-            </button>
-            <button
-              type="button"
-              onClick={() => void showOlder()}
-              disabled={!hasOlder || pageLoading}
-              className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Older
-              {pageLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronRight className="h-3.5 w-3.5" />}
-            </button>
-          </div>
-        </nav>
-      )}
+      <HistoryPager
+        label="Activity pages"
+        range={items.length > 0 ? formatBillingDateRange(items[items.length - 1].occurredAt, items[0].occurredAt) : null}
+        canNewer={pageIndex > 0}
+        canOlder={hasOlder}
+        loading={pageLoading}
+        onNewer={() => setPageIndex(pageIndex - 1)}
+        onOlder={() => void showOlder()}
+      />
       {pageError && <p className="mt-2 text-right text-xs text-rose-300">{pageError}</p>}
     </div>
   );
