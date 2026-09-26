@@ -90,9 +90,21 @@ changed (dev database in Singapore):
 | Wallet, activity shown | 6.8 s | 3.4 s | 1.3 s |
 | Billing, history shown | 13.5 s | 7.0 s | 1.8 s |
 
-**Where things are today:**
-- Dev database: Singapore. Dev and Preview functions: `sin1`, set in `vercel.json` since 2026-09-26.
-- Prod database: **Tokyo**. Prod functions: Washington until this release.
+**Where things are (done 2026-09-26):**
+- Dev database: Singapore. Dev and Preview functions: `sin1`, from `vercel.json`.
+- **Prod database: Singapore** (`wsahcyzgyfnpdmscnvxj`, kissagoProduction), copied from Tokyo and verified table
+  by table. **Prod functions: `sin1`**, set in Vercel → Settings → Functions.
+  - Production's signed-out gallery took 1.23 s to its first byte in Washington, 0.41 s in Tokyo, and
+    **0.30 s** with both in Singapore.
+- The old Tokyo project (`pddjsopcemsfiwyvhlkr`) is paused as the fallback, restorable for 90 days (to about
+  2026-12-25). Rollback: resume it, restore its three keys in Vercel's Production settings, set the region to
+  `hnd1`, and redeploy.
+- Once that window has passed, remove Tokyo's callback from the Google OAuth client's redirect URIs.
+- How it was done, for the next move: `supabase db dump` (roles, schema, data) run by the owner, then `psql`
+  into the new project. After that, `post-restore.sql` recreated what the dump leaves out: the 10 storage
+  policies, realtime on `beats`, the two `pg_cron` jobs, and the ~70 saved links naming the old project.
+  Then the storage files were copied, and the sign-in settings and Google callback were re-entered by hand.
+  The kit is in `.agent/prod-move/` (gitignored).
 
 **Owner's direction:**
 - Put the servers and the database together, and near the customers:
@@ -100,14 +112,7 @@ changed (dev database in Singapore):
   - customers in the US → **Washington** (`iad1`, Supabase us-east-1) or another suitable US region.
 - This applies to dev and prod alike.
 
-**Decide before the production push:**
-1. **Move prod's database to Singapore, or keep it in Tokyo for now?**
-   - Supabase can't move an existing project. Moving means a new project in Singapore, applying every
-     migration, copying the data and auth users, and switching the prod keys.
-   - This is cheapest before go-live, while prod has little data and no paying customers.
-2. **Set prod's function region to match the prod database in the §2 merge.** Singapore database → `sin1`,
-   which is already in `vercel.json`. Tokyo database → `hnd1`.
-3. **Before the US opens (§12, GTM):** one database can't be close to both India and the US. Decide
+**Still to decide, before the US opens (§12, GTM):** one database can't be close to both India and the US. Decide
    between accepting the slower market, a separate US deployment and database, or read replicas. Plan it
    before US marketing starts.
 
@@ -118,23 +123,24 @@ changed (dev database in Singapore):
 Following WORKING_AGREEMENTS:
 - merge `payments` → `dev` with `--no-ff`;
 - let the dev Preview build;
-- then merge `dev` → `main` with `--no-ff --no-commit`. Before committing, set `"regions"` in `vercel.json`
-  to the region next to **prod's** database (§1.4): `hnd1` while it's in Tokyo, and `sin1` if it moved to
-  Singapore. The `sin1` that `dev` carries would otherwise reach prod with no conflict to stop it.
+- then merge `dev` → `main` with `--no-ff`. `dev`'s `vercel.json` carries `"regions": ["sin1"]`. That is right
+  for prod now that its database is in Singapore (§1.4). If the two databases ever sit in different regions
+  again, set prod's region by hand in this merge.
 
 Write the merge commit hash into the report (§11). `git revert -m 1 <that hash>` is the code rollback.
 
 **Check:** the Production deployment is Ready in Vercel, and `/wallet` loads signed in. In Vercel, open the
-deployment. Its region must be the one chosen in §1.4, not `iad1` and not `dev`'s `sin1` by accident.
+deployment. Its region must be `sin1`, next to prod's database (§1.4).
 
 ---
 
 ## 3. The production database
 
-Prod is at **124**. Apply **125 through 138, one at a time, in numeric order**, from the Supabase
-dashboard (prod project) → SQL editor → paste the whole file → Run.
+Prod is at **123**: the ledger's newest row is 123, and 124's index, column and flag are absent (checked
+2026-09-26). Apply **124 through 138, one at a time, in numeric order**, from the Supabase dashboard (the prod
+project, kissagoProduction) → SQL editor → paste the whole file → Run.
 
-`125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138`
+`124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138`
 
 After **each** one:
 ```sql

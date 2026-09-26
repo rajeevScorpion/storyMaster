@@ -3,7 +3,87 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-26, end of session — owner on a break)
+## Next session starts here (updated 2026-09-26, evening — next: the dev → production push)
+
+**The owner's goal for the next session:** push `dev` to production (`main`). Read this section, then
+`go-live-runbook.md` §1-§8, before touching anything.
+
+**State in one breath:**
+- `dev` has payments Phases 1-8 plus the 2026-09-26 UX work:
+  - wallet activity with paging;
+  - the regrouped account menu with plan badges;
+  - date-range paging on billing, and the full billing details;
+  - the sign-in pricing refresh fix;
+  - `sin1` in `vercel.json`.
+  All of it was walked in Razorpay test mode as `testuser`.
+- `payments` and `dev` are level. Everything, including this handoff, was merged into `dev` at the end of the
+  session.
+- `main` is **226 commits behind `dev`**. The last prod merge is `897a205`.
+- **Production moved to Singapore on 2026-09-26** (runbook §1.4):
+  - Supabase: `wsahcyzgyfnpdmscnvxj` (**kissagoProduction**, ap-southeast-1);
+  - Vercel functions: `sin1`, from the project's Functions setting;
+  - copied from Tokyo and verified table by table. Email and Google sign-in, stories and voice samples were
+    checked by the owner.
+  - The old Tokyo project `pddjsopcemsfiwyvhlkr` is **paused** as the fallback, restorable to about
+    2026-12-25.
+- **Prod's migration ledger is at 123.** 115 was never applied; 124-138 are needed (runbook §3).
+- Dev is restored after the move (ledger 138).
+- Testing is **`testuser` only** for now (owner). Dev's allowlist holding just `testuser` is intended.
+- Last gates, on `ad359a2`: tsc and lint clean, **2,651 tests / 200 files**; the Preview build was green.
+
+**First thing next session:**
+1. `git status`, and `git log --oneline -3` on `payments`, `dev` and `main`.
+2. **Check that the `supabase-prod` MCP reads the new project:** `get_project_url` must be
+   `https://wsahcyzgyfnpdmscnvxj.supabase.co`. It was repointed in `~/.claude.json` at the end of this session.
+   If it still says `pddjsopcemsfiwyvhlkr`, stop. That project is paused; tell the owner.
+3. **Read prod's switches before anything else:**
+   ```sql
+   select max(migration_number) from public.schema_migration_ledger;  -- expect 123
+   select flag_key, enabled, left(coalesce(value,''),60) value from public.feature_flags
+   where flag_key like 'pricing_%' or flag_key like 'billing_%' order by 1;
+   ```
+   These couldn't be read at the end of this session, because the MCP still pointed at the paused Tokyo
+   project. Pay special attention to `pricing_checkout_enabled`.
+4. **Ask the owner which push this is.** Recommend **(a)** while any §1 gate is open.
+   - **(a) Code push, money off:**
+     - runbook §2 (merge) and §3 (migrations 124-138);
+     - §3's check that every billing switch is off;
+     - a redeploy;
+     - leave §4-§8 for later.
+     This ships the new UI and speed-ups, and all billing code dormant: it fails closed while its
+     switches are off.
+   - **(b) Full go-live:** everything in (a), plus:
+     - §4 live keys and env vars, and §5 Razorpay live mode with the live webhook;
+     - §6 switches on, in order, and §7 the real-money smoke ladder on the owner's account;
+     - §8 opening up.
+     Every §1 gate must be closed first.
+5. **Before §3's migrations, back up prod.** The free plan has no backups. Use the same export as the move:
+   `supabase db dump` for roles, schema and data. **The owner runs it**, never the agent. Store it off the
+   machine, then delete the local copy, because it holds password hashes.
+
+**§1 gates still open (as of 2026-09-26):**
+- **The CA's answers 1, 3, 4, 5 and 6** (§1.2). Until they're in, `billing_document_issuing_enabled` stays off
+  on prod.
+- **Publishing the policy pages** (§1.3). This happens after the release reaches Production; Terms on dev is
+  still 1.0.0.
+- **The Phase 7 allowlist re-run.** This is moot while testing is `testuser` only.
+- **The checkout sheet, seen on a phone.**
+- **Tester feedback.** Only the owner has tested so far.
+- Server location (§1.4) is **done**.
+
+**Watch-outs for the push:**
+- **Region:** `dev`'s `vercel.json` carries `"regions": ["sin1"]`, which is correct for prod now. After the
+  merge, check that the Production deployment's region is `sin1`.
+- **Env vars:** production's Supabase values are now kissagoProduction's. Preview's are still dev's. Never
+  edit an entry scoped to both environments.
+- **The runbook's §7.5 (Audience annual) predates decision 13,** which deferred Audience annual. Reconcile it
+  with the owner before the ladder.
+- **REMINDER 2026-10-26 (IST):** check the lapsed subscription `sub_TgNsjQ1NgKLjNy` on dev (details below).
+
+**The move kit:** `.agent/prod-move/`, gitignored. It holds `post-restore.sql`, `copy-storage.mjs` and
+`verify.sql`. The dump files were deleted after the move.
+
+## Earlier: 2026-09-26, end of session (owner on a break)
 
 **State in one breath:**
 - Phases 1-8 are built, walked in Razorpay test mode, and merged into `dev` for tester smoke tests.
@@ -72,15 +152,15 @@ where flag_key in ('billing_document_issuing_enabled','billing_emails_enabled','
 
 **Open, in order:**
 1. **The India go-live gate:**
-   - **server location (runbook §1.4; owner: "very important").** Move prod's database to Singapore, or keep
-     Tokyo? Then set prod's function region in the dev → main merge (§2). Raise it again at GTM for the US;
+   - ~~server location~~ **done 2026-09-26:** prod's database and functions moved to Singapore (runbook §1.4).
+     The US location still needs deciding at GTM (§12);
    - the CA's India answers (runbook §1.2: numbering, Rule 48, credit-note timing, turnover/SAC, series start);
    - publish Terms (dev is still on 1.0.0);
    - the Phase 7 allowlist re-run;
    - a look at the checkout sheet on a phone;
    - tester feedback.
-2. **The release:** runbook §2-§8. Check prod's ledger first; the runbook says prod is at 124. Then:
-   - apply 125-138 one at a time;
+2. **The release:** runbook §2-§8. Prod's ledger is at **123** (124 is not applied; checked 2026-09-26), so apply 124-138. Then:
+   - apply 124-138 one at a time;
    - live keys (Production scope only), and the live webhook → `kissago.cc`;
    - switches off, the owner's real-money smoke test, then open.
 3. **2026-10-26 (IST): check the lapsed subscription** `sub_TgNsjQ1NgKLjNy` (details below).
