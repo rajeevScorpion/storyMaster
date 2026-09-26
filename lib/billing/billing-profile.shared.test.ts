@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import {
+  billingProfileAddressLines,
   billingProfileAddressSummary,
   gstinCheckDigit,
   isBillingProfileComplete,
@@ -578,5 +579,22 @@ describe('billingProfileAddressSummary', () => {
       dto({ countryCode: 'US', region: 'CA', city: 'San Francisco', postalCode: '94103' })
     );
     expect(summary).toBe('San Francisco, CA 94103, United States');
+  });
+});
+
+describe('billingProfileAddressLines', () => {
+  it('lays out an Indian address with the state name and country', () => {
+    expect(billingProfileAddressLines(dto({ addressLine1: '12 Sector 5', addressLine2: '  ' }))).toEqual([
+      '12 Sector 5',
+      'Gandhinagar 382016',
+      'Gujarat',
+      'India',
+    ]);
+  });
+
+  it('uses the region, not the Indian state code, abroad', () => {
+    expect(billingProfileAddressLines(dto({
+      countryCode: 'US', stateCode: '96', region: 'TX', city: 'Austin', postalCode: '78701', addressLine1: '1 Main St',
+    }))).toEqual(['1 Main St', 'Austin 78701', 'TX', 'United States']);
   });
 });

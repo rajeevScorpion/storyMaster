@@ -21,14 +21,22 @@
     Reviewer/Editor badge. The page title is now "Wallet". Owner kept Plans on both `/wallet` and `/plans`.
   - Fixed on the way: after a dialog sign-in, the pricing provider stuck on the signed-out payload (Free, 0 coins)
     until a reload.
+  - Round 2:
+    - Activity, payment history (server-paged) and invoices (browser-paged) all use `components/ui/HistoryPager`:
+      Newer/Older plus the visible page's IST date range, 5 a page.
+    - Billing details lists the name, type, company and GSTIN, email, phone and the full address.
   - Walk tooling: `.agent/sheet-walk/ux.pw.ts` + `ux.config.ts` (read-only; `testuser` is the `E2E_REVIEWER_*`
-    account in `.env.local`).
+    account in `.env.local`). `uxdebug.pw.ts` times the Older clicks.
+  - **Open, owner's call:** Vercel functions run in `iad1` (no region is set), and Supabase is in Singapore. So
+    every query crosses the world: an Older click takes about 2.5 s, and the wallet's first load about 4 s.
+    Pinning functions to `sin1` (`"regions": ["sin1"]` in `vercel.json`, or the project's Functions setting)
+    would likely cut most of it. It affects the whole app and prod, so it's not done.
 
 **First thing next session:**
 1. `git log --oneline -5` on `payments` and `dev`, and `git status`. Expect a clean tree, with `payments` at or
    after the "handoff for a break" commit.
-2. Check the tester setup on dev (query below). If the allowlist still holds only `testuser`, remind the owner
-   to re-run `tester-setup.sql` with real emails. The SQL is below; the scratchpad copy won't survive.
+2. Check the tester setup on dev (query below). **Owner, 2026-09-26: testing is `testuser` only for now**, so an
+   allowlist holding only `testuser` is expected. Don't remind about it. The SQL below is for when others join.
 3. Look for tester reports. Check `billing_webhook_events` and `billing_notification_jobs` for failures since
    2026-09-26.
 

@@ -268,7 +268,7 @@ function beatsToCoins(value: number): number {
 // payment ids) and to the live Razorpay mode -- never to an id the client supplies.
 // ---------------------------------------------------------------------------------------------
 
-const PAYMENT_HISTORY_PAGE_SIZE = 20;
+const PAYMENT_HISTORY_PAGE_SIZE = 5;
 
 async function resolvePlanIdentity(
   supabase: AdminClient,
@@ -542,7 +542,7 @@ export type GetMyPaymentHistoryResult =
   | { ok: true; items: BillingPaymentOverview[]; hasMore: boolean }
   | { ok: false; error: string };
 
-/** The "Show more" pager behind the payment history card -- same query and DTO as the overview's
+/** The Newer/Older pager behind the payment history card -- same query and DTO as the overview's
  * first page. */
 export async function getMyPaymentHistory(input: { page: number }): Promise<GetMyPaymentHistoryResult> {
   try {

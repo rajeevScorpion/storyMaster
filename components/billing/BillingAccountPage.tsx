@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   Coins,
   CreditCard,
-  Download,
   Loader2,
   Receipt,
   RefreshCw,
@@ -20,20 +19,21 @@ import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import Modal from '@/components/ui/Modal';
 import BillingDetailsDialog from '@/components/pricing/BillingDetailsDialog';
+import PaymentHistoryList from '@/components/billing/PaymentHistoryList';
+import BillingDocumentsList from '@/components/billing/BillingDocumentsList';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { getPricingWalletPageData } from '@/app/actions/pricing-runtime';
 import {
   cancelMySubscription,
   getMyBillingOverview,
-  getMyPaymentHistory,
   restartMyHaltedSubscription,
 } from '@/app/actions/billing-account';
-import { documentTypeLabel, subscriptionBanner } from '@/lib/billing/billing-account.shared';
-import type { BillingPaymentOverview, GetMyBillingOverviewResult } from '@/lib/billing/billing-account.shared';
+import { subscriptionBanner } from '@/lib/billing/billing-account.shared';
+import type { GetMyBillingOverviewResult } from '@/lib/billing/billing-account.shared';
 import { buildPlanFeatures } from '@/lib/pricing/plan-copy.shared';
 import { formatCurrencyMinor } from '@/lib/billing/wallet-tax.shared';
-import { billingProfileAddressSummary } from '@/lib/billing/billing-profile.shared';
+import { billingProfileAddressLines } from '@/lib/billing/billing-profile.shared';
 import { formatBillingDateLong } from '@/lib/billing/billing-dates.shared';
 import { COINS_PER_BEAT } from '@/lib/types/pricing';
 import type { BillingProfileDTO, PricingWalletPageData } from '@/lib/types/pricing';
@@ -68,10 +68,6 @@ export default function BillingAccountPage() {
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [overviewLoading, setOverviewLoading] = useState(true);
 
-  const [morePayments, setMorePayments] = useState<BillingPaymentOverview[]>([]);
-  const [paymentsHasMore, setPaymentsHasMore] = useState(false);
-  const [loadingMorePayments, setLoadingMorePayments] = useState(false);
-  const [paymentsPageError, setPaymentsPageError] = useState<string | null>(null);
 
   const [billingDialogOpen, setBillingDialogOpen] = useState(false);
 
@@ -105,8 +101,6 @@ export default function BillingAccountPage() {
     try {
       const next = await getMyBillingOverview();
       setOverview(next);
-      setMorePayments([]);
-      setPaymentsHasMore(next.payments.hasMore);
     } catch (err: any) {
       setOverviewError(err?.message || "We couldn't load your billing right now.");
     } finally {
@@ -119,20 +113,6 @@ export default function BillingAccountPage() {
     void loadWalletData();
     void loadOverview();
   }, [pricingLoading, userId, loadWalletData, loadOverview]);
-
-  const handleShowMorePayments = useCallback(async () => {
-    setLoadingMorePayments(true);
-    setPaymentsPageError(null);
-    const page = Math.floor((overview?.payments.items.length ?? 0) + morePayments.length) / 20;
-    const result = await getMyPaymentHistory({ page: Math.floor(page) });
-    setLoadingMorePayments(false);
-    if (!result.ok) {
-      setPaymentsPageError(result.error);
-      return;
-    }
-    setMorePayments((current) => [...current, ...result.items]);
-    setPaymentsHasMore(result.hasMore);
-  }, [overview, morePayments]);
 
   const handleBillingDetailsSaved = useCallback((profile: BillingProfileDTO) => {
     setWalletData((current) => (current ? { ...current, billingProfile: profile } : current));
@@ -208,8 +188,6 @@ export default function BillingAccountPage() {
   const displaySubscriptionCoins = beatsToCoins(pricingData.snapshot.availableSubscriptionBeats);
   const topupCoins = beatsToCoins(pricingData.snapshot.availableTopupBeats);
   const bonusCoins = beatsToCoins(pricingData.snapshot.availablePromoBeats);
-
-  const allPayments = [...(overview?.payments.items ?? []), ...morePayments];
 
   return (
     <main className="relative min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
@@ -402,50 +380,8 @@ export default function BillingAccountPage() {
               <p className="text-xs uppercase tracking-[0.18em] text-emerald-300/80">Payment history</p>
               {overview!.sections.payments === 'unavailable' ? (
                 <p className="mt-3 text-sm text-neutral-400">{UNAVAILABLE_TEXT}</p>
-              ) : allPayments.length === 0 ? (
-                <p className="mt-3 text-sm text-neutral-400">No payments yet.</p>
               ) : (
-                <div className="mt-4 divide-y divide-white/5">
-                  {allPayments.map((payment) => (
-                    <div key={payment.id} className="py-3">
-                      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm text-neutral-200">{payment.description}</p>
-                          <p className="text-xs text-neutral-500">
-                            {formatLongDate(payment.date)} · {payment.methodLabel}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm text-neutral-200">{formatCurrencyMinor(payment.currencyCode, payment.grossMinor)}</p>
-                          {payment.taxLines.length > 0 && (
-                            <p className="text-[11px] text-neutral-500">
-                              {payment.taxLines.map((line) => `${line.label} ${formatCurrencyMinor(payment.currencyCode, line.amountMinor)}`).join(' + ')}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      {payment.refund && (
-                        <p className="mt-1 pl-3 text-xs text-neutral-500">
-                          {payment.refund.processed
-                            ? `Refunded ${formatCurrencyMinor(payment.currencyCode, payment.refund.amountMinor)} on ${formatLongDate(payment.refund.date)}`
-                            : 'Refund processing'}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {paymentsPageError && <p className="mt-3 text-sm text-rose-300">{paymentsPageError}</p>}
-              {overview!.sections.payments === 'ok' && paymentsHasMore && (
-                <button
-                  type="button"
-                  disabled={loadingMorePayments}
-                  onClick={() => void handleShowMorePayments()}
-                  className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-xs text-neutral-300 transition-colors hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {loadingMorePayments && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  Show more
-                </button>
+                <PaymentHistoryList initialItems={overview!.payments.items} initialHasMore={overview!.payments.hasMore} />
               )}
             </section>
 
@@ -457,31 +393,8 @@ export default function BillingAccountPage() {
               </div>
               {overview!.sections.documents === 'unavailable' ? (
                 <p className="mt-3 text-sm text-neutral-400">{UNAVAILABLE_TEXT}</p>
-              ) : overview!.documents.length === 0 ? (
-                <p className="mt-3 text-sm text-neutral-400">Tax invoices will appear here.</p>
               ) : (
-                <div className="mt-4 space-y-2">
-                  {overview!.documents.map((doc) => (
-                    <div key={doc.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm">
-                      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                        <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] uppercase tracking-wide text-neutral-400">
-                          {documentTypeLabel(doc.documentType)}
-                        </span>
-                        <span className="text-neutral-200">{doc.documentNumber}</span>
-                        <span className="text-neutral-500">{formatLongDate(doc.issuedAt)}</span>
-                        <span className="text-neutral-200">{formatCurrencyMinor(doc.currencyCode, doc.totalMinor)}</span>
-                      </div>
-                      <a
-                        href={`/api/billing/documents/${doc.id}/pdf`}
-                        download
-                        className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-neutral-300 transition-colors hover:border-white/20 hover:bg-white/10 hover:text-neutral-100"
-                      >
-                        <Download className="h-3.5 w-3.5" />
-                        Download
-                      </a>
-                    </div>
-                  ))}
-                </div>
+                <BillingDocumentsList documents={overview!.documents} />
               )}
             </section>
 
@@ -500,13 +413,7 @@ export default function BillingAccountPage() {
               {walletError ? (
                 <p className="mt-3 text-sm text-neutral-400">{UNAVAILABLE_TEXT}</p>
               ) : walletData?.billingProfile ? (
-                <div className="mt-3 text-sm text-neutral-300">
-                  <p>
-                    {walletData.billingProfile.profileType === 'business' ? 'Business' : 'Personal'} ·{' '}
-                    {walletData.billingProfile.legalName}
-                  </p>
-                  <p className="mt-1 text-neutral-500">{billingProfileAddressSummary(walletData.billingProfile)}</p>
-                </div>
+                <BillingDetailsSummary profile={walletData.billingProfile} accountEmail={user?.email ?? null} />
               ) : (
                 <p className="mt-3 text-sm text-neutral-400">You haven&apos;t added billing details yet.</p>
               )}
@@ -537,5 +444,34 @@ function CoinStat({
       </div>
       <p className="mt-2 text-2xl font-serif text-neutral-100">{loading ? '…' : value.toLocaleString()}</p>
     </div>
+  );
+}
+
+function BillingDetailsSummary({ profile, accountEmail }: { profile: BillingProfileDTO; accountEmail: string | null }) {
+  const isBusiness = profile.profileType === 'business';
+  const email = profile.billingEmail || accountEmail;
+  const rows: { label: string; value: string | string[] }[] = [
+    { label: 'Name', value: profile.legalName },
+    { label: 'Type', value: isBusiness ? 'Business' : 'Personal' },
+    ...(isBusiness && profile.companyName ? [{ label: 'Company', value: profile.companyName }] : []),
+    ...(isBusiness && profile.gstin ? [{ label: 'GSTIN', value: profile.gstin }] : []),
+    ...(email ? [{ label: 'Email', value: email }] : []),
+    ...(profile.phone ? [{ label: 'Phone', value: profile.phone }] : []),
+    { label: 'Address', value: billingProfileAddressLines(profile) },
+  ];
+
+  return (
+    <dl className="mt-4 grid grid-cols-[6rem_1fr] gap-x-4 gap-y-2.5 text-sm sm:grid-cols-[8rem_1fr]">
+      {rows.map((row) => (
+        <div key={row.label} className="contents">
+          <dt className="text-neutral-500">{row.label}</dt>
+          <dd className="min-w-0 break-words text-neutral-200">
+            {Array.isArray(row.value)
+              ? row.value.map((line) => <span key={line} className="block">{line}</span>)
+              : row.value}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }
