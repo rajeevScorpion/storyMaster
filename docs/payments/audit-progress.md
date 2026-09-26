@@ -10,8 +10,19 @@
   The merges are `9c23ef6`, then `1a9c1ff`, which carries the "plan ended" fix.
 - `payments` stays open for more work. Keep merging it into `dev` with `--no-ff`.
 - **Nothing is on `main`/prod.** Migrations 124-138 are on dev only. The release is runbook §2-§8.
-- Last gates, on `2a28d2f`: tsc and lint clean, **2,634 tests / 199 files**, `build:verify` compiled (on
-  `adc22df`; nothing since touches the build).
+- Last gates, on `1e226da`: tsc and lint clean, **2,646 tests / 200 files**; the Vercel Preview build
+  passed on the same commit.
+- **Owner UX asks, 2026-09-26 (built, walked on the Preview, merged to `dev`):**
+  - Wallet "Recent activity" shows every coin in and out: refunds that took coins back, and coins that expired
+    unused. It also shows plan events (started, renewed, cancellation scheduled, ended, renewal failed). Five a
+    page, with Newer/Older. The logic is in `lib/pricing/wallet-activity*.ts`.
+  - Account menu is regrouped with dividers: My Stories first (on every page), then Wallet / Plans / Billing, then
+    Help, then Sign out. It has a plan badge (Free grey, Audience green, Plus purple, Studio amber) beside the
+    Reviewer/Editor badge. The page title is now "Wallet". Owner kept Plans on both `/wallet` and `/plans`.
+  - Fixed on the way: after a dialog sign-in, the pricing provider stuck on the signed-out payload (Free, 0 coins)
+    until a reload.
+  - Walk tooling: `.agent/sheet-walk/ux.pw.ts` + `ux.config.ts` (read-only; `testuser` is the `E2E_REVIEWER_*`
+    account in `.env.local`).
 
 **First thing next session:**
 1. `git log --oneline -5` on `payments` and `dev`, and `git status`. Expect a clean tree, with `payments` at or
