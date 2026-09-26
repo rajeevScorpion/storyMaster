@@ -166,7 +166,29 @@ export function getSpendTitle(actionKey: string): string {
     case 'generate_reel_thumbnail':
       return 'Generated a reel thumbnail';
     case 'export_video_future':
+    case 'export_video_sd':
+    case 'export_video_hd':
       return 'Exported a video';
+    case 'batch_image_generation':
+    case 'image_generation':
+      return 'Generated images';
+    case 'adopt_character_reference':
+      return 'Added a character reference';
+    case 'adopt_world_reference':
+    case 'visualize_world_reference':
+      return 'Added a world reference';
+    case 'analyze_direct_reference':
+      return 'Analyzed a reference image';
+    case 'generate_story_narration':
+      return 'Narrated a story';
+    case 'generate_reel_narration':
+      return 'Narrated a reel';
+    case 'generate_narration_preview':
+      return 'Previewed a narration voice';
+    case 'align_story_text_overlay':
+      return 'Timed story captions';
+    case 'transcribe_audio_stt':
+      return 'Transcribed audio';
     default:
       return 'Used coins in Kissago';
   }

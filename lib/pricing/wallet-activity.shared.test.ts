@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   buildWalletActivityItems,
   cursorUpperBoundIso,
+  getSpendTitle,
   isWalletActivityCursor,
   pageWalletActivity,
   sourceFetchLimit,
   type ActivitySources,
 } from './wallet-activity.shared';
-import type { PricingWalletActivityItem } from '@/lib/types/pricing';
+import { PRICING_ACTION_KEYS, type PricingWalletActivityItem } from '@/lib/types/pricing';
 
 function sources(overrides: Partial<ActivitySources>): ActivitySources {
   return {
@@ -140,6 +141,14 @@ describe('buildWalletActivityItems', () => {
 function item(id: string, occurredAt: string): PricingWalletActivityItem {
   return { id, kind: 'spend', title: id, subtitle: '', coinsDelta: -10, occurredAt };
 }
+
+describe('getSpendTitle', () => {
+  it('names every billable action rather than falling back to the generic line', () => {
+    for (const key of PRICING_ACTION_KEYS) {
+      expect(getSpendTitle(key), key).not.toBe('Used coins in Kissago');
+    }
+  });
+});
 
 describe('pageWalletActivity', () => {
   const at = (minute: number) => `2026-09-26T10:${String(minute).padStart(2, '0')}:00.000Z`;
