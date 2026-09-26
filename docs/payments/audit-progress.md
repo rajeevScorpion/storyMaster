@@ -72,6 +72,8 @@ where flag_key in ('billing_document_issuing_enabled','billing_emails_enabled','
 
 **Open, in order:**
 1. **The India go-live gate:**
+   - **server location (runbook §1.4; owner: "very important").** Move prod's database to Singapore, or keep
+     Tokyo? Then set prod's function region in the dev → main merge (§2). Raise it again at GTM for the US;
    - the CA's India answers (runbook §1.2: numbering, Rule 48, credit-note timing, turnover/SAC, series start);
    - publish Terms (dev is still on 1.0.0);
    - the Phase 7 allowlist re-run;
