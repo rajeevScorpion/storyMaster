@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CalendarClock, ChevronLeft, ChevronRight, Hourglass, Loader2, Plus, RotateCcw, Sparkles } from 'lucide-react';
 import { getWalletActivityPage } from '@/app/actions/pricing-runtime';
 import { formatBillingDateShort } from '@/lib/billing/billing-dates.shared';
@@ -31,25 +31,37 @@ interface WalletActivityListProps {
   loading: boolean;
 }
 
+/** Identifies the first page, so a wallet reload that changes nothing keeps the reader's place. */
+function pageKey(items: PricingWalletActivityItem[], cursor: WalletActivityCursor | null): string {
+  return `${items.map((item) => item.id).join(',')}|${cursor ? `${cursor.beforeMs}:${cursor.seenIds.join(',')}` : ''}`;
+}
+
 /**
- * Five rows a page. Pages already seen are kept, so "Newer" never refetches; a fresh wallet load
- * (a purchase, a refresh) starts again from page one.
+ * Five rows a page. Pages already seen are kept, so "Newer" never refetches. A wallet reload whose
+ * first page differs (a purchase, a refund) starts again from page one.
  */
 export default function WalletActivityList({ initialItems, initialCursor, loading }: WalletActivityListProps) {
-  const [source, setSource] = useState(initialItems);
+  const initialKey = pageKey(initialItems, initialCursor);
+  const [sourceKey, setSourceKey] = useState(initialKey);
+  // The key the latest committed render holds; an "Older" response for an earlier key is dropped.
+  const committedKeyRef = useRef(initialKey);
   const [pages, setPages] = useState<PricingWalletActivityItem[][]>([initialItems]);
   const [cursors, setCursors] = useState<(WalletActivityCursor | null)[]>([initialCursor]);
   const [pageIndex, setPageIndex] = useState(0);
   const [pageLoading, setPageLoading] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
 
-  if (source !== initialItems) {
-    setSource(initialItems);
+  if (sourceKey !== initialKey) {
+    setSourceKey(initialKey);
     setPages([initialItems]);
     setCursors([initialCursor]);
     setPageIndex(0);
     setPageError(null);
   }
+
+  useEffect(() => {
+    committedKeyRef.current = sourceKey;
+  }, [sourceKey]);
 
   const items = pages[pageIndex] ?? [];
   const hasOlder = pageIndex + 1 < pages.length || Boolean(cursors[pageIndex]);
@@ -62,15 +74,17 @@ export default function WalletActivityList({ initialItems, initialCursor, loadin
     const cursor = cursors[pageIndex];
     if (!cursor) return;
 
+    const keyAtRequest = sourceKey;
     setPageLoading(true);
     setPageError(null);
     try {
       const next = await getWalletActivityPage(cursor);
-      setPages((current) => [...current, next.items]);
-      setCursors((current) => [...current, next.nextCursor]);
+      if (committedKeyRef.current !== keyAtRequest) return;
+      setPages((current) => [...current.slice(0, pageIndex + 1), next.items]);
+      setCursors((current) => [...current.slice(0, pageIndex + 1), next.nextCursor]);
       setPageIndex(pageIndex + 1);
     } catch {
-      setPageError("Couldn't load older activity. Try again.");
+      if (committedKeyRef.current === keyAtRequest) setPageError("Couldn't load older activity. Try again.");
     } finally {
       setPageLoading(false);
     }

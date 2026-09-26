@@ -55,7 +55,7 @@ function MenuDivider() {
 
 export default function UserMenu({ onMyStories, openWalletInNewTab = false }: UserMenuProps) {
   const { user, isLoading, openAuthDialog, signOut } = useAuth();
-  const { data: pricing, isLoading: pricingLoading } = usePricingRuntime();
+  const { data: pricing, isLoading: pricingPayloadLoading } = usePricingRuntime();
   const [isOpen, setIsOpen] = useState(false);
   const [ownDrawerOpen, setOwnDrawerOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -113,6 +113,9 @@ export default function UserMenu({ onMyStories, openWalletInNewTab = false }: Us
     );
   }
 
+  // Right after a dialog sign-in the provider still holds the signed-out payload until its refetch
+  // lands; showing it would read as "Free, 0 coins". Another account's payload counts as loading.
+  const pricingLoading = pricingPayloadLoading || pricing.userId !== user.id;
   const avatarUrl = user.user_metadata?.avatar_url;
   const displayName = user.user_metadata?.full_name || user.email || 'User';
   const totalCoins = beatsToCoins(pricing.snapshot.availableTotalBeats);
