@@ -517,11 +517,25 @@ export interface PricingTopupOfferCard {
 
 export interface PricingWalletActivityItem {
   id: string;
-  kind: 'grant' | 'spend';
+  /** 'plan' rows record a change to the subscription and carry no coin amount. */
+  kind: 'grant' | 'spend' | 'refund' | 'expiry' | 'plan';
   title: string;
   subtitle: string;
-  coinsDelta: number;
+  /** null: nothing to show in the coin column (plan events, a refund that took no coins back). */
+  coinsDelta: number | null;
   occurredAt: string;
+}
+
+/** Where the next (older) page of wallet activity starts. `seenIds` are the rows already shown at
+ * exactly `beforeMs`, so two rows written in the same millisecond never straddle a page badly. */
+export interface WalletActivityCursor {
+  beforeMs: number;
+  seenIds: string[];
+}
+
+export interface WalletActivityPage {
+  items: PricingWalletActivityItem[];
+  nextCursor: WalletActivityCursor | null;
 }
 
 function isStringArrayValue<T extends string>(value: unknown, options: readonly T[]): value is T {
@@ -564,6 +578,8 @@ export interface PricingWalletPageData {
   planOffers: PricingPlanOfferCard[];
   topupOffers: PricingTopupOfferCard[];
   recentActivity: PricingWalletActivityItem[];
+  /** Cursor for the page after `recentActivity`; null when that page is the whole history. */
+  recentActivityNextCursor: WalletActivityCursor | null;
   // Payments Phase 2, Unit B2a: only populated for a signed-in user (see getPricingWalletPageData).
   billingProfile: BillingProfileDTO | null;
   /** null when migration 125 is absent -- the wallet then behaves exactly as it does today. */

@@ -1,15 +1,21 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import dynamic from 'next/dynamic';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
-import { User, LogOut, LogIn, BookMarked, Loader2, Coins, Wallet, LifeBuoy, ClipboardCheck, Receipt, Trash2 } from 'lucide-react';
+import { User, LogOut, LogIn, BookMarked, Loader2, Coins, Wallet, LifeBuoy, ClipboardCheck, Receipt, Trash2, Layers } from 'lucide-react';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import Link from 'next/link';
-import { COINS_PER_BEAT } from '@/lib/types/pricing';
+import { COINS_PER_BEAT, type PlanKey } from '@/lib/types/pricing';
+import { formatBillingDayMonth } from '@/lib/billing/billing-dates.shared';
 import { startNavigationProgress } from '@/lib/navigation/progress';
 import { getAccountDeletionEnabled } from '@/app/actions/account';
+
+// Only pages that don't host their own drawer need this one, so it loads on first open.
+const MyStoriesDrawer = dynamic(() => import('@/components/story/MyStoriesDrawer'), { ssr: false });
 
 interface UserMenuProps {
   onMyStories?: () => void;
@@ -32,10 +38,26 @@ const REVIEWER_ROLE_LABELS: Record<'reviewer' | 'editor', string> = {
   editor: 'Editor',
 };
 
+// Each plan keeps one colour everywhere in the menu; indigo stays reserved for the role badge.
+const PLAN_BADGES: Record<PlanKey, { label: string; className: string }> = {
+  free: { label: 'Free', className: 'border-white/10 bg-white/5 text-neutral-300' },
+  audience: { label: 'Audience', className: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300' },
+  plus: { label: 'Plus', className: 'border-purple-500/25 bg-purple-500/10 text-purple-300' },
+  studio: { label: 'Studio', className: 'border-amber-500/25 bg-amber-500/10 text-amber-300' },
+};
+
+const MENU_ITEM_CLASS =
+  'w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-neutral-100 transition-colors';
+
+function MenuDivider() {
+  return <div role="separator" className="mx-3 my-1 h-px bg-white/5" />;
+}
+
 export default function UserMenu({ onMyStories, openWalletInNewTab = false }: UserMenuProps) {
   const { user, isLoading, openAuthDialog, signOut } = useAuth();
   const { data: pricing, isLoading: pricingLoading } = usePricingRuntime();
   const [isOpen, setIsOpen] = useState(false);
+  const [ownDrawerOpen, setOwnDrawerOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Payments Phase 2 plan §7: "Delete account" is hidden while account_deletion_enabled is off.
@@ -100,10 +122,18 @@ export default function UserMenu({ onMyStories, openWalletInNewTab = false }: Us
     pricing.snapshot.planKey !== 'free' &&
     monthlyAllowanceCoins > 0;
   const displayCoins = showAllowancePreview ? monthlyAllowanceCoins : totalCoins;
-  const refillLabel = pricing.snapshot.nextResetAt
-    ? new Date(pricing.snapshot.nextResetAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-    : null;
-  const planLabel = `${pricing.snapshot.planKey.charAt(0).toUpperCase()}${pricing.snapshot.planKey.slice(1)} plan`;
+  const refillLabel = formatBillingDayMonth(pricing.snapshot.nextResetAt);
+  const planBadge = PLAN_BADGES[pricing.snapshot.planKey] ?? PLAN_BADGES.free;
+  const billingLinkProps = {
+    target: openWalletInNewTab ? '_blank' : undefined,
+    rel: openWalletInNewTab ? 'noopener' : undefined,
+    onClick: () => setIsOpen(false),
+  };
+  const openMyStories = () => {
+    setIsOpen(false);
+    if (onMyStories) onMyStories();
+    else setOwnDrawerOpen(true);
+  };
 
   return (
     <div ref={menuRef} className="relative">
@@ -135,7 +165,7 @@ export default function UserMenu({ onMyStories, openWalletInNewTab = false }: Us
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -8, scale: 0.95 }}
             transition={{ duration: 0.15 }}
-            className="absolute right-0 mt-2 w-56 rounded-2xl bg-neutral-900/95 border border-white/10 backdrop-blur-xl shadow-2xl overflow-hidden z-50"
+            className="absolute right-0 mt-2 w-60 rounded-2xl bg-neutral-900/95 border border-white/10 backdrop-blur-xl shadow-2xl overflow-hidden z-50"
           >
             <div className="px-4 py-3 border-b border-white/5">
               <p className="text-sm font-medium text-neutral-200 truncate">{displayName}</p>
@@ -144,24 +174,40 @@ export default function UserMenu({ onMyStories, openWalletInNewTab = false }: Us
                   flight and when the viewer genuinely is not a reviewer. Rendering
                   nothing for both made a reviewer's own standing briefly invisible
                   on every cold load -- the menu showed the plain non-reviewer shape
-                  until the fetch landed. The skeleton keeps the two states apart. */}
+                  until the fetch landed. The skeleton keeps the two states apart,
+                  and does the same for the plan badge. */}
               {pricingLoading ? (
                 <span
                   aria-hidden="true"
-                  className="mt-1.5 inline-flex h-[22px] w-24 animate-pulse rounded-full border border-white/5 bg-white/5"
+                  className="mt-2 inline-flex h-[22px] w-28 animate-pulse rounded-full border border-white/5 bg-white/5"
                 />
-              ) : pricing.reviewer ? (
-                <span className="mt-1.5 inline-flex items-center gap-1 rounded-full border border-indigo-500/25 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-medium text-indigo-300">
-                  <ClipboardCheck className="w-3 h-3" />
-                  {REVIEWER_ROLE_LABELS[pricing.reviewer.role]}
-                </span>
-              ) : null}
+              ) : (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <span
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${planBadge.className}`}
+                  >
+                    <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+                    {planBadge.label}
+                    <span className="sr-only"> plan</span>
+                  </span>
+                  {pricing.reviewer && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-indigo-500/25 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-medium text-indigo-300">
+                      <ClipboardCheck className="w-3 h-3" />
+                      {REVIEWER_ROLE_LABELS[pricing.reviewer.role]}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
 
-            <div className="mx-3 mt-3 rounded-2xl border border-emerald-500/15 bg-emerald-500/8 px-4 py-3">
+            <Link
+              href="/wallet"
+              {...billingLinkProps}
+              className="mx-3 mt-3 block rounded-2xl border border-emerald-500/15 bg-emerald-500/8 px-4 py-3 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10"
+            >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-emerald-300/80">{planLabel}</p>
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-emerald-300/80">Your coins</p>
                   <p className="mt-1 text-lg font-medium text-neutral-100">
                     {pricingLoading ? '...' : `${displayCoins.toLocaleString()} ${showAllowancePreview ? 'coins / month' : 'coins'}`}
                   </p>
@@ -185,9 +231,13 @@ export default function UserMenu({ onMyStories, openWalletInNewTab = false }: Us
                   <Coins className="h-4 w-4" />
                 </div>
               </div>
-            </div>
+            </Link>
 
-            <div className="py-1">
+            <div className="mt-2 py-1">
+              <button type="button" onClick={openMyStories} className={MENU_ITEM_CLASS}>
+                <BookMarked className="w-4 h-4" />
+                My Stories
+              </button>
               {/* Same reasoning as the badge above: a loading payload must not be
                   rendered as "you have no review queue". */}
               {pricingLoading && (
@@ -212,7 +262,7 @@ export default function UserMenu({ onMyStories, openWalletInNewTab = false }: Us
                       ? `Review queue, ${pricing.reviewer.assignedCount} assigned to you`
                       : 'Review queue'
                   }
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-neutral-100 transition-colors"
+                  className={MENU_ITEM_CLASS}
                 >
                   <ClipboardCheck className="w-4 h-4" />
                   <span className="flex-1 text-left">Review queue</span>
@@ -229,47 +279,30 @@ export default function UserMenu({ onMyStories, openWalletInNewTab = false }: Us
                   )}
                 </Link>
               )}
-              <Link
-                href="/wallet"
-                target={openWalletInNewTab ? '_blank' : undefined}
-                rel={openWalletInNewTab ? 'noopener' : undefined}
-                onClick={() => setIsOpen(false)}
-                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-neutral-100 transition-colors"
-              >
+
+              <MenuDivider />
+              <Link href="/wallet" {...billingLinkProps} className={MENU_ITEM_CLASS}>
                 <Wallet className="w-4 h-4" />
-                Wallet & Billing
+                Wallet
               </Link>
-              <Link
-                href="/account/billing"
-                target={openWalletInNewTab ? '_blank' : undefined}
-                rel={openWalletInNewTab ? 'noopener' : undefined}
-                onClick={() => setIsOpen(false)}
-                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-neutral-100 transition-colors"
-              >
+              <Link href="/plans" {...billingLinkProps} className={MENU_ITEM_CLASS}>
+                <Layers className="w-4 h-4" />
+                Plans
+              </Link>
+              <Link href="/account/billing" {...billingLinkProps} className={MENU_ITEM_CLASS}>
                 <Receipt className="w-4 h-4" />
                 Billing
               </Link>
-              <Link
-                href="/help-legal"
-                onClick={() => setIsOpen(false)}
-                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-neutral-100 transition-colors"
-              >
+
+              <MenuDivider />
+              <Link href="/help-legal" onClick={() => setIsOpen(false)} className={MENU_ITEM_CLASS}>
                 <LifeBuoy className="w-4 h-4" />
                 Help & Legal
               </Link>
-              {onMyStories && (
-                <button
-                  onClick={() => {
-                    setIsOpen(false);
-                    onMyStories();
-                  }}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-neutral-100 transition-colors"
-                >
-                  <BookMarked className="w-4 h-4" />
-                  My Stories
-                </button>
-              )}
+
+              <MenuDivider />
               <button
+                type="button"
                 onClick={() => {
                   setIsOpen(false);
                   // signOut() ends in a full document navigation to /signed-out
@@ -297,6 +330,11 @@ export default function UserMenu({ onMyStories, openWalletInNewTab = false }: Us
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Pages without their own My Stories drawer get this one. Portalled, because a header with a
+          backdrop blur would otherwise become the drawer's containing block. */}
+      {!onMyStories && ownDrawerOpen &&
+        createPortal(<MyStoriesDrawer isOpen onClose={() => setOwnDrawerOpen(false)} />, document.body)}
     </div>
   );
 }

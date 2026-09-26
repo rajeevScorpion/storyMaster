@@ -10,6 +10,7 @@ import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import BillingDetailsDialog from '@/components/pricing/BillingDetailsDialog';
 import CheckoutSummarySheet from '@/components/pricing/checkout/CheckoutSummarySheet';
+import WalletActivityList from '@/components/pricing/WalletActivityList';
 import { RazorpayScript, useRazorpayCheckout } from '@/components/pricing/checkout/useRazorpayCheckout';
 import { formatPriceWithTaxLine } from '@/lib/billing/wallet-tax.shared';
 import { indiaStateName } from '@/lib/billing/india-states.shared';
@@ -43,19 +44,6 @@ function formatPrice(currencyCode: string, amountMinor: number | null) {
 
 function formatDate(value: string | null) {
   return formatBillingDateLong(value) ?? 'Not scheduled yet';
-}
-
-function formatActivityTime(value: string) {
-  const date = new Date(value);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-
-  if (diffHours < 1) return 'Just now';
-  if (diffHours < 24) return `${diffHours}h ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function titleCase(value: string) {
@@ -285,7 +273,8 @@ export default function WalletPage() {
   // fallback array on every render would otherwise make that dependency array change every render.
   const offers = useMemo(() => walletData?.planOffers ?? [], [walletData]);
   const topups = walletData?.topupOffers ?? [];
-  const activity = walletData?.recentActivity ?? [];
+  // Stable for the same reason as `offers`: WalletActivityList starts over whenever this array changes.
+  const activity = useMemo(() => walletData?.recentActivity ?? [], [walletData]);
 
   const currentPlan = offers.find((offer) => offer.isCurrentPlan) ?? null;
   const primaryTopup = topups[0] ?? null;
@@ -490,7 +479,7 @@ export default function WalletPage() {
               Back to storymaking
             </Link>
             <div>
-              <h1 className="text-3xl font-serif text-neutral-100 md:text-4xl">Wallet & Billing</h1>
+              <h1 className="text-3xl font-serif text-neutral-100 md:text-4xl">Wallet</h1>
               <p className="mt-2 max-w-2xl text-sm leading-relaxed text-neutral-400">
                 Keep an eye on your coins, plan benefits, and recent activity without losing the joy of creating.
               </p>
@@ -907,39 +896,15 @@ export default function WalletPage() {
             <div className="mb-5 flex items-center justify-between gap-3">
               <div>
                 <h3 className="text-2xl font-serif text-neutral-100">Recent activity</h3>
-                <p className="mt-1 text-sm text-neutral-400">A simple view of how coins came in and how they were spent.</p>
+                <p className="mt-1 text-sm text-neutral-400">Every coin in and out, plus changes to your plan.</p>
               </div>
             </div>
 
-            {walletLoading && activity.length === 0 ? (
-              <div className="flex items-center gap-2 text-sm text-neutral-500">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Loading wallet activity...
-              </div>
-            ) : activity.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-white/10 px-4 py-6 text-sm text-neutral-500">
-                No coin activity yet. Your refills, top-ups, and story actions will appear here.
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {activity.map((item) => (
-                  <div key={item.id} className="rounded-2xl border border-white/10 bg-neutral-900/60 px-4 py-3">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <p className="text-sm font-medium text-neutral-100">{item.title}</p>
-                        <p className="mt-1 text-xs text-neutral-500">{item.subtitle}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className={`text-sm font-medium ${item.coinsDelta >= 0 ? 'text-emerald-300' : 'text-neutral-200'}`}>
-                          {item.coinsDelta >= 0 ? '+' : ''}{item.coinsDelta.toLocaleString()} coins
-                        </p>
-                        <p className="mt-1 text-xs text-neutral-500">{formatActivityTime(item.occurredAt)}</p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+            <WalletActivityList
+              initialItems={activity}
+              initialCursor={walletData?.recentActivityNextCursor ?? null}
+              loading={walletLoading}
+            />
 
             <div className="mt-6 rounded-2xl border border-white/10 bg-neutral-900/50 p-4 text-sm text-neutral-400">
               <div className="flex items-start gap-3">
