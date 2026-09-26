@@ -21,6 +21,8 @@ import { isCheckoutOpenForUser } from '@/lib/billing/checkout-allowlist';
 import { loadBillingProfile, toBillingProfileDTO } from '@/lib/billing/billing-profile';
 import { getPublishedTaxRule, type TaxRuleLookupResult } from '@/lib/billing/tax-rules';
 import { resolveActiveViewerProfile } from '@/lib/viewer-profile';
+import { loadWalletActivityPage } from '@/lib/pricing/wallet-activity';
+import { isWalletActivityCursor } from '@/lib/pricing/wallet-activity.shared';
 import type {
   DbBeatGrant,
   DbBeatSpendReservation,
@@ -30,7 +32,6 @@ import type {
   DbPricingPlan,
   DbPricingPlanVersion,
   DbPricingTopupPack,
-  DbBeatUsageEvent,
 } from '@/lib/types/database';
 import type {
   BillingProfileDTO,
@@ -39,6 +40,8 @@ import type {
   PricingRuntimeContext,
   PricingRuntimeControls,
   PricingWalletActivityItem,
+  WalletActivityCursor,
+  WalletActivityPage,
   PricingWalletPageData,
   PricingPlanOfferCard,
   PricingTopupOfferCard,
@@ -271,25 +274,15 @@ export async function getPricingWalletPageData(
   throwIfQueryFailed(topupsResult.error, 'Failed to load wallet top-up offers');
 
   let recentActivity: PricingWalletActivityItem[] = [];
+  let recentActivityNextCursor: WalletActivityCursor | null = null;
   let storyCount = 0;
   let storylineCount = 0;
   let billingProfile: BillingProfileDTO | null = null;
   let taxPreview: WalletTaxPreview | null = null;
 
   if (userId) {
-    const [grantsResult, usageResult, storiesCountResult, storylinesCountResult, taxRuleResult, billingProfileResult] = await Promise.all([
-      supabase
-        .from('beat_grants')
-        .select('*')
-        .eq('user_id', userId)
-        .order('granted_at', { ascending: false })
-        .limit(10),
-      supabase
-        .from('beat_usage_events')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(10),
+    const [activityPage, storiesCountResult, storylinesCountResult, taxRuleResult, billingProfileResult] = await Promise.all([
+      loadWalletActivityPage(supabase, userId, null),
       supabase
         .from('stories')
         .select('*', { count: 'exact', head: true })
@@ -314,15 +307,11 @@ export async function getPricingWalletPageData(
       }),
     ]);
 
-    throwIfQueryFailed(grantsResult.error, 'Failed to load wallet grant activity');
-    throwIfQueryFailed(usageResult.error, 'Failed to load wallet spend activity');
     throwIfQueryFailed(storiesCountResult.error, 'Failed to load wallet story count');
     throwIfQueryFailed(storylinesCountResult.error, 'Failed to load wallet storyline count');
 
-    recentActivity = buildWalletActivity(
-      (grantsResult.data ?? []) as DbBeatGrant[],
-      (usageResult.data ?? []) as DbBeatUsageEvent[]
-    );
+    recentActivity = activityPage.items;
+    recentActivityNextCursor = activityPage.nextCursor;
     storyCount = storiesCountResult.count ?? 0;
     storylineCount = storylinesCountResult.count ?? 0;
     taxPreview = buildWalletTaxPreview(taxRuleResult);
@@ -343,6 +332,7 @@ export async function getPricingWalletPageData(
     ),
     topupOffers: buildTopupOffers((topupsResult.data ?? []) as DbPricingTopupPack[]),
     recentActivity,
+    recentActivityNextCursor,
     billingProfile,
     taxPreview,
     audienceMode: viewerProfile.audienceMode,
@@ -369,6 +359,14 @@ function buildWalletTaxPreview(result: TaxRuleLookupResult): WalletTaxPreview | 
     taxLabel: 'GST',
     requiresBillingState: true,
   };
+}
+
+/** The wallet's "Older" button: the page of activity after `cursor`, for the signed-in user only. */
+export async function getWalletActivityPage(cursor: unknown): Promise<WalletActivityPage> {
+  if (!isWalletActivityCursor(cursor)) return { items: [], nextCursor: null };
+  const userId = await getCurrentUserId();
+  if (!userId) return { items: [], nextCursor: null };
+  return loadWalletActivityPage(createAdminClient(), userId, cursor);
 }
 
 async function getCurrentUserId(): Promise<string | null> {
@@ -439,107 +437,6 @@ function buildTopupOffers(topups: DbPricingTopupPack[]): PricingTopupOfferCard[]
     coinAmount: beatsToCoins(pack.beat_amount),
     provider: pack.provider,
   }));
-}
-
-function buildWalletActivity(
-  grants: DbBeatGrant[],
-  usageEvents: DbBeatUsageEvent[]
-): PricingWalletActivityItem[] {
-  const grantItems: PricingWalletActivityItem[] = grants.map((grant) => ({
-    id: `grant:${grant.id}`,
-    kind: 'grant',
-    title: getGrantTitle(grant.source_type),
-    subtitle: getGrantSubtitle(grant.source_type),
-    coinsDelta: beatsToCoins(asBeatAmount(grant.beats_total)),
-    occurredAt: grant.granted_at,
-  }));
-
-  const spendItems: PricingWalletActivityItem[] = usageEvents.map((event) => ({
-    id: `spend:${event.id}`,
-    kind: 'spend',
-    title: getSpendTitle(event.action_key),
-    subtitle: 'Used while creating in Kissago',
-    coinsDelta: -beatsToCoins(asBeatAmount(event.beat_cost)),
-    occurredAt: event.created_at,
-  }));
-
-  return [...grantItems, ...spendItems]
-    .sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime())
-    .slice(0, 20);
-}
-
-function getGrantTitle(sourceType: DbBeatGrant['source_type']): string {
-  switch (sourceType) {
-    case 'free_allowance':
-      return 'Welcome coins added';
-    case 'subscription':
-    case 'carry_forward':
-      return 'Monthly refill';
-    case 'topup':
-      return 'Top-up added';
-    case 'promotion':
-      return 'Bonus coins added';
-    case 'migration_grant':
-      return 'Welcome coins added';
-    case 'admin_adjustment':
-      return 'Coins adjusted';
-    default:
-      return 'Coins added';
-  }
-}
-
-function getGrantSubtitle(sourceType: DbBeatGrant['source_type']): string {
-  switch (sourceType) {
-    case 'free_allowance':
-      return 'One-time credit for joining Kissago';
-    case 'subscription':
-      return 'Included with your active plan';
-    case 'carry_forward':
-      return 'Unused coins carried into the new period';
-    case 'topup':
-      return 'Purchased coin pack';
-    case 'promotion':
-      return 'Campaign or bonus reward';
-    case 'migration_grant':
-      return 'Internal rollout goodwill grant';
-    case 'admin_adjustment':
-      return 'Manual support adjustment';
-    default:
-      return 'Wallet credit';
-  }
-}
-
-function getSpendTitle(actionKey: string): string {
-  switch (actionKey) {
-    case 'start_story_initial_beat':
-      return 'Started a story';
-    case 'start_story_initial_beat_prompt_only':
-      return 'Started a prompt-only story';
-    case 'start_reel_full_generation':
-      return 'Generated a reel';
-    case 'start_reel_full_generation_prompt_only':
-      return 'Generated a prompt-only reel';
-    case 'continue_story_new_beat':
-      return 'Added a new beat';
-    case 'continue_story_new_beat_prompt_only':
-      return 'Added a prompt-only beat';
-    case 'preview_seed_plan':
-      return 'Previewed a seed plan';
-    case 'regenerate_image':
-      return 'Regenerated an image';
-    case 'regenerate_narration':
-      return 'Regenerated narration';
-    case 'generate_social_share_cover':
-      return 'Generated a share cover';
-    case 'generate_audio_story_cover':
-      return 'Generated an audio story cover';
-    case 'generate_reel_thumbnail':
-      return 'Generated a reel thumbnail';
-    case 'export_video_future':
-      return 'Exported a video';
-    default:
-      return 'Used coins in Kissago';
-  }
 }
 
 function beatsToCoins(value: number): number {

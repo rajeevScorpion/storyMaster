@@ -29,6 +29,14 @@ export function formatBillingDateShort(value: string | Date | null | undefined):
   return `${ist.getUTCDate()} ${SHORT_MONTHS[ist.getUTCMonth()]} ${ist.getUTCFullYear()}`;
 }
 
+/** "25 Oct" -- where the year is obvious, like the account menu's refill line. */
+export function formatBillingDayMonth(value: string | Date | null | undefined): string | null {
+  if (!value) return null;
+  const ist = istFields(value);
+  if (!ist) return null;
+  return `${ist.getUTCDate()} ${SHORT_MONTHS[ist.getUTCMonth()]}`;
+}
+
 /** "October 25, 2026" -- the account pages' style. */
 export function formatBillingDateLong(value: string | Date | null | undefined): string | null {
   if (!value) return null;

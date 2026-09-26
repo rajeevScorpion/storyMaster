@@ -3,7 +3,88 @@
 **This is the living handoff for all payments work.** A fresh session reads this section first, then
 `prompt-packs/kissago-payment-billing-prompt-pack-2026-09-17/` (the phase prompts; owner decisions in `01_…`).
 
-## Next session starts here (updated 2026-09-26 — payments merged to dev; deferred subscription walk done)
+## Next session starts here (updated 2026-09-26, end of session — owner on a break)
+
+**State in one breath:**
+- Phases 1-8 are built, walked in Razorpay test mode, and merged into `dev` for tester smoke tests.
+  The merges are `9c23ef6`, then `1a9c1ff`, which carries the "plan ended" fix.
+- `payments` stays open for more work. Keep merging it into `dev` with `--no-ff`.
+- **Nothing is on `main`/prod.** Migrations 124-138 are on dev only. The release is runbook §2-§8.
+- Last gates, on `1e226da`: tsc and lint clean, **2,646 tests / 200 files**; the Vercel Preview build
+  passed on the same commit.
+- **Owner UX asks, 2026-09-26 (built, walked on the Preview, merged to `dev`):**
+  - Wallet "Recent activity" shows every coin in and out: refunds that took coins back, and coins that expired
+    unused. It also shows plan events (started, renewed, cancellation scheduled, ended, renewal failed). Five a
+    page, with Newer/Older. The logic is in `lib/pricing/wallet-activity*.ts`.
+  - Account menu is regrouped with dividers: My Stories first (on every page), then Wallet / Plans / Billing, then
+    Help, then Sign out. It has a plan badge (Free grey, Audience green, Plus purple, Studio amber) beside the
+    Reviewer/Editor badge. The page title is now "Wallet". Owner kept Plans on both `/wallet` and `/plans`.
+  - Fixed on the way: after a dialog sign-in, the pricing provider stuck on the signed-out payload (Free, 0 coins)
+    until a reload.
+  - Walk tooling: `.agent/sheet-walk/ux.pw.ts` + `ux.config.ts` (read-only; `testuser` is the `E2E_REVIEWER_*`
+    account in `.env.local`).
+
+**First thing next session:**
+1. `git log --oneline -5` on `payments` and `dev`, and `git status`. Expect a clean tree, with `payments` at or
+   after the "handoff for a break" commit.
+2. Check the tester setup on dev (query below). If the allowlist still holds only `testuser`, remind the owner
+   to re-run `tester-setup.sql` with real emails. The SQL is below; the scratchpad copy won't survive.
+3. Look for tester reports. Check `billing_webhook_events` and `billing_notification_jobs` for failures since
+   2026-09-26.
+
+```sql
+select flag_key, enabled, left(coalesce(value,''), 80) value from public.feature_flags
+where flag_key in ('billing_checkout_allowlist','billing_document_issuing_enabled','billing_emails_enabled',
+  'billing_admin_actions_enabled','pricing_india_only_beta_enabled','billing_international_countries') order by 1;
+```
+
+**The tester setup SQL** (dev only; the owner lists emails in both places):
+```sql
+with testers(email) as (values ('tester1@example.com'))
+update public.feature_flags set enabled = true,
+  value = concat_ws(',', '0e4b9744-76a9-461a-a859-b072de667d77',
+    (select string_agg(u.id::text, ',') from auth.users u join testers t on lower(u.email) = lower(t.email))),
+  updated_at = now()
+where flag_key = 'billing_checkout_allowlist';
+update public.feature_flags set enabled = true, updated_at = now()
+where flag_key in ('billing_document_issuing_enabled','billing_emails_enabled','billing_admin_actions_enabled');
+```
+
+**The tester brief** (a claude.ai page for the owner to share): https://claude.ai/artifact/S81nhFinfW9UcD9P1npmUd
+- Testers use `dev.kissago.cc`.
+- Coins: UPI `success@razorpay` / `failure@razorpay`, or card `5267 3181 8797 5449` ("Maybe later" on
+  save-card).
+- Plans: card `5104 0600 0000 0008`, pick INR on the currency screen. No OTP.
+
+**Walk tooling** (gitignored):
+- `.agent/sheet-walk/p8.pw.ts` + `p8.config.ts`, run one step at a time with `WALK_STEP`. `WALK_BASE_URL`
+  targets `dev.kissago.cc`.
+- Credentials come from the shell; ask the owner, since the scratchpad `walk.env` won't survive.
+- The reconcile by hand: POST `/api/batch/reconcile` with `Authorization: Bearer $CRON_SECRET` from `.env.local`.
+
+**Open, in order:**
+1. **The India go-live gate:**
+   - the CA's India answers (runbook §1.2: numbering, Rule 48, credit-note timing, turnover/SAC, series start);
+   - publish Terms (dev is still on 1.0.0);
+   - the Phase 7 allowlist re-run;
+   - a look at the checkout sheet on a phone;
+   - tester feedback.
+2. **The release:** runbook §2-§8. Check prod's ledger first; the runbook says prod is at 124. Then:
+   - apply 125-138 one at a time;
+   - live keys (Production scope only), and the live webhook → `kissago.cc`;
+   - switches off, the owner's real-money smoke test, then open.
+3. **2026-10-26 (IST): check the lapsed subscription** `sub_TgNsjQ1NgKLjNy` (details below).
+4. **Later, the US (runbook §12):**
+   - the LUT and its ARN (owner deferred it; remind);
+   - the CA's open questions 4 (an INR value on export invoices) and 6 (EU/UK);
+   - the Razorpay currency-conversion question (research online first);
+   - USD prices;
+   - the US-address e2e test (`e2e/billing-details-international.spec.ts`; needs a throwaway account and US
+     checkout on).
+5. **Deferred by owner decision:** Audience annual (decision 13), and notifications and the role audit
+   (memory).
+
+### Detail from 2026-09-26 (payments merged to dev; deferred subscription walk done)
 
 **`payments` is merged into `dev`** (`9c23ef6`, `--no-ff`) for tester smoke tests in Razorpay test mode. It
 stays open for more work.

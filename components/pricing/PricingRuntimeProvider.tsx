@@ -171,6 +171,9 @@ export default function PricingRuntimeProvider({ children }: { children: ReactNo
   const paintedUserIdRef = useRef<string | null | undefined>(undefined);
   const hasPaintedRef = useRef(false);
   const inFlightRef = useRef<Promise<void> | null>(null);
+  // The account auth says is signed in. Right after a dialog sign-in the server can still answer for
+  // the signed-out visitor (the session cookie lands a moment later); load() retries until it agrees.
+  const authUserIdRef = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
     let storedOverride: PricingMarketKey | null = null;
@@ -209,10 +212,16 @@ export default function PricingRuntimeProvider({ children }: { children: ReactNo
       setError(null);
 
       try {
-        const next = await getPricingRuntimeContext({
+        let next = await getPricingRuntimeContext({
           pricingMarketKey: marketOverride,
           forceRefresh: options.forceRefresh,
         });
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          const expected = authUserIdRef.current;
+          if (expected === undefined || next.userId === expected) break;
+          await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+          next = await getPricingRuntimeContext({ pricingMarketKey: marketOverride, forceRefresh: true });
+        }
         setData(next);
         hasPaintedRef.current = true;
         paintedUserIdRef.current = next.userId;
@@ -255,6 +264,8 @@ export default function PricingRuntimeProvider({ children }: { children: ReactNo
     // The painted snapshot belongs to a different account (user switch or
     // sign-out) — drop it and show defaults until the fresh load lands.
     const currentUserId = user?.id ?? null;
+    const accountChanged = authUserIdRef.current !== undefined && authUserIdRef.current !== currentUserId;
+    authUserIdRef.current = currentUserId;
     if (paintedUserIdRef.current !== undefined && paintedUserIdRef.current !== currentUserId) {
       clearStoredPricingSnapshot();
       paintedUserIdRef.current = undefined;
@@ -263,7 +274,8 @@ export default function PricingRuntimeProvider({ children }: { children: ReactNo
       setIsLoading(true);
     }
 
-    void load();
+    // A load already in flight belongs to the previous account; don't settle for its answer.
+    void load({ forceRefresh: accountChanged });
   }, [authLoading, load, marketReady, user?.id]);
 
   useEffect(() => {
