@@ -120,6 +120,8 @@ changed (dev database in Singapore):
 
 ## 2. Merge and deploy
 
+**Done 2026-09-26:** `main` is at `caf342d`. The Production deployment is Ready in `sin1`.
+
 Following WORKING_AGREEMENTS:
 - merge `payments` → `dev` with `--no-ff`;
 - let the dev Preview build;
@@ -136,7 +138,10 @@ deployment. Its region must be `sin1`, next to prod's database (§1.4).
 
 ## 3. The production database
 
-Prod is at **123**: the ledger's newest row is 123, and 124's index, column and flag are absent (checked
+**Done 2026-09-26:** the owner took a `supabase db dump`, then applied 124-138. The ledger reads 138. The schema
+matches dev's, and the switch check below passed with every switch off or absent.
+
+Prod was at **123**: the ledger's newest row is 123, and 124's index, column and flag are absent (checked
 2026-09-26). Apply **124 through 138, one at a time, in numeric order**, from the Supabase dashboard (the prod
 project, kissagoProduction) → SQL editor → paste the whole file → Run.
 
