@@ -65,7 +65,7 @@ export default function PaymentHistoryList({ initialItems, initialHasMore }: Pay
 
   return (
     <>
-      <div className="mt-4 divide-y divide-white/5">
+      <div aria-busy={loading} className={`mt-4 divide-y divide-white/5 transition-opacity ${loading ? 'opacity-50' : ''}`}>
         {items.map((payment) => (
           <div key={payment.id} className="py-3">
             <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">

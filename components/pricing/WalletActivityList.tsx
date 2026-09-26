@@ -110,7 +110,7 @@ export default function WalletActivityList({ initialItems, initialCursor, loadin
 
   return (
     <div>
-      <ul className="space-y-3">
+      <ul aria-busy={pageLoading} className={`space-y-3 transition-opacity ${pageLoading ? 'opacity-50' : ''}`}>
         {items.map((item) => {
           const Icon = KIND_ICONS[item.kind];
           const isPlanEvent = item.kind === 'plan';

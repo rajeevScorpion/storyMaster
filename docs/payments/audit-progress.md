@@ -27,8 +27,8 @@
 **First thing next session:**
 1. `git log --oneline -5` on `payments` and `dev`, and `git status`. Expect a clean tree, with `payments` at or
    after the "handoff for a break" commit.
-2. Check the tester setup on dev (query below). If the allowlist still holds only `testuser`, remind the owner
-   to re-run `tester-setup.sql` with real emails. The SQL is below; the scratchpad copy won't survive.
+2. Check the tester setup on dev (query below). **Owner, 2026-09-26: testing is `testuser` only for now**, so an
+   allowlist holding only `testuser` is expected. Don't remind about it. The SQL below is for when others join.
 3. Look for tester reports. Check `billing_webhook_events` and `billing_notification_jobs` for failures since
    2026-09-26.
 
