@@ -291,6 +291,17 @@ a field to the shared schema changes reel generation too.
 
 ## Data & performance
 
+### Latency is where the function runs, not what it runs
+
+A page makes several Supabase queries one after another. Each one is a round trip from the Vercel function to
+the database. From Washington to Singapore that is about a quarter-second, so a page pays seconds before any
+code matters. Measured 2026-09-26 on the same build, where only the region changed: gallery first byte
+4.0 s → 0.7 s, billing page 13.5 s → 1.8 s. The region is `vercel.json`'s `regions`. It must match the
+database of the deployment it builds, and `dev` (Singapore) and prod (Tokyo) differ. That's why the
+dev → main merge sets it by hand (go-live runbook §2). Before blaming a query, check where the function ran:
+the deployment's `regions` in Vercel. Cutting sequential awaits into one `Promise.all` helps, but only by
+the number of round trips saved.
+
 ### Signed URLs churn defeats every image cache
 
 `signMixedUrls` (`lib/media/storage-url-signing.ts`) originally minted a fresh token per call, so every visit

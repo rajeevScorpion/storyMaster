@@ -24,6 +24,7 @@ Every item here gates the release. None may be dropped. If one is still open, st
 | Phase 6 walk step 7: the subscription emails (receipt, cancel, ended, failed) | Phase 6 | each arrives once, walked with the OTP session above |
 | The Refund Policy, Terms, Privacy, Account Deletion and FAQ published (§1.3) | Phase 7 | `/refund-policy` has no "Starter Draft" |
 | The six CA answers (§1.2) | Phase 6 | each assumption replaced by a real answer |
+| Server location: the owner decides where prod's servers and database live (§1.4) | 2026-09-26 | §1.4's decision is written down |
 
 ### 1.2 The CA's answers
 
@@ -75,6 +76,41 @@ number.
   with it. Today the row doesn't exist, and the code default is 2.
 - Not part of this release, but still draft: the **Copyright / Licensing** page opens "Starter Draft".
 
+### 1.4 Server location (owner, 2026-09-26: "very important, and code cannot solve this")
+
+**Why it matters.** Each page makes several database queries one after another. Every query crosses from
+the Vercel function to the Supabase database and back. When the two are far apart, each crossing costs about
+a quarter of a second, and a page pays it many times over. Neither Vercel nor Supabase is slow on its own;
+the distance between them is. Measured on 2026-09-26 with the same code, where only the function region
+changed (dev database in Singapore):
+
+| Page | Functions in Washington (iad1) | Tokyo (hnd1) | Singapore (sin1) |
+|---|---|---|---|
+| Gallery, first byte | 4.0 s | 1.8 s | 0.7 s |
+| Wallet, activity shown | 6.8 s | 3.4 s | 1.3 s |
+| Billing, history shown | 13.5 s | 7.0 s | 1.8 s |
+
+**Where things are today:**
+- Dev database: Singapore. Dev and Preview functions: `sin1`, set in `vercel.json` since 2026-09-26.
+- Prod database: **Tokyo**. Prod functions: Washington until this release.
+
+**Owner's direction:**
+- Put the servers and the database together, and near the customers:
+  - customers in India → **Singapore**, for both Vercel (`sin1`) and Supabase (ap-southeast-1);
+  - customers in the US → **Washington** (`iad1`, Supabase us-east-1) or another suitable US region.
+- This applies to dev and prod alike.
+
+**Decide before the production push:**
+1. **Move prod's database to Singapore, or keep it in Tokyo for now?**
+   - Supabase can't move an existing project. Moving means a new project in Singapore, applying every
+     migration, copying the data and auth users, and switching the prod keys.
+   - This is cheapest before go-live, while prod has little data and no paying customers.
+2. **Set prod's function region to match the prod database in the §2 merge.** Singapore database → `sin1`,
+   which is already in `vercel.json`. Tokyo database → `hnd1`.
+3. **Before the US opens (§12, GTM):** one database can't be close to both India and the US. Decide
+   between accepting the slower market, a separate US deployment and database, or read replicas. Plan it
+   before US marketing starts.
+
 ---
 
 ## 2. Merge and deploy
@@ -82,11 +118,14 @@ number.
 Following WORKING_AGREEMENTS:
 - merge `payments` → `dev` with `--no-ff`;
 - let the dev Preview build;
-- then merge `dev` → `main` with `--no-ff`.
+- then merge `dev` → `main` with `--no-ff --no-commit`. Before committing, set `"regions"` in `vercel.json`
+  to the region next to **prod's** database (§1.4): `hnd1` while it's in Tokyo, and `sin1` if it moved to
+  Singapore. The `sin1` that `dev` carries would otherwise reach prod with no conflict to stop it.
 
 Write the merge commit hash into the report (§11). `git revert -m 1 <that hash>` is the code rollback.
 
-**Check:** the Production deployment is Ready in Vercel, and `/wallet` loads signed in.
+**Check:** the Production deployment is Ready in Vercel, and `/wallet` loads signed in. In Vercel, open the
+deployment. Its region must be the one chosen in §1.4, not `iad1` and not `dev`'s `sin1` by accident.
 
 ---
 
@@ -294,6 +333,10 @@ Open items carried forward:
 ## 12. Switching the US on (Phase 8; after India is live and stable)
 
 Background: `international-readiness.md`. Do these in order. Every step has a check.
+
+**First, server location for US customers (§1.4, owner 2026-09-26).** Prod's servers and database sit in
+Asia. A US customer would feel that on every page. Decide the US setup (Washington or another US region,
+a separate deployment, or replicas) before US marketing starts.
 
 1. **The CA's answers** to `international-readiness.md` §6 are in, and nothing contradicts the build.
    - **Check:** each answer is written into that doc, next to its question.

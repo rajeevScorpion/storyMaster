@@ -24,6 +24,12 @@ Keep this file current. When you finish a pack, move it out of "pending"; when y
 | Development | `dxbwzcpbfacrwrauhdbk` | Named **kissagoStage**, ap-southeast-1. Where migrations get applied first. Used by local dev and every Vercel Preview deployment. |
 | Production | `pddjsopcemsfiwyvhlkr` | Named **kissago**, ap-northeast-1. `www.kissago.cc` / `kissago.cc` |
 
+**Vercel function region** (`vercel.json` `regions`, per branch): `sin1` on `payments`/`dev` since 2026-09-26,
+next to the dev database. `main` has no setting yet, so it runs in Washington (`iad1`), far from prod's Tokyo
+database. The owner's direction is that servers and database sit together and near the customers: Singapore
+for India, a US region for the US. Where prod lives is a release-gating decision in
+`docs/payments/go-live-runbook.md` §1.4, and the dev → main merge must set prod's region (§2).
+
 An agent working here has **read-only** database visibility on both, via two separately named Supabase MCP
 servers: `supabase` (dev) and `supabase-prod`. The names are distinct so touching production is always a
 deliberate choice. Read-only is not a courtesy — it is what enforces the rule below that migrations are
